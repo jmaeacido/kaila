@@ -22,6 +22,7 @@ All documents are inside `KAILA_Founder_Grade_Package/`.
 | `08_Three_Year_Financial_Projection.xlsx` | Editable financial assumptions, projections, annual summary, unit economics, and terms. |
 | `09 Field Forms Pack.pdf` | Printable/copyable forms for client surveys, provider signup, interviews, job logs, and meeting notes. |
 | `KAILA Business Plan.pdf` | Concise founder and co-founder business plan. |
+| `KAILA Founder Presentation/` | Online HTML slideshow and downloadable PowerPoint covering files `01` through `09`. |
 
 ## Recommended Reading Order
 
@@ -38,5 +39,6 @@ All documents are inside `KAILA_Founder_Grade_Package/`.
 
 - Several PDFs include a `Definition of Terms` section for shared vocabulary.
 - Longer PDFs include a formal cover page and Table of Contents.
+- The `KAILA Founder Presentation/` folder can be opened locally through `index.html`; it also includes a downloadable `.pptx` version.
 - The financial projection is an editable planning model, not a promise of results.
 - The founders agreement draft is for discussion only and is not legal advice.
