@@ -1,5 +1,11 @@
-const slides = JSON.parse(document.getElementById("slide-data").textContent);
-const deck = document.querySelector("[data-deck]");
+﻿function readSlideData() {
+  const raw = document.getElementById("slide-data").textContent.trim();
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = raw;
+  return JSON.parse(textarea.value);
+}
+
+const slides = readSlideData();const deck = document.querySelector("[data-deck]");
 const list = document.querySelector("[data-slide-list]");
 const counter = document.querySelector("[data-counter]");
 let current = Math.max(0, Math.min(slides.length - 1, Number(location.hash.replace("#/", "")) - 1 || 0));
@@ -54,3 +60,5 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "ArrowLeft" || event.key === "PageUp") move(-1);
 });
 renderSlide();
+
+
