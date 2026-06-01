@@ -3,6 +3,8 @@ const STORAGE = {
   session: "kaila.deploy.session",
   socketUrl: "kaila.deploy.socketUrl",
 };
+const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"];
+const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
 
 const state = {
   session: readJson(STORAGE.session, null),
@@ -43,6 +45,8 @@ function bindEvents() {
   $("[data-open-live]").addEventListener("click", () => $("[data-live-panel]").hidden = false);
   $("[data-close-live]").addEventListener("click", () => $("[data-live-panel]").hidden = true);
   $("[data-reconnect]").addEventListener("click", () => connectSocket(true));
+  $("[data-settings-tab]")?.addEventListener("shown.bs.tab", renderSettings);
+  $("[data-settings-tab]")?.addEventListener("click", renderSettings);
 }
 
 function initializeSocketUrl() {
@@ -123,6 +127,7 @@ async function register(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = Object.fromEntries(new FormData(form).entries());
+  data.category = Array.from(form.elements.category?.selectedOptions || []).map((option) => option.value).filter(Boolean);
   let payload;
   try {
     payload = await apiFetch("/api/register", {
@@ -187,10 +192,12 @@ async function logout() {
 
 function render() {
   renderNav();
+  renderTabs();
   renderActions();
   renderRequests();
   renderProviders();
   renderActivity();
+  renderSettings();
   renderStats();
 }
 
@@ -199,6 +206,25 @@ function renderNav() {
   $("[data-current-user]").classList.toggle("d-none", !signedIn);
   $("[data-app-link]").classList.toggle("d-none", !signedIn);
   if (signedIn) $("[data-current-user]").textContent = `${state.session.name} (${state.session.role})`;
+}
+
+function renderTabs() {
+  const providersTab = $("[data-providers-tab]");
+  if (!providersTab) return;
+  const hideProviders = state.session?.role === "provider";
+  providersTab.hidden = hideProviders;
+  if (hideProviders && providersTab.querySelector(".nav-link")?.classList.contains("active")) {
+    activateTab("#requests-pane");
+  }
+}
+
+function activateTab(target) {
+  $$(".compact-tabs .nav-link").forEach((tab) => tab.classList.toggle("active", tab.dataset.bsTarget === target));
+  $$(".tab-pane").forEach((pane) => {
+    const active = `#${pane.id}` === target;
+    pane.classList.toggle("active", active);
+    pane.classList.toggle("show", active);
+  });
 }
 
 function renderActions() {
@@ -212,7 +238,7 @@ function renderActions() {
   if (["provider", "admin"].includes(state.session.role)) {
     actions.push(`<button class="btn btn-outline-primary" type="button" data-provider-profile>${state.session.role === "provider" ? "Update Provider Profile" : "Add Provider"}</button>`);
   }
-  actions.push(`<button class="btn btn-outline-secondary" type="button" data-team-note>Team Note</button>`);
+  actions.push(`<button class="btn btn-outline-secondary" type="button" data-team-note title="Post a short note to the shared Activity feed.">Team Note</button>`);
   row.innerHTML = actions.join("");
 
   $("[data-new-request]")?.addEventListener("click", openRequestModal);
@@ -241,7 +267,28 @@ function renderRequests() {
     return;
   }
 
-  host.innerHTML = visible.map((request) => `
+  const activeRequests = visible.filter((request) => request.status !== "Cancelled");
+  const cancelledRequests = visible.filter((request) => request.status === "Cancelled");
+  const requestCards = activeRequests.map(renderRequestCard).join("");
+  const cancelledSection = cancelledRequests.length ? `
+    <details class="k-card collapsed-section">
+      <summary>
+        <span>Cancelled requests</span>
+        <small>${cancelledRequests.length}</small>
+      </summary>
+      <div class="stack mt-2">
+        ${cancelledRequests.map(renderRequestCard).join("")}
+      </div>
+    </details>
+  ` : "";
+
+  host.innerHTML = `${requestCards || emptyCard("No active requests", "Cancelled requests are tucked below.")}${cancelledSection}`;
+
+  bindRequestCardActions(host);
+}
+
+function renderRequestCard(request) {
+  return `
     <article class="k-card">
       <div class="d-flex justify-content-between gap-2">
         <div>
@@ -264,6 +311,7 @@ function renderRequests() {
       ${request.autoConfirmAt && request.status === "Provider Marked Done" ? `<div class="offer"><strong>Auto-confirm deadline</strong><div>${formatDateTime(request.autoConfirmAt)}</div></div>` : ""}
       ${renderRatings(request)}
       ${request.disputeNote ? `<div class="offer"><strong>Dispute note</strong><div>${escapeHtml(request.disputeNote)}</div></div>` : ""}
+      ${renderAttachments("Dispute media", request.disputeAttachments, request.id)}
       <div class="card-actions">
         ${canAcceptClientPrice(request) ? `<button class="btn btn-sm btn-outline-success" data-accept-client-price="${request.id}">Accept Client Price</button>` : ""}
         ${canOffer(request) ? `<button class="btn btn-sm btn-outline-primary" data-offer="${request.id}">Offer</button>` : ""}
@@ -272,8 +320,10 @@ function renderRequests() {
         ${jobActionButtons(request)}
       </div>
     </article>
-  `).join("");
+  `;
+}
 
+function bindRequestCardActions(host) {
   $$("[data-accept-client-price]", host).forEach((button) => button.addEventListener("click", () => acceptClientPrice(button.dataset.acceptClientPrice)));
   $$("[data-offer]", host).forEach((button) => button.addEventListener("click", () => openOfferModal(button.dataset.offer, "offer")));
   $$("[data-pass]", host).forEach((button) => button.addEventListener("click", () => passRequest(button.dataset.pass)));
@@ -336,9 +386,15 @@ function renderAttachments(title, attachments = [], requestId) {
   `;
 }
 
+function attachmentListForStage(request, stage) {
+  if (stage === "completion") return request?.completionAttachments || [];
+  if (stage === "dispute") return request?.disputeAttachments || [];
+  return request?.requestAttachments || [];
+}
+
 async function openMediaViewer(requestId, stage, startIndex = 0) {
   const request = state.requests.find((item) => item.id === requestId);
-  const attachments = stage === "completion" ? request?.completionAttachments : request?.requestAttachments;
+  const attachments = attachmentListForStage(request, stage);
   if (!attachments?.length) return;
   let index = Math.max(0, Math.min(startIndex, attachments.length - 1));
 
@@ -348,7 +404,7 @@ async function openMediaViewer(requestId, stage, startIndex = 0) {
     const isVideo = attachment.mimeType.startsWith("video/");
     const result = await window.Swal.fire({
       customClass: { popup: "kaila-popup media-popup" },
-      title: stage === "completion" ? "Completion media" : "Request media",
+      title: stage === "completion" ? "Completion media" : stage === "dispute" ? "Dispute media" : "Request media",
       html: `
         <div class="media-viewer">
           ${isVideo
@@ -410,11 +466,44 @@ function renderProviders() {
         <span class="badge text-bg-light align-self-start">${escapeHtml(provider.availability || "Available")}</span>
       </div>
       <div class="meta">
-        <span>${escapeHtml(provider.category || "General")}</span>
+        ${categoryList(provider.category).map((category) => `<span>${escapeHtml(category)}</span>`).join("") || "<span>General</span>"}
         <span>${escapeHtml(provider.area)}</span>
       </div>
     </article>
   `).join("");
+}
+
+function renderSettings() {
+  const host = $("[data-settings-panel]");
+  if (!host || !state.session) return;
+  const isProvider = ["provider", "admin"].includes(state.session.role);
+  const photoUrl = state.session.photoUrl ? `${apiBase()}${state.session.photoUrl}` : "assets/android-chrome-192x192.png";
+  try {
+    host.innerHTML = `
+    <form class="settings-card" data-settings-form>
+      <div class="settings-head">
+        <img class="profile-photo" src="${escapeAttribute(photoUrl)}" alt="">
+        <div>
+          <h3>Profile settings</h3>
+          <p>Update your visible name, service area, and photo.</p>
+        </div>
+      </div>
+      <div class="settings-grid">
+        <label><span>Name</span><input class="form-control" name="name" value="${escapeAttribute(state.session.name || "")}" required></label>
+        <label><span>Area</span><input class="form-control" name="area" value="${escapeAttribute(state.session.area || "")}" required></label>
+        ${isProvider ? `<label class="wide"><span>Service categories</span>${categorySelect("settings-category", false, state.session.category || "", true)}</label>` : ""}
+        <label class="wide"><span>Photo</span><input class="form-control" name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
+      </div>
+      <div class="upload-preview settings-preview" data-settings-photo-preview></div>
+      <button class="btn btn-primary" type="submit">Save Settings</button>
+    </form>
+  `;
+    $("[data-settings-form]")?.addEventListener("submit", saveSettings);
+    bindAttachmentPreview("[data-settings-form] [name='photo']", "[data-settings-photo-preview]", 1);
+  } catch (error) {
+    console.error("Settings render failed:", error);
+    host.innerHTML = emptyCard("Settings unavailable", "Refresh the app and try again.");
+  }
 }
 
 function renderActivity() {
@@ -431,14 +520,16 @@ async function openRequestModal() {
     html: `
       <div class="swal-form two">
         <label><span>Category</span>${categorySelect("request-category", true)}</label>
-        <label><span>Urgency</span>${select("request-urgency", ["Today", "Emergency", "This Week", "Flexible", "Scheduled"])}</label>
+        <label><span>Urgency</span>${select("request-urgency", URGENCY_OPTIONS, "Today")}</label>
         <label><span>Area</span><input id="request-area" class="form-control" value="${escapeAttribute(state.session.area)}"></label>
         <label><span>Budget</span><input id="request-budget" class="form-control" placeholder="Open"></label>
         <label class="wide"><span>Details</span><textarea id="request-details" class="form-control" rows="3"></textarea></label>
         <label class="wide"><span>Photos or videos (optional, up to 3 files)</span><input id="request-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
+        <div class="wide upload-preview" data-request-attachment-preview></div>
       </div>
     `,
     confirmButtonText: "Post",
+    didOpen: () => bindAttachmentPreview("#request-attachments", "[data-request-attachment-preview]", 3),
     preConfirm: async () => {
       const attachments = await readMediaAttachments("#request-attachments");
       if (!attachments) return false;
@@ -473,7 +564,7 @@ async function openProviderModal() {
     title: existing ? "Update provider" : "Provider profile",
     html: `
       <div class="swal-form two">
-        <label><span>Category</span>${categorySelect("provider-category", false, existing?.category || state.session.category)}</label>
+        <label class="wide"><span>Categories</span>${categorySelect("provider-category", false, existing?.category || state.session.category, true)}</label>
         <label><span>Area</span><input id="provider-area" class="form-control" value="${escapeAttribute(existing?.area || state.session.area || "")}"></label>
         <label><span>Availability</span>${select("provider-availability", ["Today", "Weekdays", "Weekends", "Emergency only"], existing?.availability)}</label>
         <label class="wide"><span>Skills</span><textarea id="provider-skills" class="form-control" rows="3">${escapeHtml(existing?.skills || "")}</textarea></label>
@@ -482,13 +573,13 @@ async function openProviderModal() {
     confirmButtonText: "Save",
     preConfirm: () => {
       const provider = {
-        category: $("#provider-category").value,
+        category: selectedValues("#provider-category"),
         area: $("#provider-area").value.trim(),
         availability: $("#provider-availability").value,
         skills: $("#provider-skills").value.trim(),
       };
-      if (!provider.category || !provider.area) {
-        window.Swal.showValidationMessage("Category and area are required.");
+      if (!provider.category.length || !provider.area) {
+        window.Swal.showValidationMessage("At least one category and area are required.");
         return false;
       }
       return provider;
@@ -780,9 +871,10 @@ async function openJobAction(requestId, action) {
     if (!result) return;
     body.note = result.note;
   } else if (action === "dispute") {
-    const result = await notePrompt("Dispute job", "Explain the issue", true, "Submit Dispute");
+    const result = await disputePrompt();
     if (!result) return;
     body.note = result.note;
+    body.attachments = result.attachments;
   } else if (action === "resolve_dispute") {
     const result = await notePrompt("Resolve dispute", "Resolution note", false, "Resolve");
     if (!result) return;
@@ -830,12 +922,39 @@ async function completionPrompt() {
       <div class="swal-form">
         <label><span>Proof notes (optional)</span><textarea id="completion-note" class="form-control" rows="3" placeholder="Receipt, before/after details, time log, etc."></textarea></label>
         <label><span>Photos or videos (optional, up to 3 files)</span><input id="completion-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
+        <div class="upload-preview" data-completion-attachment-preview></div>
       </div>
     `,
     confirmButtonText: "Mark Done",
+    didOpen: () => bindAttachmentPreview("#completion-attachments", "[data-completion-attachment-preview]", 3),
     preConfirm: async () => {
       const attachments = await readMediaAttachments("#completion-attachments");
       return attachments ? { note: $("#completion-note").value.trim(), attachments } : false;
+    },
+  });
+  return result.isConfirmed ? result.value : null;
+}
+
+async function disputePrompt() {
+  const result = await modal({
+    title: "Dispute job",
+    html: `
+      <div class="swal-form">
+        <label><span>Issue</span><textarea id="dispute-note" class="form-control" rows="3" placeholder="Explain the issue"></textarea></label>
+        <label><span>Photos or videos (optional, up to 3 files)</span><input id="dispute-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
+        <div class="upload-preview" data-dispute-attachment-preview></div>
+      </div>
+    `,
+    confirmButtonText: "Submit Dispute",
+    didOpen: () => bindAttachmentPreview("#dispute-attachments", "[data-dispute-attachment-preview]", 3),
+    preConfirm: async () => {
+      const note = $("#dispute-note").value.trim();
+      if (!note) {
+        window.Swal.showValidationMessage("Dispute note is required.");
+        return false;
+      }
+      const attachments = await readMediaAttachments("#dispute-attachments");
+      return attachments ? { note, attachments } : false;
     },
   });
   return result.isConfirmed ? result.value : null;
@@ -859,6 +978,83 @@ async function readMediaAttachments(selector) {
     reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
     reader.readAsDataURL(file);
   })));
+}
+
+async function readProfilePhoto(selector) {
+  const file = $(selector)?.files?.[0];
+  if (!file) return null;
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    window.Swal?.showValidationMessage?.("Profile photo must be JPG, PNG, or WebP.");
+    throw new Error("Profile photo must be JPG, PNG, or WebP.");
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    window.Swal?.showValidationMessage?.("Profile photo must be 2 MB or smaller.");
+    throw new Error("Profile photo must be 2 MB or smaller.");
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({ name: file.name, dataUrl: reader.result });
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function bindAttachmentPreview(inputSelector, previewSelector, limit = 3) {
+  const input = $(inputSelector);
+  const preview = $(previewSelector);
+  if (!input || !preview) return;
+  let urls = [];
+  const clearUrls = () => {
+    urls.forEach((url) => URL.revokeObjectURL(url));
+    urls = [];
+  };
+  const renderPreview = () => {
+    clearUrls();
+    const files = Array.from(input.files || []).slice(0, limit);
+    preview.innerHTML = files.map((file) => {
+      const url = URL.createObjectURL(file);
+      urls.push(url);
+      const isVideo = file.type.startsWith("video/");
+      return `
+        <div class="upload-thumb">
+          ${isVideo ? `<video muted preload="metadata" src="${escapeAttribute(url)}"></video>` : `<img src="${escapeAttribute(url)}" alt="${escapeAttribute(file.name)}">`}
+          <span>${escapeHtml(file.name)}</span>
+        </div>
+      `;
+    }).join("");
+  };
+  input.addEventListener("change", renderPreview);
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  let photo = null;
+  try {
+    photo = await readProfilePhoto("[data-settings-form] [name='photo']");
+  } catch (error) {
+    notify("Photo not saved", error.message, "error");
+    return;
+  }
+  const payload = {
+    name: form.elements.name.value.trim(),
+    area: form.elements.area.value.trim(),
+    category: selectedValues("#settings-category"),
+    ...(photo ? { photo } : {}),
+  };
+  if (!payload.name || !payload.area) {
+    notify("Settings incomplete", "Name and area are required.", "warning");
+    return;
+  }
+  try {
+    const response = await apiFetch("/api/profile", { method: "POST", body: JSON.stringify(payload) });
+    state.session = response.user;
+    localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+    applyServerState(response.state);
+    notify("Settings saved", "", "success");
+  } catch (error) {
+    notify("Settings failed", error.message, "error");
+  }
 }
 
 async function ratingPrompt() {
@@ -1137,7 +1333,7 @@ function isVisibleToProvider(request) {
 
 function providerMatchesRequest(request) {
   const provider = state.providers.find((item) => item.userId === state.session?.id);
-  return provider?.category === request.category;
+  return categoryList(provider?.category).includes(request.category);
 }
 
 async function passRequest(requestId) {
@@ -1205,12 +1401,26 @@ function statusColor(status) {
   return "primary";
 }
 
-function categorySelect(id, blank = false, selected = "") {
-  return select(id, ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"], selected, blank ? "Choose category" : "");
+function select(id, options, selected = "", blank = "", multiple = false) {
+  const selectedItems = categoryList(selected);
+  return `<select id="${id}" class="form-select" ${multiple ? "multiple size=\"4\"" : ""}>${blank ? `<option value="">${blank}</option>` : ""}${options.map((item) => {
+    const isSelected = multiple ? selectedItems.includes(item) : item === selected;
+    return `<option value="${escapeAttribute(item)}" ${isSelected ? "selected" : ""}>${escapeHtml(item)}</option>`;
+  }).join("")}</select>`;
 }
 
-function select(id, options, selected = "", blank = "") {
-  return `<select id="${id}" class="form-select">${blank ? `<option value="">${blank}</option>` : ""}${options.map((item) => `<option ${item === selected ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select>`;
+function categorySelect(id, blank = false, selected = "", multiple = false) {
+  return select(id, SERVICE_CATEGORIES, selected, blank ? "Choose category" : "", multiple);
+}
+
+function selectedValues(selector) {
+  const element = $(selector);
+  return element ? Array.from(element.selectedOptions).map((option) => option.value).filter(Boolean) : [];
+}
+
+function categoryList(value = "") {
+  if (Array.isArray(value)) return Array.from(new Set(value.map((item) => String(item).trim()).filter(Boolean)));
+  return Array.from(new Set(String(value || "").split(",").map((item) => item.trim()).filter(Boolean)));
 }
 
 function modal(options) {

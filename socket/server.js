@@ -26,7 +26,9 @@ const MESSAGE_ENCRYPTION_KEY = parseMessageEncryptionKey(process.env.KAILA_MESSA
 const AUTO_CONFIRM_HOURS = Number(process.env.KAILA_AUTO_CONFIRM_HOURS || 48);
 const RATING_WINDOW_DAYS = Number(process.env.KAILA_RATING_WINDOW_DAYS || 7);
 const UPLOAD_DIR = path.resolve(__dirname, "uploads");
+const PROFILE_UPLOAD_DIR = path.resolve(__dirname, "profile-photos");
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_STAGE = 3;
 const ALLOWED_MEDIA_TYPES = new Map([
   ["image/jpeg", ".jpg"],
@@ -34,6 +36,11 @@ const ALLOWED_MEDIA_TYPES = new Map([
   ["image/webp", ".webp"],
   ["video/mp4", ".mp4"],
   ["video/webm", ".webm"],
+]);
+const ALLOWED_PROFILE_PHOTO_TYPES = new Map([
+  ["image/jpeg", ".jpg"],
+  ["image/png", ".png"],
+  ["image/webp", ".webp"],
 ]);
 const DB_CONFIG = {
   host: process.env.DB_HOST || "127.0.0.1",
@@ -114,6 +121,15 @@ function sanitizedAttachmentName(name, extension, fallbackId = createId()) {
   return `${slug}-${suffix}${extension}`;
 }
 
+function normalizeCategories(value) {
+  const raw = Array.isArray(value) ? value : String(value || "").split(",");
+  return Array.from(new Set(raw.map((item) => String(item).trim()).filter(Boolean))).join(", ");
+}
+
+function hasCategory(categories, category) {
+  return normalizeCategories(categories).split(",").map((item) => item.trim()).includes(String(category || "").trim());
+}
+
 function passwordHash(password, salt = crypto.randomBytes(16).toString("hex")) {
   const hash = crypto.createHash("sha256").update(`${salt}:${password}`).digest("hex");
   return `${salt}:${hash}`;
@@ -142,8 +158,19 @@ function publicUser(user) {
   return safe;
 }
 
+function decodeProfilePhoto(photo) {
+  if (!photo) return null;
+  const match = String(photo?.dataUrl || "").match(/^data:([^;,]+);base64,([a-z0-9+/=\r\n]+)$/i);
+  if (!match || !ALLOWED_PROFILE_PHOTO_TYPES.has(match[1])) throw new Error("Profile photo must be JPG, PNG, or WebP");
+  const buffer = Buffer.from(match[2], "base64");
+  if (!buffer.length || buffer.length > MAX_PROFILE_PHOTO_BYTES) throw new Error("Profile photo must be 2 MB or smaller");
+  if (!matchesMediaSignature(match[1], buffer)) throw new Error("Profile photo content does not match its media type");
+  return { buffer, mimeType: match[1], extension: ALLOWED_PROFILE_PHOTO_TYPES.get(match[1]) };
+}
+
 async function initializeDatabase() {
   await fs.promises.mkdir(UPLOAD_DIR, { recursive: true });
+  await fs.promises.mkdir(PROFILE_UPLOAD_DIR, { recursive: true });
   const bootstrap = await mysql.createConnection({
     host: DB_CONFIG.host,
     port: DB_CONFIG.port,
@@ -169,6 +196,9 @@ async function initializeDatabase() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   await ensureColumn("users", "username", "VARCHAR(80) NULL");
+  await ensureColumn("users", "photo_file", "VARCHAR(255) NULL");
+  await ensureColumn("users", "photo_mime_type", "VARCHAR(120) NULL");
+  await pool.query("ALTER TABLE users MODIFY COLUMN category VARCHAR(255) NULL");
   await backfillUsernames();
   await ensureIndex("users", "users_username_unique", "username", true);
   await pool.query("ALTER TABLE users MODIFY COLUMN username VARCHAR(80) NOT NULL");
@@ -188,6 +218,7 @@ async function initializeDatabase() {
       CONSTRAINT providers_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  await pool.query("ALTER TABLE providers MODIFY COLUMN category VARCHAR(255) NOT NULL");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS requests (
       id VARCHAR(64) PRIMARY KEY,
@@ -256,7 +287,7 @@ async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS request_attachments (
       id VARCHAR(64) PRIMARY KEY,
       request_id VARCHAR(64) NOT NULL,
-      stage ENUM('request','completion') NOT NULL,
+      stage ENUM('request','completion','dispute') NOT NULL,
       file_name VARCHAR(255) NOT NULL,
       original_name VARCHAR(255) NOT NULL,
       mime_type VARCHAR(120) NOT NULL,
@@ -265,6 +296,7 @@ async function initializeDatabase() {
       CONSTRAINT request_attachments_request_fk FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  await pool.query("ALTER TABLE request_attachments MODIFY COLUMN stage ENUM('request','completion','dispute') NOT NULL");
   await sanitizeStoredAttachmentNames();
   await cleanupOrphanUploads();
   await pool.query(`
@@ -376,6 +408,7 @@ function mapUser(row) {
     role: row.role,
     area: row.area,
     category: row.category || "",
+    photoUrl: row.photo_file ? `/profile-media/${encodeURIComponent(row.id)}` : "",
     createdAt: row.created_at,
   } : null;
 }
@@ -502,6 +535,7 @@ function mapRequest(row, offers = [], passedProviderIds = [], attachments = []) 
     passedProviderIds,
     requestAttachments: attachments.filter((attachment) => attachment.stage === "request"),
     completionAttachments: attachments.filter((attachment) => attachment.stage === "completion"),
+    disputeAttachments: attachments.filter((attachment) => attachment.stage === "dispute"),
     ratingsVisible: Boolean(row.client_rated_at && row.provider_rated_at) || (row.rating_deadline_at && new Date(row.rating_deadline_at).getTime() <= Date.now()),
   };
 }
@@ -670,6 +704,14 @@ app.get("/media/:id", async (req, res) => {
   res.sendFile(path.join(UPLOAD_DIR, rows[0].file_name));
 });
 
+app.get("/profile-media/:id", async (req, res) => {
+  const [rows] = await pool.query("SELECT photo_file, photo_mime_type FROM users WHERE id = ? LIMIT 1", [req.params.id]);
+  if (!rows.length || !rows[0].photo_file) return res.status(404).end();
+  res.type(rows[0].photo_mime_type || "image/png");
+  res.set("Cache-Control", "private, max-age=3600");
+  res.sendFile(path.join(PROFILE_UPLOAD_DIR, rows[0].photo_file));
+});
+
 app.get("/api/state", async (req, res) => {
   const userId = req.get("X-KAILA-User-Id");
   const [rows] = userId ? await pool.query("SELECT * FROM users WHERE id = ? LIMIT 1", [userId]) : [[]];
@@ -686,6 +728,7 @@ app.post("/api/register", async (req, res) => {
   const [existing] = await pool.query("SELECT id FROM users WHERE username = ? LIMIT 1", [cleanUsername]);
   if (existing.length) return res.status(409).json({ error: "Username already registered" });
 
+  const cleanCategory = normalizeCategories(category);
   const user = {
     id: createId(),
     name: String(name).trim(),
@@ -694,7 +737,7 @@ app.post("/api/register", async (req, res) => {
     password_hash: passwordHash(password),
     role,
     area: String(area).trim(),
-    category: category || "",
+    category: cleanCategory,
     createdAt: nowMysql(),
   };
 
@@ -703,10 +746,10 @@ app.post("/api/register", async (req, res) => {
     [user.id, user.name, user.username, user.email, user.password_hash, user.role, user.area, user.category, user.createdAt]
   );
 
-  if (role === "provider" && category) {
+  if (role === "provider" && cleanCategory) {
     await pool.query(
       "INSERT INTO providers (id, user_id, name, category, area, availability, skills, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [createId(), user.id, user.name, category, user.area, "Available", "", user.createdAt, user.createdAt]
+      [createId(), user.id, user.name, cleanCategory, user.area, "Available", "", user.createdAt, user.createdAt]
     );
   }
 
@@ -725,10 +768,50 @@ app.post("/api/login", async (req, res) => {
   res.json({ user: publicUser(user), state: await getStateFor(user) });
 });
 
+app.post("/api/profile", requireUser, async (req, res) => {
+  const { name, area, category, photo } = req.body || {};
+  const cleanName = String(name || "").trim();
+  const cleanArea = String(area || "").trim();
+  const cleanCategory = normalizeCategories(category);
+  if (!cleanName || !cleanArea) return res.status(400).json({ error: "Name and area are required" });
+
+  let photoUpdate = "";
+  let photoParams = [];
+  if (photo) {
+    const decoded = decodeProfilePhoto(photo);
+    const fileName = `${req.user.id}${decoded.extension}`;
+    const [currentRows] = await pool.query("SELECT photo_file FROM users WHERE id = ? LIMIT 1", [req.user.id]);
+    await fs.promises.writeFile(path.join(PROFILE_UPLOAD_DIR, fileName), decoded.buffer);
+    const oldFile = currentRows[0]?.photo_file;
+    if (oldFile && oldFile !== fileName) await fs.promises.unlink(path.join(PROFILE_UPLOAD_DIR, oldFile)).catch(() => {});
+    photoUpdate = ", photo_file = ?, photo_mime_type = ?";
+    photoParams = [fileName, decoded.mimeType];
+  }
+
+  await pool.query(
+    `UPDATE users SET name = ?, area = ?, category = ?${photoUpdate} WHERE id = ?`,
+    [cleanName, cleanArea, cleanCategory, ...photoParams, req.user.id]
+  );
+  await pool.query("UPDATE providers SET name = ?, area = ?, category = COALESCE(NULLIF(?, ''), category), updated_at = ? WHERE user_id = ?", [
+    cleanName,
+    cleanArea,
+    cleanCategory,
+    nowMysql(),
+    req.user.id,
+  ]);
+
+  const updated = await getUser(req.user.id);
+  await addActivity("Profile updated", `${updated.name} updated profile settings`);
+  const state = await getStateFor(updated);
+  broadcast("kaila.state.updated", state);
+  res.json({ user: publicUser(updated), state });
+});
+
 app.post("/api/providers", requireUser, async (req, res) => {
   if (!["provider", "admin"].includes(req.user.role)) return res.status(403).json({ error: "Only providers or admins can save provider profiles" });
   const { category, area, availability, skills } = req.body || {};
-  if (!category || !area) return res.status(400).json({ error: "Category and area are required" });
+  const cleanCategory = normalizeCategories(category);
+  if (!cleanCategory || !area) return res.status(400).json({ error: "At least one category and area are required" });
   const timestamp = nowMysql();
   const providerId = createId();
 
@@ -736,7 +819,7 @@ app.post("/api/providers", requireUser, async (req, res) => {
     `INSERT INTO providers (id, user_id, name, category, area, availability, skills, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE category = VALUES(category), area = VALUES(area), availability = VALUES(availability), skills = VALUES(skills), updated_at = VALUES(updated_at)`,
-    [providerId, req.user.id, req.user.name, category, area, availability || "Available", skills || "", timestamp, timestamp]
+    [providerId, req.user.id, req.user.name, cleanCategory, area, availability || "Available", skills || "", timestamp, timestamp]
   );
   const [rows] = await pool.query("SELECT * FROM providers WHERE user_id = ? LIMIT 1", [req.user.id]);
   const provider = mapProvider(rows[0]);
@@ -786,7 +869,7 @@ app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
   if (!["Posted", "Offers Received", "Countered"].includes(requestRows[0].status)) return res.status(400).json({ error: "This request is no longer accepting offers" });
   if (req.user.role === "provider") {
     const [providerRows] = await pool.query("SELECT category FROM providers WHERE user_id = ? LIMIT 1", [req.user.id]);
-    if (!providerRows.length || providerRows[0].category !== requestRows[0].category) return res.status(403).json({ error: "This request does not match your provider category" });
+    if (!providerRows.length || !hasCategory(providerRows[0].category, requestRows[0].category)) return res.status(403).json({ error: "This request does not match your provider categories" });
     const [passRows] = await pool.query("SELECT request_id FROM request_passes WHERE request_id = ? AND provider_id = ? LIMIT 1", [req.params.id, req.user.id]);
     if (passRows.length) return res.status(400).json({ error: "You already passed this request" });
   }
@@ -936,9 +1019,9 @@ app.post("/api/requests/:id/action", requireUser, async (req, res) => {
     return res.status(400).json({ error: "Invalid job action" });
   }
 
-  if (action === "provider_complete") {
+  if (["provider_complete", "dispute"].includes(action)) {
     try {
-      await saveAttachments(req.params.id, "completion", req.body?.attachments || []);
+      await saveAttachments(req.params.id, action === "dispute" ? "dispute" : "completion", req.body?.attachments || []);
     } catch (error) {
       return res.status(400).json({ error: error.message });
     }

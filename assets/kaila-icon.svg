@@ -1,0 +1,9 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">KAILA icon</title>
+  <desc id="desc">A local marketplace icon combining a map pin, helpful hand, and K letterform.</desc>
+  <rect width="512" height="512" rx="112" fill="#0B4552"/>
+  <path d="M256 78C187.52 78 132 132.52 132 199.75C132 291.88 256 434 256 434C256 434 380 291.88 380 199.75C380 132.52 324.48 78 256 78Z" fill="#F2C66D"/>
+  <circle cx="256" cy="200" r="70" fill="#F7FBFA"/>
+  <path d="M218 154H245V196L285 154H320L273 202L324 270H290L254 220L245 229V270H218V154Z" fill="#0B4552"/>
+  <path d="M160 326C185 305 214 294 247 294H295C319 294 340 306 353 326C327 352 294 366 256 366C218 366 186 352 160 326Z" fill="#0F6B70"/>
+</svg>
