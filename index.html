@@ -10,7 +10,9 @@
   <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16x16.png">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20260601-settings-fix">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
+  <link rel="stylesheet" href="style.css?v=20260601-reputation">
 </head>
 <body>
   <nav class="navbar bg-white border-bottom sticky-top py-2">
@@ -65,14 +67,14 @@
                   <strong>Marco P.</strong>
                   <span>Plumbing | 4.9 rating</span>
                 </div>
-                <b>PHP 650</b>
+                <b>₱650.00</b>
               </div>
               <div class="preview-offer soft">
                 <div>
                   <strong>Alma Services</strong>
                   <span>Available after lunch</span>
                 </div>
-                <b>PHP 720</b>
+                <b>₱720.00</b>
               </div>
               <div class="preview-confirm">Confirm job</div>
             </div>
@@ -131,43 +133,67 @@
       </div>
     </section>
 
-    <section class="view" data-view="app">
-      <div class="container-fluid px-3 py-2">
-        <div class="toolbar">
-          <div>
-            <strong data-dashboard-title>Dashboard</strong>
-            <span data-role-pill class="badge text-bg-light"></span>
+    <section class="view app-view" data-view="app">
+      <div class="adminlte-app">
+        <header class="app-header">
+          <div class="app-title">
+            <img src="assets/android-chrome-192x192.png" alt="" data-app-user-photo>
+            <div>
+              <strong data-dashboard-title>Dashboard</strong>
+              <span data-current-user-summary>Signed in</span>
+            </div>
           </div>
-          <button class="btn btn-sm btn-outline-danger" type="button" data-logout>Logout</button>
-        </div>
-
-        <div class="stats-row" data-stats-row>
-          <div><strong data-request-count>0</strong><span>Requests</span></div>
-          <div><strong data-provider-count>0</strong><span>Providers</span></div>
-          <div><strong data-offer-count>0</strong><span>Offers</span></div>
-        </div>
-
-        <div class="action-row" data-action-row></div>
-
-        <ul class="nav nav-pills nav-fill compact-tabs" role="tablist">
-          <li class="nav-item"><button class="nav-link active" data-bs-toggle="pill" data-bs-target="#requests-pane" type="button">Requests</button></li>
-          <li class="nav-item" data-providers-tab><button class="nav-link" data-bs-toggle="pill" data-bs-target="#providers-pane" type="button">Providers</button></li>
-          <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#activity-pane" type="button">Activity</button></li>
-          <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#settings-pane" type="button" data-settings-tab>Settings</button></li>
-        </ul>
-
-        <div class="tab-content pt-2">
-          <div class="tab-pane fade show active" id="requests-pane">
-            <div class="stack" data-request-list></div>
+          <div class="app-header-actions">
+            <span data-role-pill class="badge role-badge"></span>
+            <button class="btn btn-sm btn-outline-danger icon-btn" type="button" data-logout title="Logout" aria-label="Logout">
+              <i class="fa-solid fa-right-from-bracket"></i>
+            </button>
           </div>
-          <div class="tab-pane fade" id="providers-pane">
-            <div class="stack" data-provider-list></div>
+        </header>
+
+        <div class="app-content">
+          <div class="adminlte-panel">
+            <div class="panel-title">
+              <span>Quick actions</span>
+              <small>Live workspace</small>
+            </div>
+            <div class="action-row" data-action-row></div>
           </div>
-          <div class="tab-pane fade" id="activity-pane">
-            <div class="stack" data-activity-feed></div>
+
+          <div class="stats-row admin-stats" data-stats-row>
+            <div><i class="fa-solid fa-list-check"></i><strong data-request-count>0</strong><span>Requests</span></div>
+            <div><i class="fa-solid fa-user-gear"></i><strong data-provider-count>0</strong><span>Providers</span></div>
+            <div><i class="fa-solid fa-handshake-angle"></i><strong data-offer-count>0</strong><span>Offers</span></div>
           </div>
-          <div class="tab-pane fade" id="settings-pane">
-            <div data-settings-panel></div>
+
+          <nav class="nav nav-pills nav-fill compact-tabs app-tabs" role="tablist">
+            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#requests-pane" type="button">
+              <i class="fa-solid fa-clipboard-list"></i><span>Requests</span>
+            </button>
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#providers-pane" type="button" data-providers-tab>
+              <i class="fa-solid fa-people-carry-box"></i><span>Providers</span>
+            </button>
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#activity-pane" type="button">
+              <i class="fa-solid fa-bell"></i><span>Activity</span>
+            </button>
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#settings-pane" type="button" data-settings-tab>
+              <i class="fa-solid fa-gear"></i><span>Settings</span>
+            </button>
+          </nav>
+
+          <div class="tab-content app-tab-content">
+            <div class="tab-pane fade show active" id="requests-pane">
+              <div class="stack" data-request-list></div>
+            </div>
+            <div class="tab-pane fade" id="providers-pane">
+              <div class="stack" data-provider-list></div>
+            </div>
+            <div class="tab-pane fade" id="activity-pane">
+              <div class="stack" data-activity-feed></div>
+            </div>
+            <div class="tab-pane fade" id="settings-pane">
+              <div data-settings-panel></div>
+            </div>
           </div>
         </div>
       </div>
@@ -188,6 +214,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script src="app.js?v=20260601-settings-fix"></script>
+  <script src="app.js?v=20260601-reputation"></script>
 </body>
 </html>

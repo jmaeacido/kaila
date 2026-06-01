@@ -12,7 +12,9 @@ socket/.env.*
 
 # Runtime data and user uploads
 uploads/
+profile-photos/
 socket/uploads/
+socket/profile-photos/
 
 # Database dumps and local data
 *.sql

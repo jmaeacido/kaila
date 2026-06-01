@@ -3,6 +3,9 @@ const crypto = require("crypto");
 const fs = require("fs");
 require("dotenv").config({ path: path.resolve(__dirname, ".env"), quiet: true });
 
+const APP_TIME_ZONE = "Asia/Manila";
+process.env.TZ = APP_TIME_ZONE;
+
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
@@ -25,8 +28,8 @@ const SOCKET_TOKEN = sanitizeToken(process.env.KAILA_SOCKET_BEARER_TOKEN || "kai
 const MESSAGE_ENCRYPTION_KEY = parseMessageEncryptionKey(process.env.KAILA_MESSAGE_ENCRYPTION_KEY);
 const AUTO_CONFIRM_HOURS = Number(process.env.KAILA_AUTO_CONFIRM_HOURS || 48);
 const RATING_WINDOW_DAYS = Number(process.env.KAILA_RATING_WINDOW_DAYS || 7);
-const UPLOAD_DIR = path.resolve(__dirname, "uploads");
-const PROFILE_UPLOAD_DIR = path.resolve(__dirname, "profile-photos");
+const UPLOAD_DIR = path.resolve(__dirname, "..", "uploads");
+const PROFILE_UPLOAD_DIR = path.resolve(__dirname, "..", "profile-photos");
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_STAGE = 3;
@@ -48,6 +51,7 @@ const DB_CONFIG = {
   user: process.env.DB_USER || "root",
   password: process.env.DB_PASSWORD || "",
   database: process.env.DB_NAME || "kaila_mvp",
+  timezone: "+08:00",
   waitForConnections: true,
   connectionLimit: 10,
 };
@@ -141,15 +145,32 @@ function verifyPassword(password, stored) {
 }
 
 function nowMysql() {
-  return new Date().toISOString().slice(0, 19).replace("T", " ");
+  return mysqlDateTime(new Date());
 }
 
 function futureMysqlHours(hours) {
-  return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
+  return mysqlDateTime(new Date(Date.now() + hours * 60 * 60 * 1000));
 }
 
 function futureMysqlDays(days) {
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
+  return mysqlDateTime(new Date(Date.now() + days * 24 * 60 * 60 * 1000));
+}
+
+function mysqlDateTime(date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
 function publicUser(user) {
@@ -398,7 +419,11 @@ async function encryptExistingMessages() {
   }
 }
 
-function mapUser(row) {
+function emptyReputation() {
+  return { average: null, count: 0 };
+}
+
+function mapUser(row, reputation = emptyReputation()) {
   return row ? {
     id: row.id,
     name: row.name,
@@ -409,11 +434,12 @@ function mapUser(row) {
     area: row.area,
     category: row.category || "",
     photoUrl: row.photo_file ? `/profile-media/${encodeURIComponent(row.id)}` : "",
+    reputation,
     createdAt: row.created_at,
   } : null;
 }
 
-function mapProvider(row) {
+function mapProvider(row, reputation = emptyReputation(), photoUrl = "") {
   return {
     id: row.id,
     userId: row.user_id,
@@ -422,12 +448,14 @@ function mapProvider(row) {
     area: row.area,
     availability: row.availability,
     skills: row.skills || "",
+    photoUrl,
+    reputation,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-function mapOffer(row) {
+function mapOffer(row, reputation = emptyReputation(), photoUrl = "") {
   return {
     id: row.id,
     type: row.type,
@@ -436,6 +464,8 @@ function mapOffer(row) {
     amount: row.amount,
     schedule: row.schedule || "",
     notes: row.notes || "",
+    providerPhotoUrl: photoUrl,
+    providerReputation: reputation,
     createdAt: row.created_at,
   };
 }
@@ -501,11 +531,13 @@ async function clearUploads() {
   }
 }
 
-function mapRequest(row, offers = [], passedProviderIds = [], attachments = []) {
+function mapRequest(row, offers = [], passedProviderIds = [], attachments = [], reputations = new Map(), profiles = new Map()) {
   return {
     id: row.id,
     clientId: row.client_id,
     clientName: row.client_name,
+    clientPhotoUrl: profiles.get(row.client_id)?.photoUrl || "",
+    clientReputation: reputations.get(row.client_id) || emptyReputation(),
     category: row.category,
     urgency: row.urgency,
     area: row.area,
@@ -532,6 +564,8 @@ function mapRequest(row, offers = [], passedProviderIds = [], attachments = []) 
     providerRatedAt: row.provider_rated_at,
     disputeNote: row.dispute_note || "",
     acceptedProviderId: row.accepted_provider_id || "",
+    acceptedProviderPhotoUrl: row.accepted_provider_id ? (profiles.get(row.accepted_provider_id)?.photoUrl || "") : "",
+    acceptedProviderReputation: row.accepted_provider_id ? (reputations.get(row.accepted_provider_id) || emptyReputation()) : emptyReputation(),
     passedProviderIds,
     requestAttachments: attachments.filter((attachment) => attachment.stage === "request"),
     completionAttachments: attachments.filter((attachment) => attachment.stage === "completion"),
@@ -581,6 +615,34 @@ function activeConversationUserIds(requestId) {
   return Array.from(room.keys());
 }
 
+function ratingsAreVisible(row) {
+  return Boolean(row.client_rated_at && row.provider_rated_at) || (row.rating_deadline_at && new Date(row.rating_deadline_at).getTime() <= Date.now());
+}
+
+function buildReputations(requestRows) {
+  const scores = new Map();
+  const add = (userId, score) => {
+    const numeric = Number(score);
+    if (!userId || !Number.isFinite(numeric) || numeric < 1 || numeric > 5) return;
+    const current = scores.get(userId) || { total: 0, count: 0 };
+    current.total += numeric;
+    current.count += 1;
+    scores.set(userId, current);
+  };
+
+  for (const row of requestRows) {
+    if (!ratingsAreVisible(row)) continue;
+    if (row.accepted_provider_id && row.client_rated_at) add(row.accepted_provider_id, row.client_rating_score);
+    if (row.client_id && row.provider_rated_at) add(row.client_id, row.provider_rating_score);
+  }
+
+  const reputations = new Map();
+  for (const [userId, value] of scores) {
+    reputations.set(userId, { average: Math.round((value.total / value.count) * 10) / 10, count: value.count });
+  }
+  return reputations;
+}
+
 async function getState(viewer = null) {
   await autoConfirmExpiredJobs();
   await closeExpiredRatingWindows();
@@ -591,6 +653,8 @@ async function getState(viewer = null) {
   const [attachmentRows] = await pool.query("SELECT * FROM request_attachments ORDER BY created_at ASC");
   const [passRows] = await pool.query("SELECT * FROM request_passes ORDER BY created_at ASC");
   const [activityRows] = await pool.query("SELECT * FROM activities ORDER BY created_at DESC LIMIT 80");
+  const reputations = buildReputations(requestRows);
+  const profiles = new Map(userRows.map((row) => [row.id, mapUser(row, reputations.get(row.id) || emptyReputation())]));
 
   const offersByRequest = new Map();
   const acceptedProviderByRequest = new Map(requestRows.map((row) => [row.id, row.accepted_provider_id]));
@@ -598,7 +662,7 @@ async function getState(viewer = null) {
     if (viewer?.role === "provider" && row.provider_id !== viewer.id) continue;
     const acceptedProviderId = acceptedProviderByRequest.get(row.request_id);
     if (acceptedProviderId && row.provider_id !== acceptedProviderId) continue;
-    const offer = mapOffer(row);
+    const offer = mapOffer(row, reputations.get(row.provider_id) || emptyReputation(), profiles.get(row.provider_id)?.photoUrl || "");
     if (!offersByRequest.has(row.request_id)) offersByRequest.set(row.request_id, []);
     offersByRequest.get(row.request_id).push(offer);
   }
@@ -614,9 +678,9 @@ async function getState(viewer = null) {
   }
 
   return {
-    users: userRows.map(mapUser).map(publicUser),
-    providers: providerRows.map(mapProvider),
-    requests: requestRows.map((row) => mapRequest(row, offersByRequest.get(row.id) || [], passesByRequest.get(row.id) || [], attachmentsByRequest.get(row.id) || [])),
+    users: Array.from(profiles.values()).map(publicUser),
+    providers: providerRows.map((row) => mapProvider(row, reputations.get(row.user_id) || emptyReputation(), profiles.get(row.user_id)?.photoUrl || "")),
+    requests: requestRows.map((row) => mapRequest(row, offersByRequest.get(row.id) || [], passesByRequest.get(row.id) || [], attachmentsByRequest.get(row.id) || [], reputations, profiles)),
     activities: activityRows.map(mapActivity),
   };
 }

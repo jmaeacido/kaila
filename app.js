@@ -2,9 +2,11 @@ const CHANNEL = "kaila-mvp";
 const STORAGE = {
   session: "kaila.deploy.session",
   socketUrl: "kaila.deploy.socketUrl",
+  theme: "kaila.deploy.theme",
 };
 const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
+const APP_TIME_ZONE = "Asia/Manila";
 
 const state = {
   session: readJson(STORAGE.session, null),
@@ -21,6 +23,7 @@ const state = {
   typingTimer: null,
   typingSent: false,
   presenceTimer: null,
+  theme: localStorage.getItem(STORAGE.theme) || "system",
 };
 
 const $ = (selector, scope = document) => scope.querySelector(selector);
@@ -29,6 +32,7 @@ const $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(sel
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
+  initializeTheme();
   bindEvents();
   initializeSocketUrl();
   await loadState();
@@ -47,6 +51,24 @@ function bindEvents() {
   $("[data-reconnect]").addEventListener("click", () => connectSocket(true));
   $("[data-settings-tab]")?.addEventListener("shown.bs.tab", renderSettings);
   $("[data-settings-tab]")?.addEventListener("click", renderSettings);
+}
+
+function initializeTheme() {
+  applyTheme(state.theme);
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (state.theme === "system") applyTheme("system");
+  });
+}
+
+function applyTheme(theme = "system") {
+  state.theme = ["light", "dark", "system"].includes(theme) ? theme : "system";
+  localStorage.setItem(STORAGE.theme, state.theme);
+  const resolved = state.theme === "system"
+    ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+    : state.theme;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themeMode = state.theme;
+  document.querySelector("meta[name='theme-color']")?.setAttribute("content", resolved === "dark" ? "#10191d" : "#0f3e46");
 }
 
 function initializeSocketUrl() {
@@ -92,6 +114,13 @@ function applyServerState(payload = {}) {
   state.providers = payload.providers || [];
   state.requests = payload.requests || [];
   state.activity = payload.activities || state.activity || [];
+  if (state.session) {
+    const freshSession = state.users.find((user) => user.id === state.session.id);
+    if (freshSession) {
+      state.session = { ...state.session, ...freshSession };
+      localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+    }
+  }
   render();
 }
 
@@ -107,6 +136,7 @@ function route(name) {
   if (name === "app" && !state.session) name = "login";
   if (state.session && ["landing", "login", "register"].includes(name)) name = "app";
   $$("[data-view]").forEach((view) => view.classList.toggle("active", view.dataset.view === name));
+  document.body.classList.toggle("app-mode", name === "app");
   toggleProviderCategory();
   render();
 }
@@ -206,6 +236,13 @@ function renderNav() {
   $("[data-current-user]").classList.toggle("d-none", !signedIn);
   $("[data-app-link]").classList.toggle("d-none", !signedIn);
   if (signedIn) $("[data-current-user]").textContent = `${state.session.name} (${state.session.role})`;
+  const summary = $("[data-current-user-summary]");
+  if (summary && signedIn) summary.textContent = `${state.session.name} - ${state.session.area || state.session.role}`;
+  const userPhoto = $("[data-app-user-photo]");
+  if (userPhoto) {
+    userPhoto.src = signedIn && state.session.photoUrl ? `${apiBase()}${state.session.photoUrl}` : "assets/android-chrome-192x192.png";
+    userPhoto.alt = signedIn ? `${state.session.name} photo` : "";
+  }
 }
 
 function renderTabs() {
@@ -233,12 +270,12 @@ function renderActions() {
 
   const actions = [];
   if (["client", "admin"].includes(state.session.role)) {
-    actions.push(`<button class="btn btn-primary" type="button" data-new-request>Post Request</button>`);
+    actions.push(`<button class="btn btn-primary" type="button" data-new-request><i class="fa-solid fa-plus"></i><span>Post Request</span></button>`);
   }
   if (["provider", "admin"].includes(state.session.role)) {
-    actions.push(`<button class="btn btn-outline-primary" type="button" data-provider-profile>${state.session.role === "provider" ? "Update Provider Profile" : "Add Provider"}</button>`);
+    actions.push(`<button class="btn btn-outline-primary" type="button" data-provider-profile><i class="fa-solid fa-id-card"></i><span>${state.session.role === "provider" ? "Provider Profile" : "Add Provider"}</span></button>`);
   }
-  actions.push(`<button class="btn btn-outline-secondary" type="button" data-team-note title="Post a short note to the shared Activity feed.">Team Note</button>`);
+  actions.push(`<button class="btn btn-outline-secondary" type="button" data-team-note title="Post a short note to the shared Activity feed."><i class="fa-solid fa-note-sticky"></i><span>Team Note</span></button>`);
   row.innerHTML = actions.join("");
 
   $("[data-new-request]")?.addEventListener("click", openRequestModal);
@@ -297,11 +334,11 @@ function renderRequestCard(request) {
         </div>
         <span class="badge text-bg-${statusColor(request.status)} align-self-start">${escapeHtml(request.status)}</span>
       </div>
+      ${renderIdentity(request.clientName, request.clientPhotoUrl, "Client reputation", request.clientReputation)}
       <div class="meta">
-        <span>${escapeHtml(request.clientName)}</span>
         <span>${escapeHtml(request.area)}</span>
         <span>${escapeHtml(request.urgency)}</span>
-        <span>${escapeHtml(request.budget)}</span>
+        <span>${escapeHtml(formatCurrency(request.budget))}</span>
       </div>
       ${renderOffers(request)}
       ${renderAttachments("Request media", request.requestAttachments, request.id)}
@@ -353,10 +390,10 @@ function renderOffer(offer, requestId, selectable) {
   return `
     <article class="offer-card">
       <div class="offer-card-head">
-        <strong>${escapeHtml(offer.providerName)}</strong>
         <span>${escapeHtml(offer.type === "counter" ? "Counter-offer" : "Offer")}</span>
       </div>
-      <div class="offer-amount">${escapeHtml(offer.amount)}</div>
+      ${renderIdentity(offer.providerName, offer.providerPhotoUrl, "Provider reputation", offer.providerReputation, "compact")}
+      <div class="offer-amount">${escapeHtml(formatCurrency(offer.amount))}</div>
       <div class="offer-schedule">${escapeHtml(offer.schedule || "Schedule TBD")}</div>
       ${offer.notes ? `<p>${escapeHtml(offer.notes)}</p>` : ""}
       ${selectable ? `<button class="btn btn-sm btn-success w-100" type="button" data-request-id="${requestId}" data-select-offer="${offer.id}">Select Offer</button>` : ""}
@@ -443,10 +480,59 @@ function renderRatings(request) {
   }
 
   const parts = [];
-  if (hasClientRating) parts.push(`<div><strong>Client rated provider:</strong> ${escapeHtml(request.clientRatingScore)}/5${request.clientRatingNote ? ` - ${escapeHtml(request.clientRatingNote)}` : ""}</div>`);
-  if (hasProviderRating) parts.push(`<div><strong>Provider rated client:</strong> ${escapeHtml(request.providerRatingScore)}/5${request.providerRatingNote ? ` - ${escapeHtml(request.providerRatingNote)}` : ""}</div>`);
+  if (hasClientRating) parts.push(renderRatingLine("Client rated provider", request.clientRatingScore, request.clientRatingNote));
+  if (hasProviderRating) parts.push(renderRatingLine("Provider rated client", request.providerRatingScore, request.providerRatingNote));
   if (!parts.length && request.ratingDeadlineAt) parts.push(`<div>Rating open until ${escapeHtml(formatDateTime(request.ratingDeadlineAt))}</div>`);
   return `<div class="offer"><strong>Ratings</strong>${parts.join("")}</div>`;
+}
+
+function renderRatingLine(label, score, note = "") {
+  return `
+    <div class="rating-row">
+      <strong>${escapeHtml(label)}:</strong>
+      <span class="rating-stars" aria-label="${escapeAttribute(score)} out of 5 stars">${ratingStars(score)}</span>
+      ${note ? `<span class="rating-note-text">${escapeHtml(note)}</span>` : ""}
+    </div>
+  `;
+}
+
+function ratingStars(score) {
+  const value = Math.max(0, Math.min(5, Number(score) || 0));
+  return [1, 2, 3, 4, 5].map((star) => star <= Math.round(value) ? "&#9733;" : "&#9734;").join("");
+}
+
+function renderIdentity(name, photoUrl, reputationLabel, reputation, size = "") {
+  return `
+    <div class="user-identity ${escapeAttribute(size)}">
+      <img class="user-avatar" src="${escapeAttribute(resolveMediaUrl(photoUrl))}" alt="${escapeAttribute(name)} photo">
+      <div class="user-identity-copy">
+        <strong>${escapeHtml(name)}</strong>
+        ${renderReputationBadge(reputationLabel, reputation)}
+      </div>
+    </div>
+  `;
+}
+
+function renderReputationBadge(label, reputation = {}, className = "") {
+  const count = Number(reputation?.count || 0);
+  const average = Number(reputation?.average);
+  if (!count || !Number.isFinite(average)) {
+    return `<span class="reputation-badge ${escapeAttribute(className)}" aria-label="${escapeAttribute(label)}: No reviews yet"><span class="reputation-stars">&#9734;&#9734;&#9734;&#9734;&#9734;</span><span>No reviews yet</span></span>`;
+  }
+  return `
+    <span class="reputation-badge ${escapeAttribute(className)}" aria-label="${escapeAttribute(label)}: ${escapeAttribute(average.toFixed(1))} stars from ${count} review${count === 1 ? "" : "s"}">
+      <span class="reputation-stars">${ratingStars(average)}</span>
+      <span>${escapeHtml(average.toFixed(1))} (${count} review${count === 1 ? "" : "s"})</span>
+    </span>
+  `;
+}
+
+function resolveMediaUrl(url) {
+  return url ? `${apiBase()}${url}` : "assets/android-chrome-192x192.png";
+}
+
+function userProfile(userId) {
+  return state.users.find((user) => user.id === userId) || {};
 }
 
 function renderProviders() {
@@ -460,7 +546,7 @@ function renderProviders() {
     <article class="k-card">
       <div class="d-flex justify-content-between gap-2">
         <div>
-          <h3>${escapeHtml(provider.name)}</h3>
+          ${renderIdentity(provider.name, provider.photoUrl, "Provider reputation", provider.reputation)}
           <p>${escapeHtml(provider.skills || "No skills added yet.")}</p>
         </div>
         <span class="badge text-bg-light align-self-start">${escapeHtml(provider.availability || "Available")}</span>
@@ -486,12 +572,14 @@ function renderSettings() {
         <div>
           <h3>Profile settings</h3>
           <p>Update your visible name, service area, and photo.</p>
+          ${renderReputationBadge("Your reputation", state.session.reputation, "reputation-line")}
         </div>
       </div>
       <div class="settings-grid">
         <label><span>Name</span><input class="form-control" name="name" value="${escapeAttribute(state.session.name || "")}" required></label>
         <label><span>Area</span><input class="form-control" name="area" value="${escapeAttribute(state.session.area || "")}" required></label>
         ${isProvider ? `<label class="wide"><span>Service categories</span>${categorySelect("settings-category", false, state.session.category || "", true)}</label>` : ""}
+        <label class="wide"><span>Theme</span>${select("settings-theme", ["System", "Light", "Dark"], capitalize(state.theme))}</label>
         <label class="wide"><span>Photo</span><input class="form-control" name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
       </div>
       <div class="upload-preview settings-preview" data-settings-photo-preview></div>
@@ -522,7 +610,7 @@ async function openRequestModal() {
         <label><span>Category</span>${categorySelect("request-category", true)}</label>
         <label><span>Urgency</span>${select("request-urgency", URGENCY_OPTIONS, "Today")}</label>
         <label><span>Area</span><input id="request-area" class="form-control" value="${escapeAttribute(state.session.area)}"></label>
-        <label><span>Budget</span><input id="request-budget" class="form-control" placeholder="Open"></label>
+        <label><span>Budget</span><input id="request-budget" class="form-control" inputmode="decimal" placeholder="Open / ₱1,500.00"></label>
         <label class="wide"><span>Details</span><textarea id="request-details" class="form-control" rows="3"></textarea></label>
         <label class="wide"><span>Photos or videos (optional, up to 3 files)</span><input id="request-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
         <div class="wide upload-preview" data-request-attachment-preview></div>
@@ -537,7 +625,7 @@ async function openRequestModal() {
         category: $("#request-category").value,
         urgency: $("#request-urgency").value,
         area: $("#request-area").value.trim(),
-        budget: $("#request-budget").value.trim() || "Open",
+        budget: normalizeCurrencyInput($("#request-budget").value) || "Open",
         details: $("#request-details").value.trim(),
         attachments,
       };
@@ -602,7 +690,8 @@ async function openOfferModal(requestId, type) {
     title: type === "counter" ? "Send counter-offer" : "Send offer",
     html: `
       <div class="swal-form">
-        <label><span>Amount</span><input id="offer-amount" class="form-control" placeholder="PHP amount"></label>
+        ${renderIdentity(request.clientName, request.clientPhotoUrl, "Client reputation", request.clientReputation, "compact")}
+        <label><span>Amount</span><input id="offer-amount" class="form-control" inputmode="decimal" placeholder="₱1,500.00"></label>
         <label><span>Schedule</span><input id="offer-schedule" class="form-control" placeholder="Today / scheduled"></label>
         <label><span>Notes</span><textarea id="offer-notes" class="form-control" rows="3"></textarea></label>
       </div>
@@ -611,7 +700,7 @@ async function openOfferModal(requestId, type) {
     preConfirm: () => {
       const offer = {
         type,
-        amount: $("#offer-amount").value.trim(),
+        amount: normalizeCurrencyInput($("#offer-amount").value),
         schedule: $("#offer-schedule").value.trim(),
         notes: $("#offer-notes").value.trim(),
       };
@@ -640,7 +729,7 @@ async function acceptClientPrice(requestId) {
   }
   const result = await modal({
     title: "Accept client price?",
-    text: `Send an offer for ${request.budget}.`,
+    text: `Send an offer for ${formatCurrency(request.budget)}.`,
     icon: "question",
     confirmButtonText: "Accept Client Price",
   });
@@ -663,7 +752,12 @@ async function confirmRequest(requestId, offerId) {
   if (!request || !offer) return;
   const result = await modal({
     title: "Select this provider?",
-    text: `${offer.providerName} offered ${offer.amount}. This confirms the job and opens messaging.`,
+    html: `
+      <div class="text-start">
+        ${renderIdentity(offer.providerName, offer.providerPhotoUrl, "Provider reputation", offer.providerReputation, "compact")}
+        <p class="mt-3 mb-0">${escapeHtml(formatCurrency(offer.amount))}. This confirms the job and opens messaging.</p>
+      </div>
+    `,
     icon: "question",
     confirmButtonText: "Select Offer",
   });
@@ -691,7 +785,7 @@ async function openConversation(requestId) {
   await window.Swal.fire({
     customClass: { popup: "kaila-popup chat-popup" },
     title: `${request.category} messages`,
-    html: conversationHtml(payload.messages, payload.writable, payload.activeUserIds),
+    html: conversationHtml(payload.messages, payload.writable, payload.activeUserIds, request),
     showConfirmButton: false,
     showCloseButton: true,
     didOpen: () => bindConversationInput(requestId, payload.writable),
@@ -710,7 +804,7 @@ async function fetchConversation(requestId) {
   }
 }
 
-function conversationHtml(messages, writable, activeUserIds = []) {
+function conversationHtml(messages, writable, activeUserIds = [], request = null) {
   const transcript = messages.length
     ? messages.map((message) => `
       <div class="chat-message ${message.senderId === state.session.id ? "mine" : ""}">
@@ -724,6 +818,7 @@ function conversationHtml(messages, writable, activeUserIds = []) {
 
   return `
     <div class="chat-shell">
+      ${conversationIdentityHtml(request)}
       <div class="chat-presence" data-chat-presence>${conversationPresenceText(activeUserIds)}</div>
       <div class="chat-transcript" data-chat-transcript>${transcript}</div>
       <div class="chat-typing" data-chat-typing></div>
@@ -735,6 +830,16 @@ function conversationHtml(messages, writable, activeUserIds = []) {
       ` : `<div class="chat-archived">Conversation archived after job completion.</div>`}
     </div>
   `;
+}
+
+function conversationIdentityHtml(request) {
+  if (!request) return "";
+  const viewingAsClient = request.clientId === state.session.id;
+  if (viewingAsClient && request.acceptedProviderId) {
+    const provider = userProfile(request.acceptedProviderId);
+    return `<div class="chat-reputation">${renderIdentity(provider.name || "Provider", request.acceptedProviderPhotoUrl || provider.photoUrl, "Provider reputation", request.acceptedProviderReputation || provider.reputation, "compact")}</div>`;
+  }
+  return `<div class="chat-reputation">${renderIdentity(request.clientName, request.clientPhotoUrl, "Client reputation", request.clientReputation, "compact")}</div>`;
 }
 
 function bindConversationInput(requestId, writable) {
@@ -775,7 +880,8 @@ async function refreshConversation(requestId) {
   const payload = await fetchConversation(requestId);
   const shell = $(".chat-shell");
   if (!payload || !shell) return;
-  shell.outerHTML = conversationHtml(payload.messages, payload.writable, payload.activeUserIds);
+  const request = state.requests.find((item) => item.id === requestId);
+  shell.outerHTML = conversationHtml(payload.messages, payload.writable, payload.activeUserIds, request);
   bindConversationInput(requestId, payload.writable);
   const nextInput = $("[data-chat-input]");
   if (nextInput) {
@@ -1042,6 +1148,7 @@ async function saveSettings(event) {
     category: selectedValues("#settings-category"),
     ...(photo ? { photo } : {}),
   };
+  applyTheme(($("#settings-theme")?.value || "System").toLowerCase());
   if (!payload.name || !payload.area) {
     notify("Settings incomplete", "Name and area are required.", "warning");
     return;
@@ -1165,6 +1272,7 @@ function handleRequestCreated({ request } = {}) {
   if (!request || !state.session || request.clientId === state.session.id) return;
   if (!["provider", "admin"].includes(state.session.role)) return;
   if (state.session.role === "provider" && !providerMatchesRequest(request)) return;
+  const client = userProfile(request.clientId);
 
   queueAttentionModal({
     icon: "info",
@@ -1181,9 +1289,10 @@ function handleRequestCreated({ request } = {}) {
     } : {}),
     html: `
       <div class="text-start">
+        ${renderIdentity(request.clientName, request.clientPhotoUrl || client.photoUrl, "Client reputation", request.clientReputation || client.reputation)}
         <strong>${escapeHtml(request.category)}</strong>
         <p class="mb-2">${escapeHtml(request.details)}</p>
-        <div class="small text-muted">${escapeHtml(request.area)} - ${escapeHtml(request.urgency)} - ${escapeHtml(request.budget)}</div>
+        <div class="small text-muted">${escapeHtml(request.area)} - ${escapeHtml(request.urgency)} - ${escapeHtml(formatCurrency(request.budget))}</div>
       </div>
     `,
   });
@@ -1196,12 +1305,15 @@ async function handleOfferSaved({ requestId, offer } = {}) {
   if (request.clientId !== state.session.id && state.session.role !== "admin") return;
 
   const isCounter = offer.type === "counter";
+  const enrichedOffer = request.offers.find((item) => item.providerId === offer.providerId) || offer;
+  const provider = userProfile(offer.providerId);
   queueAttentionModal({
     icon: isCounter ? "warning" : "info",
     title: isCounter ? "New counter-offer" : "New offer received",
     html: `
       <div class="text-start">
-        <strong>${escapeHtml(offer.amount)} for ${escapeHtml(request.category)}</strong>
+        ${renderIdentity(offer.providerName, enrichedOffer.providerPhotoUrl || provider.photoUrl, "Provider reputation", enrichedOffer.providerReputation || provider.reputation)}
+        <strong>${escapeHtml(formatCurrency(offer.amount))} for ${escapeHtml(request.category)}</strong>
         <p class="mb-2">${escapeHtml(offer.providerName)} - ${escapeHtml(offer.schedule || "Schedule TBD")}</p>
         ${offer.notes ? `<div class="small text-muted">${escapeHtml(offer.notes)}</div>` : ""}
       </div>
@@ -1464,7 +1576,29 @@ function formatDateTime(value) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return date.toLocaleString("en-PH", { timeZone: APP_TIME_ZONE, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function normalizeCurrencyInput(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const cleaned = raw.replace(/[₱,\s]/g, "").replace(/^php/i, "");
+  const amount = Number(cleaned);
+  return Number.isFinite(amount) && amount >= 0 ? amount.toFixed(2) : raw;
+}
+
+function formatCurrency(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.toLowerCase() === "open") return raw || "Open";
+  const cleaned = raw.replace(/[₱,\s]/g, "").replace(/^php/i, "");
+  const amount = Number(cleaned);
+  if (!Number.isFinite(amount)) return raw;
+  return new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency: "PHP",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount).replace("PHP", "₱").replace(/\s/g, "");
 }
 
 function scrollConversationToBottom() {
