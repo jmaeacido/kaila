@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+socket/node_modules/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+socket/.env
+socket/.env.*
+!socket/.env.example
+
+# Runtime data and user uploads
+uploads/
+socket/uploads/
+
+# Database dumps and local data
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+
+# Logs and process files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.pid
+
+# Build and cache output
+dist/
+build/
+coverage/
+.cache/
+.parcel-cache/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+
+# Temporary Office lock files
+~$*

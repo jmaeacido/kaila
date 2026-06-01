@@ -4,6 +4,84 @@ KAILA is a local services marketplace concept for helping clients find trusted l
 
 This repository contains the KAILA founder-grade planning package: business proposal, validation plan, operational playbooks, MVP specification, pitch material, financial model, and field forms.
 
+## Mobile-First MVP
+
+The first KAILA web app version is available at the repository root:
+
+- `index.html` - mobile-first MVP interface
+- `style.css` - responsive app styling
+- `app.js` - SweetAlert2-powered auth, role-based flows, pilot board, and real-time events
+- `socket/` - KAILA-owned Socket.IO server
+
+Current MVP screens:
+
+- Landing page
+- Username-based registration for Client and Provider roles
+- Login page
+- Authenticated compact dashboard
+
+Real-time MVP events:
+
+- Job request created
+- Offer sent
+- Counter-offer sent
+- Job confirmed
+- Job started
+- Provider marked job done with proof notes
+- Optional request and completion photo/video attachments: JPG, PNG, WebP, MP4, or WebM; up to 3 files per stage and 10 MB per file
+- Client confirmed completion
+- Confirmed-job messaging with live updates, typing indicators, room presence, reactions, and archived read-only transcripts
+- Payment released independent of ratings
+- Client requested revision/correction
+- Client rated provider
+- Provider rated client
+- Blind mutual ratings revealed after both sides rate or rating window expires
+- Job cancelled
+- Job disputed
+- Admin resolved dispute
+- Provider profile saved
+- Team activity note
+
+Run the web app locally:
+
+```bash
+python -m http.server 8000 --bind 127.0.0.1
+```
+
+Open `http://127.0.0.1:8000`.
+
+Run KAILA's MySQL-backed API/socket:
+
+```bash
+cd socket
+npm install
+npm start
+```
+
+Default socket URL: `http://<same-host-as-the-web-app>:6002`
+
+For example, if the app is opened from another device at `http://crg-co1-23-0028/kaila/`, the browser connects to `http://crg-co1-23-0028:6002`.
+
+For deployment:
+
+- Serve the root folder as a static site.
+- Run `socket/` as a Node service.
+- Run MySQL and configure `socket/.env`.
+- Set `KAILA_SOCKET_BEARER_TOKEN` in `socket/.env`.
+- Update the socket URL in the app if the deployed socket URL changes.
+
+Default local MySQL settings:
+
+```env
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=
+DB_NAME=kaila_mvp
+```
+
+The Node service creates the `kaila_mvp` database and required tables automatically.
+
 ## Package Contents
 
 All documents are inside `KAILA_Founder_Grade_Package/`.
@@ -11,7 +89,7 @@ All documents are inside `KAILA_Founder_Grade_Package/`.
 | File | Purpose |
 | --- | --- |
 | `00 READ ME KAILA Founder Package.pdf` | Package index, usage guide, and recommended reading order. |
-| `01 Master Business Proposal.pdf` | Full business case, problem, market, model, strategy, risks, roadmap, references, TOC, and terms. |
+| `01 Master Business Proposal.pdf` | Full business case, problem, market, model, strategy, risks, roadmap, TOC, and terms. |
 | `01 Master Business Proposal.docx` | Editable Word version of the master business proposal. |
 | `02 Business Model Canvas and Lean Canvas.pdf` | Business Model Canvas and Lean Canvas in structured table format. |
 | `03 Market Validation and Feasibility Study.pdf` | Research plan, interview guide, pilot design, go/no-go criteria, TOC, and terms. |

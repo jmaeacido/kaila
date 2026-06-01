@@ -1,0 +1,17 @@
+{
+  "name": "kaila-socket",
+  "version": "0.1.0",
+  "private": true,
+  "description": "KAILA MVP Socket.IO server for real-time marketplace pilot events.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "mysql2": "^3.15.3",
+    "socket.io": "^4.8.1"
+  }
+}

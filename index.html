@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0f3e46">
+  <title>KAILA MVP</title>
+  <link rel="icon" href="favicon.ico" sizes="any">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="navbar bg-white border-bottom sticky-top py-2">
+    <div class="container-fluid px-3">
+      <a class="navbar-brand d-flex align-items-center gap-2 fw-black m-0" href="#" data-route="landing">
+        <span class="brand-mark">K</span>KAILA
+      </a>
+      <div class="d-flex align-items-center gap-2">
+        <span class="small text-muted d-none" data-current-user></span>
+        <button class="btn btn-sm btn-outline-secondary d-none" type="button" data-route="app" data-app-link>App</button>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-open-live>
+          <span class="status-dot" data-socket-dot></span> Live
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <main>
+    <section class="view active" data-view="landing">
+      <div class="container-fluid px-3 py-3">
+        <div class="hero-compact">
+          <p class="eyebrow mb-1">Mobile-first MVP</p>
+          <h1 class="fw-black mb-2">Find trusted local help faster.</h1>
+          <p class="mb-3">Post requests, send offers, negotiate counter-offers, and confirm jobs in real time.</p>
+          <div class="d-grid gap-2">
+            <button class="btn btn-primary" type="button" data-route="register">Create Account</button>
+            <button class="btn btn-light" type="button" data-route="login">Login</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" data-view="register">
+      <div class="container-fluid px-3 py-3">
+        <div class="auth-card">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h1 class="h4 fw-black m-0">Register</h1>
+            <button class="btn btn-sm btn-link" type="button" data-route="login">Login</button>
+          </div>
+          <form data-register-form class="compact-form">
+            <input class="form-control" name="name" placeholder="Full name" required>
+            <input class="form-control" name="username" placeholder="Username" required>
+            <input class="form-control" name="password" type="password" placeholder="Password" required>
+            <select class="form-select" name="role" required>
+              <option value="client">Client</option>
+              <option value="provider">Provider</option>
+            </select>
+            <input class="form-control" name="area" placeholder="Barangay / area" required>
+            <div data-provider-category-field hidden>
+              <select class="form-select" name="category">
+                <option value="">Provider category</option>
+                <option>Appliance repair</option>
+                <option>Plumbing</option>
+                <option>Electrical</option>
+                <option>Computer repair</option>
+                <option>Mechanical / motorcycle</option>
+                <option>Carpentry / home maintenance</option>
+                <option>Graphic / digital services</option>
+                <option>General odd jobs</option>
+              </select>
+            </div>
+            <button class="btn btn-primary w-100" type="submit">Create Account</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" data-view="login">
+      <div class="container-fluid px-3 py-3">
+        <div class="auth-card">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h1 class="h4 fw-black m-0">Login</h1>
+            <button class="btn btn-sm btn-link" type="button" data-route="register">Register</button>
+          </div>
+          <form data-login-form class="compact-form">
+            <input class="form-control" name="username" placeholder="Username" required>
+            <input class="form-control" name="password" type="password" placeholder="Password" required>
+            <button class="btn btn-primary w-100" type="submit">Login</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" data-view="app">
+      <div class="container-fluid px-3 py-2">
+        <div class="toolbar">
+          <div>
+            <strong data-dashboard-title>Dashboard</strong>
+            <span data-role-pill class="badge text-bg-light"></span>
+          </div>
+          <button class="btn btn-sm btn-outline-danger" type="button" data-logout>Logout</button>
+        </div>
+
+        <div class="stats-row" data-stats-row>
+          <div><strong data-request-count>0</strong><span>Requests</span></div>
+          <div><strong data-provider-count>0</strong><span>Providers</span></div>
+          <div><strong data-offer-count>0</strong><span>Offers</span></div>
+        </div>
+
+        <div class="action-row" data-action-row></div>
+
+        <ul class="nav nav-pills nav-fill compact-tabs" role="tablist">
+          <li class="nav-item"><button class="nav-link active" data-bs-toggle="pill" data-bs-target="#requests-pane" type="button">Requests</button></li>
+          <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#providers-pane" type="button">Providers</button></li>
+          <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#activity-pane" type="button">Activity</button></li>
+        </ul>
+
+        <div class="tab-content pt-2">
+          <div class="tab-pane fade show active" id="requests-pane">
+            <div class="stack" data-request-list></div>
+          </div>
+          <div class="tab-pane fade" id="providers-pane">
+            <div class="stack" data-provider-list></div>
+          </div>
+          <div class="tab-pane fade" id="activity-pane">
+            <div class="stack" data-activity-feed></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <aside class="live-panel" data-live-panel hidden>
+    <div class="d-flex align-items-center justify-content-between mb-2">
+      <strong>KAILA Socket</strong>
+      <button class="btn btn-sm btn-outline-secondary" type="button" data-close-live>Close</button>
+    </div>
+    <div class="input-group input-group-sm mb-2">
+      <input class="form-control" data-socket-url>
+      <button class="btn btn-primary" type="button" data-reconnect>Connect</button>
+    </div>
+    <div class="stack" data-live-feed></div>
+  </aside>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <script src="app.js"></script>
+</body>
+</html>
