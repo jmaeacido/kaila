@@ -1582,7 +1582,7 @@ io.on("connection", (socket) => {
       const requestId = String(payload.requestId || "");
       const callId = String(payload.callId || "");
       const type = String(payload.type || "");
-      if (!requestId || !callId || !["offer", "answer", "candidate", "hangup", "reject", "busy"].includes(type)) {
+      if (!requestId || !callId || !["offer", "answer", "candidate", "renegotiate", "hangup", "reject", "busy"].includes(type)) {
         throw new Error("Invalid call signal");
       }
       const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
@@ -1605,6 +1605,7 @@ io.on("connection", (socket) => {
         senderName: user.name,
         description: payload.description || null,
         candidate: payload.candidate || null,
+        withVideo: Boolean(payload.withVideo),
       });
       acknowledge({ ok: true });
     } catch (error) {

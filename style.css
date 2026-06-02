@@ -1818,6 +1818,13 @@ select[multiple].form-select {
   font-weight: 700;
 }
 
+.chat-call-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
 .audio-call-panel {
   position: fixed;
   z-index: 2000;
@@ -1880,6 +1887,8 @@ body.call-overlay-open {
 }
 
 .audio-call-overlay-head {
+  position: relative;
+  z-index: 2;
   display: flex;
   width: 100%;
   align-items: center;
@@ -1911,12 +1920,81 @@ body.call-overlay-open {
 }
 
 .audio-call-stage {
+  position: relative;
+  z-index: 2;
   display: grid;
   width: 100%;
   align-content: center;
   justify-items: center;
   justify-self: stretch;
   gap: 0.65rem;
+}
+
+.audio-call-remote-video {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #031a20;
+  object-fit: cover;
+}
+
+.audio-call-video-waiting {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 0.75rem;
+  background: rgba(0, 12, 15, 0.52);
+  color: rgba(255, 255, 255, 0.84);
+  pointer-events: none;
+}
+
+.audio-call-video-waiting[hidden] {
+  display: none;
+}
+
+.audio-call-video-waiting i {
+  font-size: clamp(2.6rem, 12vw, 4.5rem);
+}
+
+.audio-call-video-waiting span {
+  font-size: 0.82rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.audio-call-local-video {
+  position: absolute;
+  z-index: 3;
+  top: max(4.4rem, calc(env(safe-area-inset-top) + 3.4rem));
+  right: 1rem;
+  width: clamp(5.5rem, 20vw, 8rem);
+  aspect-ratio: 3 / 4;
+  border: 2px solid rgba(255, 255, 255, 0.68);
+  border-radius: 12px;
+  background: #082f39;
+  box-shadow: 0 0.6rem 1.5rem rgba(0, 0, 0, 0.28);
+  object-fit: cover;
+}
+
+.audio-call-panel.video-active::after {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 18, 22, 0.48) 0%, rgba(0, 18, 22, 0.04) 36%, rgba(0, 18, 22, 0.72) 100%);
+  content: "";
+  pointer-events: none;
+}
+
+.audio-call-panel.video-active .audio-call-stage {
+  align-content: end;
+  padding-bottom: 0.35rem;
+  text-shadow: 0 0.15rem 0.65rem rgba(0, 0, 0, 0.72);
 }
 
 .audio-call-avatar {
@@ -1966,6 +2044,8 @@ body.call-overlay-open {
 }
 
 .audio-call-overlay-actions {
+  position: relative;
+  z-index: 2;
   display: flex;
   width: 100%;
   align-items: center;
@@ -2061,6 +2141,57 @@ body.call-overlay-open {
   border-color: var(--line);
   background: var(--surface-2);
   color: var(--ink);
+}
+
+@media (max-width: 560px) {
+  .audio-call-panel.audio-call-overlay {
+    gap: 0.65rem;
+    padding: max(0.75rem, env(safe-area-inset-top)) 0.55rem max(0.8rem, env(safe-area-inset-bottom));
+  }
+
+  .audio-call-local-video {
+    top: max(4.1rem, calc(env(safe-area-inset-top) + 3.1rem));
+    right: 0.65rem;
+    width: 5.7rem;
+  }
+
+  .audio-call-panel.video-active .audio-call-stage {
+    padding-bottom: 0;
+  }
+
+  .audio-call-stage {
+    gap: 0.45rem;
+  }
+
+  .audio-call-stage h2 {
+    font-size: clamp(1.55rem, 8vw, 2.05rem);
+  }
+
+  .audio-call-duration {
+    font-size: 1.25rem;
+  }
+
+  .audio-call-overlay-actions {
+    display: flex;
+    gap: 0.1rem;
+  }
+
+  .audio-call-control {
+    flex: 0 1 5.4rem;
+    min-width: 0;
+    gap: 0.35rem;
+    font-size: 0.68rem;
+  }
+
+  .audio-call-control span {
+    width: 3.55rem;
+    height: 3.55rem;
+    font-size: 1.05rem;
+  }
+
+  .audio-call-control b {
+    white-space: nowrap;
+  }
 }
 
 .chat-transcript {

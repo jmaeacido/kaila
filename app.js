@@ -1353,9 +1353,14 @@ function conversationHtml(messages, writable, activeUserIds = [], request = null
       ${writable ? `
         <div class="chat-call-row">
           <span>Need to clarify the job?</span>
-          <button class="btn btn-sm btn-outline-primary" type="button" data-audio-call="${request?.id || ""}">
-            <i class="fa-solid fa-phone"></i> Audio Call
-          </button>
+          <div class="chat-call-actions">
+            <button class="btn btn-sm btn-outline-primary" type="button" data-audio-call="${request?.id || ""}">
+              <i class="fa-solid fa-phone"></i> Audio Call
+            </button>
+            <button class="btn btn-sm btn-outline-primary" type="button" data-video-call="${request?.id || ""}">
+              <i class="fa-solid fa-video"></i> Video Call
+            </button>
+          </div>
         </div>
       ` : ""}
       <div class="chat-presence" data-chat-presence>${conversationPresenceText(activeUserIds)}</div>
@@ -1384,6 +1389,7 @@ function conversationIdentityHtml(request) {
 function bindConversationInput(requestId, writable) {
   scrollConversationToBottom();
   $("[data-audio-call]")?.addEventListener("click", () => startAudioCall(requestId));
+  $("[data-video-call]")?.addEventListener("click", () => startVideoCall(requestId));
   if (!writable) return;
   const input = $("[data-chat-input]");
   $("[data-chat-send]")?.addEventListener("click", () => sendConversationMessage(requestId));
@@ -1495,6 +1501,7 @@ const RTC_CONFIG = {
 };
 let callTone = null;
 let callClockTimer = null;
+let callQualityTimer = null;
 let attentionTone = null;
 
 function callSupported() {
@@ -1509,6 +1516,14 @@ function audioCallUnavailableMessage() {
 }
 
 async function startAudioCall(requestId) {
+  return startCall(requestId, false);
+}
+
+async function startVideoCall(requestId) {
+  return startCall(requestId, true);
+}
+
+async function startCall(requestId, withVideo = false) {
   if (!callSupported()) return notify("Audio call unavailable", audioCallUnavailableMessage(), "warning");
   if (!state.connected || !state.socket) return notify("Audio call unavailable", "Reconnect the live socket before calling.", "warning");
   if (state.call) return notify("Call already active", "End the current call before starting another.", "warning");
@@ -1518,17 +1533,23 @@ async function startAudioCall(requestId) {
     if (!await callRecipientIsOnline(requestId)) {
       return notify("Audio call", "The other party is offline.", "info");
     }
-    const call = createCallState(requestId, createBrowserId(), "outgoing", conversationOtherPartyName(request), conversationOtherPartyPhoto(request));
+    const call = createCallState(requestId, createBrowserId(), "outgoing", conversationOtherPartyName(request), conversationOtherPartyPhoto(request), withVideo);
     state.call = call;
     renderCallPanel();
     startCallTone("outgoing");
     scheduleCallTimeout(call);
-    call.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    call.localStream = await acquireCallMedia(withVideo);
+    call.localVideoEnabled = Boolean(call.localStream.getVideoTracks().length);
+    call.requestedVideo = call.localVideoEnabled;
+    renderCallPanel();
     call.peerConnection = createPeerConnection(call);
-    call.localStream.getTracks().forEach((track) => call.peerConnection.addTrack(track, call.localStream));
+    call.localStream.getTracks().forEach((track) => {
+      const sender = call.peerConnection.addTrack(track, call.localStream);
+      if (track.kind === "video") call.videoSender = sender;
+    });
     const offer = await call.peerConnection.createOffer();
     await call.peerConnection.setLocalDescription(offer);
-    emitCallSignal("offer", { description: call.peerConnection.localDescription });
+    emitCallSignal("offer", { description: call.peerConnection.localDescription, withVideo: call.localVideoEnabled });
   } catch (error) {
     endAudioCall(false);
     notify("Call failed", microphoneErrorText(error), "error");
@@ -1541,7 +1562,7 @@ function callRecipientIsOnline(requestId) {
   });
 }
 
-function createCallState(requestId, callId, direction, otherName, otherPhotoUrl = "") {
+function createCallState(requestId, callId, direction, otherName, otherPhotoUrl = "", withVideo = false) {
   return {
     requestId,
     callId,
@@ -1550,12 +1571,44 @@ function createCallState(requestId, callId, direction, otherName, otherPhotoUrl 
     otherPhotoUrl,
     status: direction === "incoming" ? "incoming" : "ringing",
     muted: false,
+    localVideoEnabled: withVideo,
+    cameraFacingMode: "user",
+    remoteVideoEnabled: false,
+    remoteVideoExpected: direction === "incoming" && withVideo,
+    remoteVideoPaused: false,
+    requestedVideo: withVideo,
+    remoteStream: new MediaStream(),
+    qualityBadSamples: 0,
+    lastVideoStats: null,
     minimized: false,
     connectedAt: null,
     localStream: null,
     peerConnection: null,
+    videoSender: null,
     pendingCandidates: [],
   };
+}
+
+function callMediaConstraints(withVideo = false, facingMode = "user") {
+  return {
+    audio: true,
+    video: withVideo ? {
+      facingMode: { ideal: facingMode },
+      width: { ideal: 640, max: 960 },
+      height: { ideal: 480, max: 720 },
+      frameRate: { ideal: 18, max: 24 },
+    } : false,
+  };
+}
+
+async function acquireCallMedia(withVideo = false, facingMode = "user") {
+  if (!withVideo) return navigator.mediaDevices.getUserMedia(callMediaConstraints(false));
+  try {
+    return await navigator.mediaDevices.getUserMedia(callMediaConstraints(true, facingMode));
+  } catch (error) {
+    notify("Camera unavailable", `${cameraErrorText(error)} Continuing with audio only.`, "warning");
+    return navigator.mediaDevices.getUserMedia(callMediaConstraints(false));
+  }
 }
 
 function createBrowserId() {
@@ -1568,9 +1621,32 @@ function createPeerConnection(call) {
     if (candidate) emitCallSignal("candidate", { candidate });
   });
   peer.addEventListener("track", ({ streams, track }) => {
-    const audio = ensureRemoteAudio();
-    audio.srcObject = streams[0] || new MediaStream([track]);
-    audio.play().catch(() => {});
+    if (!call.remoteStream.getTracks().some((item) => item.id === track.id)) call.remoteStream.addTrack(track);
+    track.addEventListener("ended", () => {
+      call.remoteStream.removeTrack(track);
+      if (track.kind !== "video") return;
+      call.remoteVideoEnabled = false;
+      call.remoteVideoPaused = call.remoteVideoExpected;
+      renderCallPanel();
+    });
+    track.addEventListener("mute", () => {
+      if (track.kind !== "video") return;
+      call.remoteVideoPaused = true;
+      updateCallVideoWaiting(call);
+    });
+    track.addEventListener("unmute", () => {
+      if (track.kind !== "video") return;
+      call.remoteVideoEnabled = true;
+      call.remoteVideoPaused = false;
+      updateCallVideoWaiting(call);
+    });
+    if (track.kind === "video") {
+      call.remoteVideoExpected = true;
+      call.remoteVideoEnabled = true;
+      call.remoteVideoPaused = track.muted;
+    }
+    syncCallMedia(call);
+    renderCallPanel();
   });
   peer.addEventListener("connectionstatechange", () => {
     if (!state.call || state.call.callId !== call.callId) return;
@@ -1581,6 +1657,7 @@ function createPeerConnection(call) {
       call.minimized = false;
       call.connectedAt ||= Date.now();
       startCallClock();
+      startCallQualityMonitor(call);
       renderCallPanel();
     }
     if (["failed", "closed"].includes(peer.connectionState)) endAudioCall(false);
@@ -1602,6 +1679,42 @@ function ensureRemoteAudio() {
   return audio;
 }
 
+function syncCallMedia(call = state.call) {
+  if (!call) return;
+  const audio = ensureRemoteAudio();
+  audio.srcObject = call.remoteStream;
+  audio.play().catch(() => {});
+  const remoteVideo = $("[data-call-remote-video]");
+  if (remoteVideo) {
+    remoteVideo.srcObject = call.remoteStream;
+    remoteVideo.addEventListener("playing", () => {
+      call.remoteVideoPaused = false;
+      updateCallVideoWaiting(call);
+    });
+    remoteVideo.addEventListener("waiting", () => {
+      call.remoteVideoPaused = true;
+      updateCallVideoWaiting(call);
+    });
+    remoteVideo.addEventListener("stalled", () => {
+      call.remoteVideoPaused = true;
+      updateCallVideoWaiting(call);
+    });
+    remoteVideo.play().catch(() => {});
+  }
+  const localVideo = $("[data-call-local-video]");
+  if (localVideo) {
+    localVideo.srcObject = call.localStream;
+    localVideo.play().catch(() => {});
+  }
+  updateCallVideoWaiting(call);
+}
+
+function updateCallVideoWaiting(call = state.call) {
+  const waiting = $("[data-call-video-waiting]");
+  if (!waiting || !call || state.call?.callId !== call.callId) return;
+  waiting.hidden = !call.remoteVideoPaused;
+}
+
 function renderCallPanel() {
   let panel = $("[data-call-panel]");
   if (!state.call) {
@@ -1612,6 +1725,7 @@ function renderCallPanel() {
       audio.srcObject = null;
       audio.remove();
     }
+    stopCallQualityMonitor();
     return;
   }
   if (!panel) {
@@ -1624,8 +1738,10 @@ function renderCallPanel() {
   const incoming = call.status === "incoming";
   const onCall = ["connected", "reconnecting"].includes(call.status);
   const minimized = call.minimized;
-  const status = incoming ? "Incoming audio call" : call.status === "ringing" ? "Calling..." : call.status === "connected" ? "Audio call connected" : call.status === "connecting" ? "Connecting..." : "Reconnecting...";
-  panel.className = `audio-call-panel${!minimized ? " audio-call-overlay" : ""}${minimized ? " minimized" : ""}`;
+  const showRemoteVideo = (onCall && call.remoteVideoExpected) || call.remoteVideoEnabled;
+  const callLabel = call.requestedVideo || call.localVideoEnabled || call.remoteVideoEnabled ? "video call" : "audio call";
+  const status = incoming ? `Incoming ${callLabel}` : call.status === "ringing" ? "Calling..." : call.status === "connected" ? `${capitalize(callLabel)} connected` : call.status === "connecting" ? "Connecting..." : "Reconnecting...";
+  panel.className = `audio-call-panel${!minimized ? " audio-call-overlay" : ""}${minimized ? " minimized" : ""}${showRemoteVideo && !minimized ? " video-active" : ""}`;
   document.body.classList.toggle("call-overlay-open", !minimized);
   if (minimized) {
     panel.innerHTML = `
@@ -1647,19 +1763,27 @@ function renderCallPanel() {
     return;
   }
   panel.innerHTML = `
+      ${showRemoteVideo ? `
+        <video class="audio-call-remote-video" data-call-remote-video autoplay muted playsinline></video>
+        <div class="audio-call-video-waiting" data-call-video-waiting${call.remoteVideoPaused ? "" : " hidden"}>
+          <i class="fa-solid fa-video-slash"></i>
+          <span>Waiting for video...</span>
+        </div>
+      ` : ""}
       <div class="audio-call-overlay-head">
-        <span class="audio-call-secure"><i class="fa-solid fa-lock"></i> KAILA AUDIO</span>
+        <span class="audio-call-secure"><i class="fa-solid fa-lock"></i> KAILA CALL</span>
         <button class="audio-call-minimize" type="button" data-call-minimize aria-label="Minimize audio call">
           <i class="fa-solid fa-window-minimize"></i>
         </button>
       </div>
       <div class="audio-call-stage">
-        ${renderCallPhoto(call, "audio-call-avatar")}
+        ${showRemoteVideo ? "" : renderCallPhoto(call, "audio-call-avatar")}
         <div class="audio-call-state"><span class="audio-call-live-dot"></span> ${incoming ? "INCOMING CALL" : call.status === "ringing" ? "CALLING" : call.status === "connecting" ? "CONNECTING" : "ON CALL"}</div>
         <h2>${escapeHtml(call.otherName)}</h2>
         <p>${status}</p>
         ${onCall ? `<strong class="audio-call-duration" data-call-duration>${formatCallDuration(call)}</strong>` : ""}
       </div>
+      ${call.localVideoEnabled ? `<video class="audio-call-local-video" data-call-local-video autoplay muted playsinline></video>` : ""}
       <div class="audio-call-overlay-actions">
         ${incoming ? `
           <button class="audio-call-control answer" type="button" data-call-accept>
@@ -1676,6 +1800,16 @@ function renderCallPanel() {
               <span><i class="fa-solid fa-microphone${call.muted ? "-slash" : ""}"></i></span>
               <b>${call.muted ? "Unmute" : "Mute"}</b>
             </button>
+            <button class="audio-call-control" type="button" data-call-video>
+              <span><i class="fa-solid fa-video${call.localVideoEnabled ? "-slash" : ""}"></i></span>
+              <b>${call.localVideoEnabled ? "Audio only" : "Start video"}</b>
+            </button>
+            ${call.localVideoEnabled ? `
+              <button class="audio-call-control" type="button" data-call-switch-camera>
+                <span><i class="fa-solid fa-camera-rotate"></i></span>
+                <b>Flip camera</b>
+              </button>
+            ` : ""}
           ` : ""}
           <button class="audio-call-control end" type="button" data-call-end>
             <span><i class="fa-solid fa-phone-slash"></i></span>
@@ -1685,12 +1819,15 @@ function renderCallPanel() {
       </div>
     `;
   bindCallPanelActions(panel);
+  syncCallMedia(call);
 }
 
 function bindCallPanelActions(panel) {
   $("[data-call-accept]", panel)?.addEventListener("click", acceptAudioCall);
   $("[data-call-decline]", panel)?.addEventListener("click", declineAudioCall);
   $("[data-call-mute]", panel)?.addEventListener("click", toggleAudioMute);
+  $("[data-call-video]", panel)?.addEventListener("click", toggleCallVideo);
+  $("[data-call-switch-camera]", panel)?.addEventListener("click", switchCallCamera);
   $("[data-call-end]", panel)?.addEventListener("click", () => endAudioCall(true));
   $("[data-call-minimize]", panel)?.addEventListener("click", () => setCallMinimized(true));
   $("[data-call-restore]", panel)?.addEventListener("click", () => setCallMinimized(false));
@@ -1733,9 +1870,14 @@ async function acceptAudioCall() {
     stopCallTone();
     call.status = "connecting";
     renderCallPanel();
-    call.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    call.localStream = await acquireCallMedia(call.requestedVideo);
+    call.localVideoEnabled = Boolean(call.localStream.getVideoTracks().length);
+    renderCallPanel();
     call.peerConnection = createPeerConnection(call);
-    call.localStream.getTracks().forEach((track) => call.peerConnection.addTrack(track, call.localStream));
+    call.localStream.getTracks().forEach((track) => {
+      const sender = call.peerConnection.addTrack(track, call.localStream);
+      if (track.kind === "video") call.videoSender = sender;
+    });
     await call.peerConnection.setRemoteDescription(call.remoteDescription);
     await flushPendingCandidates(call);
     const answer = await call.peerConnection.createAnswer();
@@ -1763,6 +1905,85 @@ function toggleAudioMute() {
   renderCallPanel();
 }
 
+async function toggleCallVideo() {
+  if (!state.call?.peerConnection || !state.call.localStream) return;
+  if (state.call.localVideoEnabled) {
+    await disableCallVideo();
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(callMediaConstraints(true, state.call.cameraFacingMode));
+    const track = stream.getVideoTracks()[0];
+    stream.getAudioTracks().forEach((item) => item.stop());
+    if (!track) throw new Error("Camera is unavailable.");
+    state.call.localStream.addTrack(track);
+    if (state.call.videoSender) await state.call.videoSender.replaceTrack(track);
+    else state.call.videoSender = state.call.peerConnection.addTrack(track, state.call.localStream);
+    state.call.localVideoEnabled = true;
+    state.call.requestedVideo = true;
+    state.call.qualityBadSamples = 0;
+    await renegotiateCall();
+    renderCallPanel();
+  } catch (error) {
+    notify("Video unavailable", cameraErrorText(error), "warning");
+  }
+}
+
+async function switchCallCamera() {
+  const call = state.call;
+  if (!call?.localVideoEnabled || !call.videoSender || !call.localStream) return;
+  const facingMode = call.cameraFacingMode === "environment" ? "user" : "environment";
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { ...callMediaConstraints(true, facingMode).video, facingMode: { exact: facingMode } },
+      audio: false,
+    });
+    const track = stream.getVideoTracks()[0];
+    if (!track) throw new Error("Alternate camera is unavailable.");
+    const oldTrack = call.localStream.getVideoTracks()[0];
+    await call.videoSender.replaceTrack(track);
+    if (oldTrack) {
+      call.localStream.removeTrack(oldTrack);
+      oldTrack.stop();
+    }
+    call.localStream.addTrack(track);
+    call.cameraFacingMode = facingMode;
+    call.qualityBadSamples = 0;
+    renderCallPanel();
+  } catch (error) {
+    notify("Camera switch unavailable", cameraErrorText(error), "warning");
+  }
+}
+
+async function disableCallVideo({ automatic = false } = {}) {
+  const call = state.call;
+  if (!call?.peerConnection || !call.localStream) return;
+  const videoTracks = call.localStream.getVideoTracks();
+  for (const track of videoTracks) {
+    const sender = call.peerConnection.getSenders().find((item) => item.track === track);
+    if (sender) {
+      call.videoSender = sender;
+      await sender.replaceTrack(null);
+    }
+    call.localStream.removeTrack(track);
+    track.stop();
+  }
+  call.localVideoEnabled = false;
+  call.requestedVideo = false;
+  call.qualityBadSamples = 0;
+  await renegotiateCall();
+  renderCallPanel();
+  if (automatic) notify("Switched to audio only", "Video was paused because the connection is slow.", "warning");
+}
+
+async function renegotiateCall() {
+  const call = state.call;
+  if (!call?.peerConnection) return;
+  const offer = await call.peerConnection.createOffer();
+  await call.peerConnection.setLocalDescription(offer);
+  emitCallSignal("renegotiate", { description: call.peerConnection.localDescription, withVideo: call.localVideoEnabled });
+}
+
 function endAudioCall(notifyOther = true) {
   if (!state.call) return;
   if (notifyOther) emitCallSignal("hangup");
@@ -1773,6 +1994,7 @@ function endAudioCall(notifyOther = true) {
   state.call = null;
   clearInterval(callClockTimer);
   callClockTimer = null;
+  stopCallQualityMonitor();
   renderCallPanel();
 }
 
@@ -1803,12 +2025,12 @@ async function handleCallSignal(signal = {}) {
       return;
     }
     const request = state.requests.find((item) => item.id === signal.requestId);
-    state.call = createCallState(signal.requestId, signal.callId, "incoming", signal.senderName, userProfile(signal.senderId).photoUrl || conversationOtherPartyPhoto(request));
+    state.call = createCallState(signal.requestId, signal.callId, "incoming", signal.senderName, userProfile(signal.senderId).photoUrl || conversationOtherPartyPhoto(request), Boolean(signal.withVideo));
     state.call.remoteDescription = signal.description;
     scheduleCallTimeout(state.call);
     renderCallPanel();
     startCallTone("incoming");
-    notifyIncomingCall(signal.senderName);
+    notifyIncomingCall(signal.senderName, state.call.requestedVideo);
     return;
   }
   if (!state.call || signal.callId !== state.call.callId) return;
@@ -1816,6 +2038,18 @@ async function handleCallSignal(signal = {}) {
     stopCallTone();
     await state.call.peerConnection?.setRemoteDescription(signal.description);
     await flushPendingCandidates(state.call);
+  } else if (signal.type === "renegotiate") {
+    state.call.requestedVideo = Boolean(signal.withVideo);
+    state.call.remoteVideoExpected = Boolean(signal.withVideo);
+    state.call.remoteVideoEnabled = Boolean(signal.withVideo);
+    state.call.remoteVideoPaused = Boolean(signal.withVideo);
+    await state.call.peerConnection?.setRemoteDescription(signal.description);
+    const answer = await state.call.peerConnection?.createAnswer();
+    if (answer) {
+      await state.call.peerConnection.setLocalDescription(answer);
+      emitCallSignal("answer", { description: state.call.peerConnection.localDescription });
+    }
+    renderCallPanel();
   } else if (signal.type === "candidate") {
     if (state.call.peerConnection?.remoteDescription) await state.call.peerConnection.addIceCandidate(signal.candidate);
     else state.call.pendingCandidates.push(signal.candidate);
@@ -1826,11 +2060,12 @@ async function handleCallSignal(signal = {}) {
   }
 }
 
-function notifyIncomingCall(senderName) {
-  notify("Incoming audio call", `${senderName || "Your job contact"} is calling.`, "info");
+function notifyIncomingCall(senderName, withVideo = false) {
+  const callType = withVideo ? "video" : "audio";
+  notify(`Incoming ${callType} call`, `${senderName || "Your job contact"} is calling.`, "info");
   navigator.vibrate?.([450, 180, 450, 180, 700]);
   if (document.hidden && window.Notification?.permission === "granted") {
-    new Notification("Incoming KAILA audio call", { body: `${senderName || "Your job contact"} is calling.` });
+    new Notification(`Incoming KAILA ${callType} call`, { body: `${senderName || "Your job contact"} is calling.` });
   }
 }
 
@@ -1893,6 +2128,43 @@ function microphoneErrorText(error) {
   return error?.name === "NotAllowedError"
     ? "Microphone permission is required for an audio call."
     : error?.message || "Could not start the audio call.";
+}
+
+function cameraErrorText(error) {
+  return error?.name === "NotAllowedError"
+    ? "Camera permission is required to enable video."
+    : error?.message || "Could not enable the camera.";
+}
+
+function startCallQualityMonitor(call) {
+  stopCallQualityMonitor();
+  callQualityTimer = setInterval(() => checkCallVideoQuality(call), 5000);
+}
+
+function stopCallQualityMonitor() {
+  clearInterval(callQualityTimer);
+  callQualityTimer = null;
+}
+
+async function checkCallVideoQuality(call) {
+  if (!state.call || state.call.callId !== call.callId || !call.localVideoEnabled || !call.peerConnection) return;
+  try {
+    const stats = await call.peerConnection.getStats();
+    let outbound = null;
+    let pair = null;
+    let remoteInbound = null;
+    stats.forEach((report) => {
+      if (report.type === "outbound-rtp" && report.kind === "video" && !report.isRemote) outbound = report;
+      if (report.type === "candidate-pair" && report.state === "succeeded" && (report.nominated || !pair)) pair = report;
+      if (report.type === "remote-inbound-rtp" && report.kind === "video") remoteInbound = report;
+    });
+    if (!outbound) return;
+    const slow = (Number.isFinite(pair?.currentRoundTripTime) && pair.currentRoundTripTime > 1.5)
+      || (Number.isFinite(pair?.availableOutgoingBitrate) && pair.availableOutgoingBitrate < 90000)
+      || (Number.isFinite(remoteInbound?.fractionLost) && remoteInbound.fractionLost > 0.25);
+    call.qualityBadSamples = slow ? call.qualityBadSamples + 1 : 0;
+    if (call.qualityBadSamples >= 4) await disableCallVideo({ automatic: true });
+  } catch {}
 }
 
 function conversationOtherPartyName(request) {

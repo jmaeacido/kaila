@@ -31,7 +31,7 @@ Real-time MVP events:
 - Optional request and completion photo/video attachments: JPG, PNG, WebP, MP4, or WebM; up to 3 files per stage and 10 MB per file
 - Client confirmed completion
 - Confirmed-job messaging with live updates, typing indicators, room presence, reactions, and archived read-only transcripts
-- Peer-to-peer audio calls inside active confirmed-job conversations, with ringing tones and immediate offline-recipient handling
+- Peer-to-peer audio and optional video calls inside active confirmed-job conversations, with ringing tones, front/rear mobile camera switching, automatic audio-only fallback on sustained slow connections, and immediate offline-recipient handling
 - Payment released independent of ratings
 - Client requested revision/correction
 - Client rated provider
@@ -71,9 +71,9 @@ Default socket URL: `http://<same-host-as-the-web-app>:6002`
 
 For example, if the app is opened from another device at `http://crg-co1-23-0028/kaila/`, the browser connects to `http://crg-co1-23-0028:6002`.
 
-### Android Audio-Call Testing
+### Android Audio/Video-Call Testing
 
-Android Chrome does not expose microphone capture to a page opened from a LAN `http://` URL. An address such as `http://192.168.1.10/kaila/` can load the app, but audio calls cannot work from it.
+Android Chrome does not expose microphone or camera capture to a page opened from a LAN `http://` URL. An address such as `http://192.168.1.10/kaila/` can load the app, but audio and video calls cannot work from it.
 
 For phone testing, expose both the static PWA and the Node socket/API service through HTTPS. The Laragon certificate on this workstation covers `localhost` and `crg-co2-24-9-05`, but an Android device must also resolve that hostname and trust the certificate. An HTTPS tunnel is usually simpler for phone testing. For a LAN-only setup, install a trusted development certificate on the phone and include the LAN hostname or IP address in its subject alternative names.
 
@@ -84,7 +84,7 @@ For deployment:
 - Run MySQL and configure `socket/.env`.
 - Set `KAILA_SOCKET_BEARER_TOKEN` in `socket/.env`.
 - Update the socket URL in the app if the deployed socket URL changes.
-- Serve the PWA over HTTPS so browsers allow microphone access outside local development.
+- Serve the PWA over HTTPS so browsers allow microphone and camera access outside local development.
 - Configure a TURN server before production rollout if calls must work reliably across restrictive mobile networks.
 
 Default local MySQL settings:
