@@ -58,6 +58,7 @@ const DB_CONFIG = {
 
 let pool;
 const conversationPresence = new Map();
+const activeCalls = new Map();
 
 app.use(cors());
 app.use(express.json({ limit: "35mb" }));
@@ -132,6 +133,15 @@ function normalizeCategories(value) {
 
 function hasCategory(categories, category) {
   return normalizeCategories(categories).split(",").map((item) => item.trim()).includes(String(category || "").trim());
+}
+
+function normalizeAccountRole(role) {
+  const cleanRole = String(role || "").trim().toLowerCase();
+  return cleanRole === "ops" ? "ops" : cleanRole;
+}
+
+function boolField(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase()) || value === true;
 }
 
 function passwordHash(password, salt = crypto.randomBytes(16).toString("hex")) {
@@ -210,15 +220,26 @@ async function initializeDatabase() {
       username VARCHAR(80) NOT NULL UNIQUE,
       email VARCHAR(190) NULL UNIQUE,
       password_hash VARCHAR(255) NOT NULL,
-      role ENUM('client','provider','admin') NOT NULL,
+      role ENUM('client','provider','admin','ops') NOT NULL,
       area VARCHAR(190) NOT NULL,
       category VARCHAR(160) NULL,
+      contact_number VARCHAR(80) NULL,
+      messenger_link VARCHAR(255) NULL,
+      preferred_contact_channel VARCHAR(80) NULL,
+      best_contact_time VARCHAR(120) NULL,
+      data_privacy_consent TINYINT(1) NOT NULL DEFAULT 0,
       created_at DATETIME NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   await ensureColumn("users", "username", "VARCHAR(80) NULL");
   await ensureColumn("users", "photo_file", "VARCHAR(255) NULL");
   await ensureColumn("users", "photo_mime_type", "VARCHAR(120) NULL");
+  await ensureColumn("users", "contact_number", "VARCHAR(80) NULL");
+  await ensureColumn("users", "messenger_link", "VARCHAR(255) NULL");
+  await ensureColumn("users", "preferred_contact_channel", "VARCHAR(80) NULL");
+  await ensureColumn("users", "best_contact_time", "VARCHAR(120) NULL");
+  await ensureColumn("users", "data_privacy_consent", "TINYINT(1) NOT NULL DEFAULT 0");
+  await pool.query("ALTER TABLE users MODIFY COLUMN role ENUM('client','provider','admin','ops') NOT NULL");
   await pool.query("ALTER TABLE users MODIFY COLUMN category VARCHAR(255) NULL");
   await backfillUsernames();
   await ensureIndex("users", "users_username_unique", "username", true);
@@ -233,6 +254,25 @@ async function initializeDatabase() {
       area VARCHAR(190) NOT NULL,
       availability VARCHAR(80) NOT NULL DEFAULT 'Available',
       skills TEXT NULL,
+      display_name VARCHAR(160) NULL,
+      provider_type VARCHAR(80) NULL,
+      specific_services TEXT NULL,
+      years_experience VARCHAR(80) NULL,
+      coverage_area TEXT NULL,
+      emergency_availability VARCHAR(80) NULL,
+      available_days VARCHAR(160) NULL,
+      available_time VARCHAR(160) NULL,
+      travel_limits TEXT NULL,
+      minimum_fee VARCHAR(80) NULL,
+      price_range TEXT NULL,
+      work_samples TEXT NULL,
+      certificate_proof TEXT NULL,
+      valid_id_consent TINYINT(1) NOT NULL DEFAULT 0,
+      consent_requests TINYINT(1) NOT NULL DEFAULT 0,
+      consent_ratings TINYINT(1) NOT NULL DEFAULT 0,
+      rules_agreement TINYINT(1) NOT NULL DEFAULT 0,
+      trust_level VARCHAR(80) NOT NULL DEFAULT 'Listed',
+      status VARCHAR(80) NOT NULL DEFAULT 'Active',
       created_at DATETIME NOT NULL,
       updated_at DATETIME NOT NULL,
       UNIQUE KEY providers_user_unique (user_id),
@@ -240,6 +280,25 @@ async function initializeDatabase() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   await pool.query("ALTER TABLE providers MODIFY COLUMN category VARCHAR(255) NOT NULL");
+  await ensureColumn("providers", "display_name", "VARCHAR(160) NULL");
+  await ensureColumn("providers", "provider_type", "VARCHAR(80) NULL");
+  await ensureColumn("providers", "specific_services", "TEXT NULL");
+  await ensureColumn("providers", "years_experience", "VARCHAR(80) NULL");
+  await ensureColumn("providers", "coverage_area", "TEXT NULL");
+  await ensureColumn("providers", "emergency_availability", "VARCHAR(80) NULL");
+  await ensureColumn("providers", "available_days", "VARCHAR(160) NULL");
+  await ensureColumn("providers", "available_time", "VARCHAR(160) NULL");
+  await ensureColumn("providers", "travel_limits", "TEXT NULL");
+  await ensureColumn("providers", "minimum_fee", "VARCHAR(80) NULL");
+  await ensureColumn("providers", "price_range", "TEXT NULL");
+  await ensureColumn("providers", "work_samples", "TEXT NULL");
+  await ensureColumn("providers", "certificate_proof", "TEXT NULL");
+  await ensureColumn("providers", "valid_id_consent", "TINYINT(1) NOT NULL DEFAULT 0");
+  await ensureColumn("providers", "consent_requests", "TINYINT(1) NOT NULL DEFAULT 0");
+  await ensureColumn("providers", "consent_ratings", "TINYINT(1) NOT NULL DEFAULT 0");
+  await ensureColumn("providers", "rules_agreement", "TINYINT(1) NOT NULL DEFAULT 0");
+  await ensureColumn("providers", "trust_level", "VARCHAR(80) NOT NULL DEFAULT 'Listed'");
+  await ensureColumn("providers", "status", "VARCHAR(80) NOT NULL DEFAULT 'Active'");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS requests (
       id VARCHAR(64) PRIMARY KEY,
@@ -249,6 +308,11 @@ async function initializeDatabase() {
       urgency VARCHAR(80) NOT NULL,
       area VARCHAR(190) NOT NULL,
       budget VARCHAR(80) NOT NULL,
+      preferred_schedule VARCHAR(160) NULL,
+      contact_method VARCHAR(160) NULL,
+      exact_location_notes TEXT NULL,
+      permission_to_forward TINYINT(1) NOT NULL DEFAULT 0,
+      consent_to_rate TINYINT(1) NOT NULL DEFAULT 0,
       details TEXT NOT NULL,
       status VARCHAR(80) NOT NULL,
       created_at DATETIME NOT NULL,
@@ -289,6 +353,11 @@ async function initializeDatabase() {
   await ensureColumn("requests", "provider_rating_note", "TEXT NULL");
   await ensureColumn("requests", "provider_rated_at", "DATETIME NULL");
   await ensureColumn("requests", "accepted_provider_id", "VARCHAR(64) NULL");
+  await ensureColumn("requests", "preferred_schedule", "VARCHAR(160) NULL");
+  await ensureColumn("requests", "contact_method", "VARCHAR(160) NULL");
+  await ensureColumn("requests", "exact_location_notes", "TEXT NULL");
+  await ensureColumn("requests", "permission_to_forward", "TINYINT(1) NOT NULL DEFAULT 0");
+  await ensureColumn("requests", "consent_to_rate", "TINYINT(1) NOT NULL DEFAULT 0");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS offers (
       id VARCHAR(64) PRIMARY KEY,
@@ -424,7 +493,9 @@ function emptyReputation() {
 }
 
 function mapUser(row, reputation = emptyReputation()) {
-  return row ? {
+  if (!row) return null;
+  const photoVersion = row.photo_file ? encodeURIComponent(row.photo_file) : "";
+  return {
     id: row.id,
     name: row.name,
     username: row.username,
@@ -433,10 +504,15 @@ function mapUser(row, reputation = emptyReputation()) {
     role: row.role,
     area: row.area,
     category: row.category || "",
-    photoUrl: row.photo_file ? `/profile-media/${encodeURIComponent(row.id)}` : "",
+    contactNumber: row.contact_number || "",
+    messengerLink: row.messenger_link || "",
+    preferredContactChannel: row.preferred_contact_channel || "",
+    bestContactTime: row.best_contact_time || "",
+    dataPrivacyConsent: Boolean(row.data_privacy_consent),
+    photoUrl: row.photo_file ? `/profile-media/${encodeURIComponent(row.id)}?v=${photoVersion}` : "",
     reputation,
     createdAt: row.created_at,
-  } : null;
+  };
 }
 
 function mapProvider(row, reputation = emptyReputation(), photoUrl = "") {
@@ -448,6 +524,25 @@ function mapProvider(row, reputation = emptyReputation(), photoUrl = "") {
     area: row.area,
     availability: row.availability,
     skills: row.skills || "",
+    displayName: row.display_name || row.name,
+    providerType: row.provider_type || "",
+    specificServices: row.specific_services || "",
+    yearsExperience: row.years_experience || "",
+    coverageArea: row.coverage_area || "",
+    emergencyAvailability: row.emergency_availability || "",
+    availableDays: row.available_days || "",
+    availableTime: row.available_time || "",
+    travelLimits: row.travel_limits || "",
+    minimumFee: row.minimum_fee || "",
+    priceRange: row.price_range || "",
+    workSamples: row.work_samples || "",
+    certificateProof: row.certificate_proof || "",
+    validIdConsent: Boolean(row.valid_id_consent),
+    consentRequests: Boolean(row.consent_requests),
+    consentRatings: Boolean(row.consent_ratings),
+    rulesAgreement: Boolean(row.rules_agreement),
+    trustLevel: row.trust_level || "Listed",
+    status: row.status || "Active",
     photoUrl,
     reputation,
     createdAt: row.created_at,
@@ -538,10 +633,22 @@ function mapRequest(row, offers = [], passedProviderIds = [], attachments = [], 
     clientName: row.client_name,
     clientPhotoUrl: profiles.get(row.client_id)?.photoUrl || "",
     clientReputation: reputations.get(row.client_id) || emptyReputation(),
+    clientContact: {
+      name: profiles.get(row.client_id)?.name || row.client_name,
+      contactNumber: profiles.get(row.client_id)?.contactNumber || "",
+      messengerLink: profiles.get(row.client_id)?.messengerLink || "",
+      preferredContactChannel: profiles.get(row.client_id)?.preferredContactChannel || "",
+      bestContactTime: profiles.get(row.client_id)?.bestContactTime || "",
+    },
     category: row.category,
     urgency: row.urgency,
     area: row.area,
     budget: row.budget,
+    preferredSchedule: row.preferred_schedule || "",
+    contactMethod: row.contact_method || "",
+    exactLocationNotes: row.exact_location_notes || "",
+    permissionToForward: Boolean(row.permission_to_forward),
+    consentToRate: Boolean(row.consent_to_rate),
     details: row.details,
     status: row.status,
     offers,
@@ -566,6 +673,13 @@ function mapRequest(row, offers = [], passedProviderIds = [], attachments = [], 
     acceptedProviderId: row.accepted_provider_id || "",
     acceptedProviderPhotoUrl: row.accepted_provider_id ? (profiles.get(row.accepted_provider_id)?.photoUrl || "") : "",
     acceptedProviderReputation: row.accepted_provider_id ? (reputations.get(row.accepted_provider_id) || emptyReputation()) : emptyReputation(),
+    acceptedProviderContact: row.accepted_provider_id ? {
+      name: profiles.get(row.accepted_provider_id)?.name || "",
+      contactNumber: profiles.get(row.accepted_provider_id)?.contactNumber || "",
+      messengerLink: profiles.get(row.accepted_provider_id)?.messengerLink || "",
+      preferredContactChannel: profiles.get(row.accepted_provider_id)?.preferredContactChannel || "",
+      bestContactTime: profiles.get(row.accepted_provider_id)?.bestContactTime || "",
+    } : null,
     passedProviderIds,
     requestAttachments: attachments.filter((attachment) => attachment.stage === "request"),
     completionAttachments: attachments.filter((attachment) => attachment.stage === "completion"),
@@ -595,13 +709,45 @@ function mapMessage(row, reactions = []) {
 }
 
 function canReadConversation(request, user) {
-  return Boolean(request.accepted_provider_id) && (user.role === "admin" || request.client_id === user.id || request.accepted_provider_id === user.id);
+  return Boolean(request.accepted_provider_id) && (request.client_id === user.id || request.accepted_provider_id === user.id);
 }
 
 function canWriteConversation(request, user) {
   if (user.role === "admin" || !canReadConversation(request, user)) return false;
   if (request.status === "Disputed") return !request.payment_released_at;
   return ["Accepted", "In Progress", "Provider Marked Done", "Revision Requested"].includes(request.status);
+}
+
+function otherConversationUserId(request, userId) {
+  if (request.client_id === userId) return request.accepted_provider_id;
+  if (request.accepted_provider_id === userId) return request.client_id;
+  return "";
+}
+
+async function userSocketCount(userId) {
+  return (await io.in(`user:${userId}`).fetchSockets()).length;
+}
+
+function relayCallSignal(targetUserId, signal) {
+  io.to(`user:${targetUserId}`).emit("kaila.call.signal", signal);
+}
+
+async function endDisconnectedUserCalls(userId) {
+  if (!userId || await userSocketCount(userId)) return;
+  for (const [callId, call] of activeCalls) {
+    if (!call.userIds.includes(userId)) continue;
+    const targetUserId = call.userIds.find((id) => id !== userId);
+    if (targetUserId) relayCallSignal(targetUserId, {
+      requestId: call.requestId,
+      callId,
+      type: "offline",
+      senderId: userId,
+      senderName: "",
+      description: null,
+      candidate: null,
+    });
+    activeCalls.delete(callId);
+  }
 }
 
 function activeConversationUserIds(requestId) {
@@ -658,7 +804,9 @@ async function getState(viewer = null) {
 
   const offersByRequest = new Map();
   const acceptedProviderByRequest = new Map(requestRows.map((row) => [row.id, row.accepted_provider_id]));
+  const passedOfferKeys = new Set(passRows.map((row) => `${row.request_id}:${row.provider_id}`));
   for (const row of offerRows) {
+    if (passedOfferKeys.has(`${row.request_id}:${row.provider_id}`)) continue;
     if (viewer?.role === "provider" && row.provider_id !== viewer.id) continue;
     const acceptedProviderId = acceptedProviderByRequest.get(row.request_id);
     if (acceptedProviderId && row.provider_id !== acceptedProviderId) continue;
@@ -739,6 +887,120 @@ async function addActivity(title, detail) {
   return activity;
 }
 
+async function createAccount(input = {}, allowedRoles = ["client", "provider"]) {
+  const name = String(input.name || "").trim();
+  const cleanUsername = String(input.username || "").trim().toLowerCase();
+  const password = String(input.password || "");
+  const role = normalizeAccountRole(input.role);
+  const cleanCategory = normalizeCategories(input.category);
+  const area = role === "ops" ? (String(input.area || "").trim() || "Operations") : String(input.area || "").trim();
+  const contactNumber = String(input.contactNumber || "").trim();
+  const preferredContactChannel = String(input.preferredContactChannel || "").trim();
+  const dataPrivacyConsent = boolField(input.dataPrivacyConsent);
+  const providerDetails = {
+    displayName: String(input.displayName || name).trim(),
+    providerType: String(input.providerType || "").trim(),
+    specificServices: String(input.specificServices || "").trim(),
+    yearsExperience: String(input.yearsExperience || "").trim(),
+    coverageArea: String(input.coverageArea || "").trim(),
+    emergencyAvailability: String(input.emergencyAvailability || "").trim(),
+    availableDays: String(input.availableDays || "").trim(),
+    availableTime: String(input.availableTime || "").trim(),
+    travelLimits: String(input.travelLimits || "").trim(),
+    minimumFee: String(input.minimumFee || "").trim(),
+    priceRange: String(input.priceRange || "").trim(),
+    workSamples: String(input.workSamples || "").trim(),
+    certificateProof: String(input.certificateProof || "").trim(),
+    validIdConsent: boolField(input.validIdConsent),
+    consentRequests: boolField(input.consentRequests),
+    consentRatings: boolField(input.consentRatings),
+    rulesAgreement: boolField(input.rulesAgreement),
+  };
+
+  if (!name || !cleanUsername || !password || !role || !area || !contactNumber || !preferredContactChannel || !dataPrivacyConsent) {
+    const error = new Error("Missing required fields");
+    error.status = 400;
+    throw error;
+  }
+  if (!/^[a-z0-9._-]{3,40}$/.test(cleanUsername)) {
+    const error = new Error("Username must be 3 to 40 characters using letters, numbers, dots, underscores, or hyphens");
+    error.status = 400;
+    throw error;
+  }
+  if (password.length < 6) {
+    const error = new Error("Password must be at least 6 characters");
+    error.status = 400;
+    throw error;
+  }
+  if (!allowedRoles.includes(role)) {
+    const error = new Error("Invalid role");
+    error.status = 400;
+    throw error;
+  }
+  if (role === "provider" && !cleanCategory) {
+    const error = new Error("Provider service category is required");
+    error.status = 400;
+    throw error;
+  }
+  if (role === "provider" && (!providerDetails.specificServices || !providerDetails.coverageArea || !providerDetails.consentRequests || !providerDetails.consentRatings || !providerDetails.rulesAgreement)) {
+    const error = new Error("Provider services, coverage area, request consent, rating consent, and rules agreement are required");
+    error.status = 400;
+    throw error;
+  }
+
+  const [existing] = await pool.query("SELECT id FROM users WHERE username = ? LIMIT 1", [cleanUsername]);
+  if (existing.length) {
+    const error = new Error("Username already registered");
+    error.status = 409;
+    throw error;
+  }
+
+  const user = {
+    id: createId(),
+    name,
+    username: cleanUsername,
+    email: null,
+    password_hash: passwordHash(password),
+    role,
+    area,
+    category: cleanCategory,
+    contactNumber,
+    messengerLink: String(input.messengerLink || "").trim(),
+    preferredContactChannel,
+    bestContactTime: String(input.bestContactTime || "").trim(),
+    dataPrivacyConsent,
+    createdAt: nowMysql(),
+  };
+
+  await pool.query(
+    "INSERT INTO users (id, name, username, email, password_hash, role, area, category, contact_number, messenger_link, preferred_contact_channel, best_contact_time, data_privacy_consent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [user.id, user.name, user.username, user.email, user.password_hash, user.role, user.area, user.category, user.contactNumber, user.messengerLink, user.preferredContactChannel, user.bestContactTime, user.dataPrivacyConsent ? 1 : 0, user.createdAt]
+  );
+
+  if (role === "provider") {
+    await pool.query(
+      `INSERT INTO providers (
+        id, user_id, name, category, area, availability, skills, display_name, provider_type,
+        specific_services, years_experience, coverage_area, emergency_availability, available_days,
+        available_time, travel_limits, minimum_fee, price_range, work_samples, certificate_proof,
+        valid_id_consent, consent_requests, consent_ratings, rules_agreement, trust_level, status,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        createId(), user.id, providerDetails.displayName || user.name, cleanCategory, user.area, providerDetails.availableDays || "Available",
+        providerDetails.specificServices, providerDetails.displayName || user.name, providerDetails.providerType,
+        providerDetails.specificServices, providerDetails.yearsExperience, providerDetails.coverageArea, providerDetails.emergencyAvailability,
+        providerDetails.availableDays, providerDetails.availableTime, providerDetails.travelLimits, providerDetails.minimumFee,
+        providerDetails.priceRange, providerDetails.workSamples, providerDetails.certificateProof, providerDetails.validIdConsent ? 1 : 0,
+        providerDetails.consentRequests ? 1 : 0, providerDetails.consentRatings ? 1 : 0, providerDetails.rulesAgreement ? 1 : 0,
+        "Listed", "Active", user.createdAt, user.createdAt,
+      ]
+    );
+  }
+
+  return user;
+}
+
 function broadcast(event, data) {
   io.to(CHANNEL).emit(event, data);
 }
@@ -783,40 +1045,12 @@ app.get("/api/state", async (req, res) => {
 });
 
 app.post("/api/register", async (req, res) => {
-  const { name, username, password, role, area, category } = req.body || {};
-  const cleanUsername = String(username || "").trim().toLowerCase();
-  if (!name || !cleanUsername || !password || !role || !area) return res.status(400).json({ error: "Missing required fields" });
-  if (!/^[a-z0-9._-]{3,40}$/.test(cleanUsername)) return res.status(400).json({ error: "Username must be 3 to 40 characters using letters, numbers, dots, underscores, or hyphens" });
-  if (!["client", "provider"].includes(role)) return res.status(400).json({ error: "Invalid role" });
-
-  const [existing] = await pool.query("SELECT id FROM users WHERE username = ? LIMIT 1", [cleanUsername]);
-  if (existing.length) return res.status(409).json({ error: "Username already registered" });
-
-  const cleanCategory = normalizeCategories(category);
-  const user = {
-    id: createId(),
-    name: String(name).trim(),
-    username: cleanUsername,
-    email: null,
-    password_hash: passwordHash(password),
-    role,
-    area: String(area).trim(),
-    category: cleanCategory,
-    createdAt: nowMysql(),
-  };
-
-  await pool.query(
-    "INSERT INTO users (id, name, username, email, password_hash, role, area, category, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [user.id, user.name, user.username, user.email, user.password_hash, user.role, user.area, user.category, user.createdAt]
-  );
-
-  if (role === "provider" && cleanCategory) {
-    await pool.query(
-      "INSERT INTO providers (id, user_id, name, category, area, availability, skills, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [createId(), user.id, user.name, cleanCategory, user.area, "Available", "", user.createdAt, user.createdAt]
-    );
+  let user;
+  try {
+    user = await createAccount(req.body, ["client", "provider"]);
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message || "Registration failed" });
   }
-
   await addActivity("User registered", `${user.name} joined as ${user.role}`);
   const state = await getState();
   broadcast("kaila.state.updated", state);
@@ -832,58 +1066,120 @@ app.post("/api/login", async (req, res) => {
   res.json({ user: publicUser(user), state: await getStateFor(user) });
 });
 
-app.post("/api/profile", requireUser, async (req, res) => {
-  const { name, area, category, photo } = req.body || {};
-  const cleanName = String(name || "").trim();
-  const cleanArea = String(area || "").trim();
-  const cleanCategory = normalizeCategories(category);
-  if (!cleanName || !cleanArea) return res.status(400).json({ error: "Name and area are required" });
+app.post("/api/forgot-password", async (req, res) => {
+  const username = String(req.body?.username || "").trim().toLowerCase();
+  const name = String(req.body?.name || "").trim();
+  const password = String(req.body?.password || "");
+  if (!username || !name || !password) return res.status(400).json({ error: "Username, full name, and new password are required" });
+  if (password.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
 
-  let photoUpdate = "";
-  let photoParams = [];
-  if (photo) {
-    const decoded = decodeProfilePhoto(photo);
-    const fileName = `${req.user.id}${decoded.extension}`;
-    const [currentRows] = await pool.query("SELECT photo_file FROM users WHERE id = ? LIMIT 1", [req.user.id]);
-    await fs.promises.writeFile(path.join(PROFILE_UPLOAD_DIR, fileName), decoded.buffer);
-    const oldFile = currentRows[0]?.photo_file;
-    if (oldFile && oldFile !== fileName) await fs.promises.unlink(path.join(PROFILE_UPLOAD_DIR, oldFile)).catch(() => {});
-    photoUpdate = ", photo_file = ?, photo_mime_type = ?";
-    photoParams = [fileName, decoded.mimeType];
+  const [rows] = await pool.query("SELECT id, name FROM users WHERE username = ? LIMIT 1", [username]);
+  const user = rows[0];
+  if (!user || user.name.trim().toLowerCase() !== name.toLowerCase()) {
+    return res.status(403).json({ error: "Account details did not match" });
   }
 
-  await pool.query(
-    `UPDATE users SET name = ?, area = ?, category = ?${photoUpdate} WHERE id = ?`,
-    [cleanName, cleanArea, cleanCategory, ...photoParams, req.user.id]
-  );
-  await pool.query("UPDATE providers SET name = ?, area = ?, category = COALESCE(NULLIF(?, ''), category), updated_at = ? WHERE user_id = ?", [
-    cleanName,
-    cleanArea,
-    cleanCategory,
-    nowMysql(),
-    req.user.id,
-  ]);
+  await pool.query("UPDATE users SET password_hash = ? WHERE id = ?", [passwordHash(password), user.id]);
+  await addActivity("Password reset", `${user.name} reset account password`);
+  res.json({ ok: true });
+});
 
-  const updated = await getUser(req.user.id);
-  await addActivity("Profile updated", `${updated.name} updated profile settings`);
-  const state = await getStateFor(updated);
-  broadcast("kaila.state.updated", state);
-  res.json({ user: publicUser(updated), state });
+app.post("/api/profile", requireUser, async (req, res) => {
+  try {
+    const { name, area, category, photo, contactNumber, messengerLink, preferredContactChannel, bestContactTime, dataPrivacyConsent } = req.body || {};
+    const cleanName = String(name || "").trim();
+    const cleanArea = String(area || "").trim();
+    const cleanCategory = normalizeCategories(category);
+    if (!cleanName || !cleanArea) return res.status(400).json({ error: "Name and area are required" });
+
+    let photoUpdate = "";
+    let photoParams = [];
+    if (photo) {
+      const decoded = decodeProfilePhoto(photo);
+      const fileName = `${req.user.id}-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}${decoded.extension}`;
+      const [currentRows] = await pool.query("SELECT photo_file FROM users WHERE id = ? LIMIT 1", [req.user.id]);
+      await fs.promises.writeFile(path.join(PROFILE_UPLOAD_DIR, fileName), decoded.buffer);
+      const oldFile = currentRows[0]?.photo_file;
+      if (oldFile && oldFile !== fileName) await fs.promises.unlink(path.join(PROFILE_UPLOAD_DIR, oldFile)).catch(() => {});
+      photoUpdate = ", photo_file = ?, photo_mime_type = ?";
+      photoParams = [fileName, decoded.mimeType];
+    }
+
+    await pool.query(
+      `UPDATE users SET name = ?, area = ?, category = ?, contact_number = ?, messenger_link = ?, preferred_contact_channel = ?, best_contact_time = ?, data_privacy_consent = ?${photoUpdate} WHERE id = ?`,
+      [
+        cleanName,
+        cleanArea,
+        cleanCategory,
+        String(contactNumber || "").trim(),
+        String(messengerLink || "").trim(),
+        String(preferredContactChannel || "").trim(),
+        String(bestContactTime || "").trim(),
+        boolField(dataPrivacyConsent) ? 1 : 0,
+        ...photoParams,
+        req.user.id,
+      ]
+    );
+    await pool.query("UPDATE providers SET name = ?, area = ?, category = COALESCE(NULLIF(?, ''), category), updated_at = ? WHERE user_id = ?", [
+      cleanName,
+      cleanArea,
+      cleanCategory,
+      nowMysql(),
+      req.user.id,
+    ]);
+
+    const updated = await getUser(req.user.id);
+    await addActivity("Profile updated", `${updated.name} updated profile settings`);
+    const state = await getStateFor(updated);
+    broadcast("kaila.state.updated", state);
+    res.json({ user: publicUser(updated), state });
+  } catch (error) {
+    console.error("Profile update failed:", error);
+    res.status(400).json({ error: error.message || "Profile update failed" });
+  }
 });
 
 app.post("/api/providers", requireUser, async (req, res) => {
-  if (!["provider", "admin"].includes(req.user.role)) return res.status(403).json({ error: "Only providers or admins can save provider profiles" });
-  const { category, area, availability, skills } = req.body || {};
+  if (req.user.role !== "provider") return res.status(403).json({ error: "Only providers can save provider profiles" });
+  const {
+    category, area, availability, skills, displayName, providerType, specificServices, yearsExperience, coverageArea,
+    emergencyAvailability, availableDays, availableTime, travelLimits, minimumFee, priceRange, workSamples,
+    certificateProof, validIdConsent, consentRequests, consentRatings, rulesAgreement,
+  } = req.body || {};
   const cleanCategory = normalizeCategories(category);
   if (!cleanCategory || !area) return res.status(400).json({ error: "At least one category and area are required" });
+  if (!String(specificServices || skills || "").trim() || !String(coverageArea || "").trim() || !boolField(consentRequests) || !boolField(consentRatings) || !boolField(rulesAgreement)) {
+    return res.status(400).json({ error: "Specific services, coverage area, request consent, rating consent, and rules agreement are required" });
+  }
   const timestamp = nowMysql();
   const providerId = createId();
 
   await pool.query(
-    `INSERT INTO providers (id, user_id, name, category, area, availability, skills, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE category = VALUES(category), area = VALUES(area), availability = VALUES(availability), skills = VALUES(skills), updated_at = VALUES(updated_at)`,
-    [providerId, req.user.id, req.user.name, cleanCategory, area, availability || "Available", skills || "", timestamp, timestamp]
+    `INSERT INTO providers (
+      id, user_id, name, category, area, availability, skills, display_name, provider_type,
+      specific_services, years_experience, coverage_area, emergency_availability, available_days,
+      available_time, travel_limits, minimum_fee, price_range, work_samples, certificate_proof,
+      valid_id_consent, consent_requests, consent_ratings, rules_agreement, trust_level, status,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      name = VALUES(name), category = VALUES(category), area = VALUES(area), availability = VALUES(availability), skills = VALUES(skills),
+      display_name = VALUES(display_name), provider_type = VALUES(provider_type), specific_services = VALUES(specific_services),
+      years_experience = VALUES(years_experience), coverage_area = VALUES(coverage_area), emergency_availability = VALUES(emergency_availability),
+      available_days = VALUES(available_days), available_time = VALUES(available_time), travel_limits = VALUES(travel_limits),
+      minimum_fee = VALUES(minimum_fee), price_range = VALUES(price_range), work_samples = VALUES(work_samples),
+      certificate_proof = VALUES(certificate_proof), valid_id_consent = VALUES(valid_id_consent), consent_requests = VALUES(consent_requests),
+      consent_ratings = VALUES(consent_ratings), rules_agreement = VALUES(rules_agreement), updated_at = VALUES(updated_at)`,
+    [
+      providerId, req.user.id, String(displayName || req.user.name).trim(), cleanCategory, area, availability || availableDays || "Available",
+      String(skills || specificServices || "").trim(), String(displayName || req.user.name).trim(), String(providerType || "").trim(),
+      String(specificServices || skills || "").trim(), String(yearsExperience || "").trim(), String(coverageArea || "").trim(),
+      String(emergencyAvailability || "").trim(), String(availableDays || "").trim(), String(availableTime || "").trim(),
+      String(travelLimits || "").trim(), String(minimumFee || "").trim(), String(priceRange || "").trim(),
+      String(workSamples || "").trim(), String(certificateProof || "").trim(), boolField(validIdConsent) ? 1 : 0,
+      boolField(consentRequests) ? 1 : 0, boolField(consentRatings) ? 1 : 0, boolField(rulesAgreement) ? 1 : 0,
+      "Listed", "Active", timestamp, timestamp,
+    ]
   );
   const [rows] = await pool.query("SELECT * FROM providers WHERE user_id = ? LIMIT 1", [req.user.id]);
   const provider = mapProvider(rows[0]);
@@ -893,9 +1189,13 @@ app.post("/api/providers", requireUser, async (req, res) => {
 });
 
 app.post("/api/requests", requireUser, async (req, res) => {
-  if (!["client", "admin"].includes(req.user.role)) return res.status(403).json({ error: "Only clients or admins can post requests" });
-  const { category, urgency, area, budget, details, attachments = [] } = req.body || {};
+  if (req.user.role !== "client") return res.status(403).json({ error: "Only clients can post requests" });
+  const {
+    category, urgency, area, budget, preferredSchedule, contactMethod, exactLocationNotes,
+    permissionToForward, consentToRate, details, attachments = [],
+  } = req.body || {};
   if (!category || !area || !details) return res.status(400).json({ error: "Category, area, and details are required" });
+  if (!boolField(permissionToForward) || !boolField(consentToRate)) return res.status(400).json({ error: "Permission to forward and rating consent are required" });
   const timestamp = nowMysql();
   const request = {
     id: createId(),
@@ -905,6 +1205,11 @@ app.post("/api/requests", requireUser, async (req, res) => {
     urgency: urgency || "Today",
     area,
     budget: budget || "Open",
+    preferredSchedule: String(preferredSchedule || "").trim(),
+    contactMethod: String(contactMethod || req.user.preferredContactChannel || "").trim(),
+    exactLocationNotes: String(exactLocationNotes || "").trim(),
+    permissionToForward: boolField(permissionToForward),
+    consentToRate: boolField(consentToRate),
     details,
     status: "Posted",
     offers: [],
@@ -912,8 +1217,12 @@ app.post("/api/requests", requireUser, async (req, res) => {
     updatedAt: timestamp,
   };
   await pool.query(
-    "INSERT INTO requests (id, client_id, client_name, category, urgency, area, budget, details, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [request.id, request.clientId, request.clientName, request.category, request.urgency, request.area, request.budget, request.details, request.status, request.createdAt, request.updatedAt]
+    "INSERT INTO requests (id, client_id, client_name, category, urgency, area, budget, preferred_schedule, contact_method, exact_location_notes, permission_to_forward, consent_to_rate, details, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      request.id, request.clientId, request.clientName, request.category, request.urgency, request.area, request.budget,
+      request.preferredSchedule, request.contactMethod, request.exactLocationNotes, request.permissionToForward ? 1 : 0,
+      request.consentToRate ? 1 : 0, request.details, request.status, request.createdAt, request.updatedAt,
+    ]
   );
   try {
     await saveAttachments(request.id, "request", attachments);
@@ -927,16 +1236,14 @@ app.post("/api/requests", requireUser, async (req, res) => {
 });
 
 app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
-  if (!["provider", "admin"].includes(req.user.role)) return res.status(403).json({ error: "Only providers or admins can send offers" });
+  if (req.user.role !== "provider") return res.status(403).json({ error: "Only providers can send offers" });
   const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
   if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
   if (!["Posted", "Offers Received", "Countered"].includes(requestRows[0].status)) return res.status(400).json({ error: "This request is no longer accepting offers" });
-  if (req.user.role === "provider") {
-    const [providerRows] = await pool.query("SELECT category FROM providers WHERE user_id = ? LIMIT 1", [req.user.id]);
-    if (!providerRows.length || !hasCategory(providerRows[0].category, requestRows[0].category)) return res.status(403).json({ error: "This request does not match your provider categories" });
-    const [passRows] = await pool.query("SELECT request_id FROM request_passes WHERE request_id = ? AND provider_id = ? LIMIT 1", [req.params.id, req.user.id]);
-    if (passRows.length) return res.status(400).json({ error: "You already passed this request" });
-  }
+  const [providerRows] = await pool.query("SELECT category FROM providers WHERE user_id = ? LIMIT 1", [req.user.id]);
+  if (!providerRows.length || !hasCategory(providerRows[0].category, requestRows[0].category)) return res.status(403).json({ error: "This request does not match your provider categories" });
+  const [passRows] = await pool.query("SELECT request_id FROM request_passes WHERE request_id = ? AND provider_id = ? LIMIT 1", [req.params.id, req.user.id]);
+  if (passRows.length) return res.status(400).json({ error: "You already passed this request" });
   const { amount, schedule, notes, type } = req.body || {};
   if (!amount) return res.status(400).json({ error: "Amount is required" });
   const offer = {
@@ -966,10 +1273,17 @@ app.post("/api/requests/:id/pass", requireUser, async (req, res) => {
   const [requestRows] = await pool.query("SELECT status FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
   if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
   if (!["Posted", "Offers Received", "Countered"].includes(requestRows[0].status)) return res.status(400).json({ error: "This request can no longer be passed" });
+  const timestamp = nowMysql();
   await pool.query(
     "INSERT IGNORE INTO request_passes (request_id, provider_id, created_at) VALUES (?, ?, ?)",
-    [req.params.id, req.user.id, nowMysql()]
+    [req.params.id, req.user.id, timestamp]
   );
+  await pool.query("DELETE FROM offers WHERE request_id = ? AND provider_id = ?", [req.params.id, req.user.id]);
+  const [remainingOffers] = await pool.query("SELECT type FROM offers WHERE request_id = ?", [req.params.id]);
+  const nextStatus = remainingOffers.length
+    ? (remainingOffers.some((offer) => offer.type === "counter") ? "Countered" : "Offers Received")
+    : "Posted";
+  await pool.query("UPDATE requests SET status = ?, updated_at = ? WHERE id = ?", [nextStatus, timestamp, req.params.id]);
   broadcast("kaila.request.passed", { requestId: req.params.id, providerId: req.user.id });
   res.json({ state: await getStateFor(req.user) });
 });
@@ -978,11 +1292,13 @@ app.post("/api/requests/:id/confirm", requireUser, async (req, res) => {
   const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
   if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
   const request = requestRows[0];
-  if (req.user.role !== "admin" && request.client_id !== req.user.id) return res.status(403).json({ error: "Only the client or admin can confirm this job" });
+  if (req.user.role !== "client" || request.client_id !== req.user.id) return res.status(403).json({ error: "Only the client can confirm this job" });
   const offerId = String(req.body?.offerId || "");
   if (!offerId) return res.status(400).json({ error: "Select an offer first" });
   const [offerRows] = await pool.query("SELECT provider_id FROM offers WHERE id = ? AND request_id = ? LIMIT 1", [offerId, req.params.id]);
   if (!offerRows.length) return res.status(400).json({ error: "Cannot confirm without an offer" });
+  const [passRows] = await pool.query("SELECT request_id FROM request_passes WHERE request_id = ? AND provider_id = ? LIMIT 1", [req.params.id, offerRows[0].provider_id]);
+  if (passRows.length) return res.status(400).json({ error: "This provider already declined the request" });
   const timestamp = nowMysql();
   await pool.query("UPDATE requests SET status = 'Accepted', accepted_provider_id = ?, confirmed_at = ?, updated_at = ? WHERE id = ?", [offerRows[0].provider_id, timestamp, timestamp, req.params.id]);
   await addActivity("Offer accepted", `${request.category} for ${request.client_name}`);
@@ -991,6 +1307,7 @@ app.post("/api/requests/:id/confirm", requireUser, async (req, res) => {
 });
 
 app.post("/api/requests/:id/action", requireUser, async (req, res) => {
+  if (req.user.role === "admin") return res.status(403).json({ error: "Admin cannot interact with job requests" });
   const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
   if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
 
@@ -999,8 +1316,8 @@ app.post("/api/requests/:id/action", requireUser, async (req, res) => {
   const note = String(req.body?.note || "").trim();
   const score = Number(req.body?.score || 0);
   const timestamp = nowMysql();
-  const isClient = request.client_id === req.user.id;
-  const isProviderForJob = req.user.role === "admin" || request.accepted_provider_id === req.user.id;
+  const isClient = req.user.role === "client" && request.client_id === req.user.id;
+  const isProviderForJob = req.user.role === "provider" && request.accepted_provider_id === req.user.id;
 
   let nextStatus = "";
   let activityTitle = "";
@@ -1021,7 +1338,7 @@ app.post("/api/requests/:id/action", requireUser, async (req, res) => {
     activityTitle = "Provider marked done";
     activityDetail = `${request.category} is waiting for client confirmation`;
   } else if (action === "client_complete") {
-    if (req.user.role !== "admin" && !isClient) return res.status(403).json({ error: "Only the client can confirm completion" });
+    if (!isClient) return res.status(403).json({ error: "Only the client can confirm completion" });
     if (request.status !== "Provider Marked Done") return res.status(400).json({ error: "Provider must mark the job done first" });
     nextStatus = "Payment Released";
     extraSql = ", confirmed_at = ?, payment_released_at = ?, rating_deadline_at = ?";
@@ -1031,7 +1348,7 @@ app.post("/api/requests/:id/action", requireUser, async (req, res) => {
   } else if (action === "rate") {
     if (request.status !== "Payment Released") return res.status(400).json({ error: "Only payment-released jobs can be rated" });
     if (!Number.isInteger(score) || score < 1 || score > 5) return res.status(400).json({ error: "Rating must be 1 to 5" });
-    if (isClient || req.user.role === "admin") {
+    if (isClient) {
       if (request.client_rated_at) return res.status(400).json({ error: "Client already rated this job" });
       extraSql = ", client_rating_score = ?, client_rating_note = ?, client_rated_at = ?";
       extraParams = [score, note, timestamp];
@@ -1046,17 +1363,17 @@ app.post("/api/requests/:id/action", requireUser, async (req, res) => {
     } else {
       return res.status(403).json({ error: "Only involved client or provider can rate this job" });
     }
-    const clientRated = Boolean(request.client_rated_at) || isClient || req.user.role === "admin";
+    const clientRated = Boolean(request.client_rated_at) || isClient;
     const providerRated = Boolean(request.provider_rated_at) || (!isClient && isProviderForJob);
     nextStatus = clientRated && providerRated ? "Rated / Closed" : "Payment Released";
   } else if (action === "cancel") {
-    if (req.user.role !== "admin" && !isClient) return res.status(403).json({ error: "Only the client or admin can cancel this request" });
+    if (!isClient) return res.status(403).json({ error: "Only the client can cancel this request" });
     if (["Provider Marked Done", "Payment Released", "Rated", "Cancelled"].includes(request.status)) return res.status(400).json({ error: "This job can no longer be cancelled" });
     nextStatus = "Cancelled";
     activityTitle = "Job cancelled";
     activityDetail = `${request.category}${note ? ` - ${note}` : ""}`;
   } else if (action === "dispute") {
-    if (req.user.role !== "admin" && !isClient && !isProviderForJob) return res.status(403).json({ error: "Only involved users can dispute this job" });
+    if (!isClient && !isProviderForJob) return res.status(403).json({ error: "Only involved users can dispute this job" });
     if (!["Accepted", "In Progress", "Provider Marked Done", "Payment Released"].includes(request.status)) return res.status(400).json({ error: "This job cannot be disputed at this stage" });
     if (!note) return res.status(400).json({ error: "Dispute note is required" });
     nextStatus = "Disputed";
@@ -1064,14 +1381,8 @@ app.post("/api/requests/:id/action", requireUser, async (req, res) => {
     extraParams = [note];
     activityTitle = "Job disputed";
     activityDetail = `${request.category} - ${note}`;
-  } else if (action === "resolve_dispute") {
-    if (req.user.role !== "admin") return res.status(403).json({ error: "Only admin can resolve disputes" });
-    if (request.status !== "Disputed") return res.status(400).json({ error: "Only disputed jobs can be resolved" });
-    nextStatus = "Resolved";
-    activityTitle = "Dispute resolved";
-    activityDetail = `${request.category}${note ? ` - ${note}` : ""}`;
   } else if (action === "request_revision") {
-    if (req.user.role !== "admin" && !isClient) return res.status(403).json({ error: "Only the client can request revision" });
+    if (!isClient) return res.status(403).json({ error: "Only the client can request revision" });
     if (request.status !== "Provider Marked Done") return res.status(400).json({ error: "Revision can only be requested after provider marks done" });
     if (!note) return res.status(400).json({ error: "Revision note is required" });
     nextStatus = "Revision Requested";
@@ -1195,6 +1506,20 @@ app.post("/api/activity", requireUser, async (req, res) => {
   res.status(201).json({ activity, state: await getStateFor(req.user) });
 });
 
+app.post("/api/admin/users", requireUser, async (req, res) => {
+  if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+  let user;
+  try {
+    user = await createAccount(req.body, ["client", "provider", "ops"]);
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message || "Account creation failed" });
+  }
+  await addActivity("Account created", `${req.user.name} created ${user.name} as ${user.role}`);
+  const state = await getStateFor(req.user);
+  broadcast("kaila.state.updated", state);
+  res.status(201).json({ user: publicUser(user), state });
+});
+
 app.post("/api/admin/truncate", requireUser, async (req, res) => {
   if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
   await pool.query("SET FOREIGN_KEY_CHECKS = 0");
@@ -1219,6 +1544,77 @@ io.on("connection", (socket) => {
     if (!channel) return;
     socket.join(channel);
     socket.emit("kaila.socket.ready", { channel, socketId: socket.id });
+  });
+
+  socket.on("identify", async (userId) => {
+    try {
+      const user = await getUser(userId);
+      if (socket.data.userId) socket.leave(`user:${socket.data.userId}`);
+      socket.data.userId = user?.id || "";
+      if (!user) return;
+      socket.join(`user:${user.id}`);
+      socket.emit("kaila.socket.identified", { userId: user.id });
+    } catch (error) {
+      console.error("Socket identity failed:", error);
+    }
+  });
+
+  socket.on("kaila.call.check", async (payload = {}, acknowledge = () => {}) => {
+    try {
+      const user = await getUser(socket.data.userId);
+      if (!user) throw new Error("Sign in before starting a call");
+      const requestId = String(payload.requestId || "");
+      const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
+      if (!requestRows.length || !canWriteConversation(requestRows[0], user)) {
+        throw new Error("Audio calls are only available while the confirmed job conversation is active");
+      }
+      const targetUserId = otherConversationUserId(requestRows[0], user.id);
+      acknowledge({ ok: Boolean(targetUserId && await userSocketCount(targetUserId)) });
+    } catch (error) {
+      acknowledge({ ok: false, error: error.message || "Could not check call availability" });
+    }
+  });
+
+  socket.on("kaila.call.signal", async (payload = {}, acknowledge = () => {}) => {
+    try {
+      const user = await getUser(socket.data.userId);
+      if (!user) throw new Error("Sign in before starting a call");
+      const requestId = String(payload.requestId || "");
+      const callId = String(payload.callId || "");
+      const type = String(payload.type || "");
+      if (!requestId || !callId || !["offer", "answer", "candidate", "hangup", "reject", "busy"].includes(type)) {
+        throw new Error("Invalid call signal");
+      }
+      const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
+      if (!requestRows.length || !canWriteConversation(requestRows[0], user)) {
+        throw new Error("Audio calls are only available while the confirmed job conversation is active");
+      }
+      const targetUserId = otherConversationUserId(requestRows[0], user.id);
+      if (!targetUserId) throw new Error("Call recipient not found");
+      if (!await userSocketCount(targetUserId)) {
+        activeCalls.delete(callId);
+        return acknowledge({ ok: false, code: "recipient_offline", error: "The other party is offline" });
+      }
+      if (type === "offer") activeCalls.set(callId, { requestId, userIds: [user.id, targetUserId] });
+      if (["hangup", "reject", "busy"].includes(type)) activeCalls.delete(callId);
+      relayCallSignal(targetUserId, {
+        requestId,
+        callId,
+        type,
+        senderId: user.id,
+        senderName: user.name,
+        description: payload.description || null,
+        candidate: payload.candidate || null,
+      });
+      acknowledge({ ok: true });
+    } catch (error) {
+      acknowledge({ ok: false, error: error.message || "Call signal failed" });
+    }
+  });
+
+  socket.on("disconnect", () => {
+    const userId = socket.data.userId;
+    setTimeout(() => endDisconnectedUserCalls(userId).catch((error) => console.error("Call disconnect cleanup failed:", error)), 0);
   });
 });
 

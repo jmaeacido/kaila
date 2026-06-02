@@ -7,6 +7,13 @@ const STORAGE = {
 const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
 const APP_TIME_ZONE = "Asia/Manila";
+const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+const GEOGRAPHY_SOURCE = "assets/Gingoog City PSGC.xlsx";
+const FALLBACK_GEOGRAPHY = {
+  region: "Region X (Northern Mindanao)",
+  city: "City of Gingoog",
+  barangays: ["Agay-ayan", "Alagatan", "Anakan", "Bagubad", "Bakidbakid", "Bal-ason", "Bantaawan", "Binakalan", "Capitulangan", "Daan-Lungsod", "Hindangon", "Kalagonoy", "Kibuging", "Kipuntos", "Lawaan", "Lawit", "Libertad", "Libon", "Lunao", "Lunotan", "Malibud", "Malinao", "Maribucao", "Mimbuntong", "Mimbalagon", "Mimbunga", "Minsapinit", "Murallon", "Odiongan", "Pangasihan", "Pigsaluhan", "Barangay 1", "Barangay 10", "Barangay 11", "Barangay 12", "Barangay 13", "Barangay 14", "Barangay 15", "Barangay 16", "Barangay 17", "Barangay 18-A", "Barangay 19", "Barangay 2", "Barangay 20", "Barangay 21", "Barangay 22-A", "Barangay 23", "Barangay 24", "Barangay 25", "Barangay 26", "Barangay 3", "Barangay 4", "Barangay 5", "Barangay 6", "Barangay 7", "Barangay 8", "Barangay 9", "Punong", "Ricoro", "Samay", "San Juan", "San Luis", "San Miguel", "Santiago", "Talisay", "Talon", "Tinabalan", "Tinulongan", "Barangay 18", "Barangay 22", "Barangay 24-A", "Dinawehan", "Eureka", "Kalipay", "Kamanikan", "Kianlagan", "San Jose", "Sangalan", "Tagpako"],
+};
 
 const state = {
   session: readJson(STORAGE.session, null),
@@ -19,11 +26,15 @@ const state = {
   attentionQueue: [],
   attentionTimer: null,
   attentionOpen: false,
+  activeOfferPromptRequestId: null,
   activeConversationId: null,
   typingTimer: null,
   typingSent: false,
   presenceTimer: null,
+  call: null,
+  adminMetric: "",
   theme: localStorage.getItem(STORAGE.theme) || "system",
+  geography: FALLBACK_GEOGRAPHY,
 };
 
 const $ = (selector, scope = document) => scope.querySelector(selector);
@@ -32,12 +43,32 @@ const $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(sel
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
+  registerServiceWorker();
   initializeTheme();
   bindEvents();
   initializeSocketUrl();
+  await loadGeography();
+  renderRegisterAddress();
   await loadState();
   route(state.session ? "app" : "landing");
   connectSocket();
+}
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js")
+      .then((registration) => registration.update())
+      .catch((error) => {
+        console.warn("KAILA service worker registration failed:", error);
+      });
+  });
 }
 
 function bindEvents() {
@@ -45,12 +76,24 @@ function bindEvents() {
   $("[data-register-form]").addEventListener("submit", register);
   $("[data-register-form] [name='role']").addEventListener("change", toggleProviderCategory);
   $("[data-login-form]").addEventListener("submit", login);
+  $$("[data-password-toggle]").forEach((button) => button.addEventListener("click", togglePasswordVisibility));
+  $("[data-forgot-password]")?.addEventListener("click", openForgotPasswordModal);
   $("[data-logout]").addEventListener("click", logout);
   $("[data-open-live]").addEventListener("click", () => $("[data-live-panel]").hidden = false);
   $("[data-close-live]").addEventListener("click", () => $("[data-live-panel]").hidden = true);
   $("[data-reconnect]").addEventListener("click", () => connectSocket(true));
   $("[data-settings-tab]")?.addEventListener("shown.bs.tab", renderSettings);
   $("[data-settings-tab]")?.addEventListener("click", renderSettings);
+}
+
+function togglePasswordVisibility(event) {
+  const button = event.currentTarget;
+  const input = button.closest(".password-field")?.querySelector("input");
+  if (!input) return;
+  const show = input.type === "password";
+  input.type = show ? "text" : "password";
+  button.setAttribute("aria-label", show ? "Hide password" : "Show password");
+  button.innerHTML = `<i class="fa-solid fa-${show ? "eye-slash" : "eye"}"></i>`;
 }
 
 function initializeTheme() {
@@ -76,6 +119,33 @@ function initializeSocketUrl() {
   input.value = normalizeSocketUrl(localStorage.getItem(STORAGE.socketUrl) || "") || defaultSocketUrl();
 }
 
+async function loadGeography() {
+  if (!window.XLSX) return;
+  try {
+    const response = await fetch(GEOGRAPHY_SOURCE);
+    if (!response.ok) throw new Error("Geography source unavailable");
+    const workbook = window.XLSX.read(await response.arrayBuffer(), { type: "array" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = window.XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    const region = rows.find((row) => row["Geographic Level"] === "Reg")?.Name || FALLBACK_GEOGRAPHY.region;
+    const city = rows.find((row) => row["Geographic Level"] === "City")?.Name || FALLBACK_GEOGRAPHY.city;
+    const barangays = rows
+      .filter((row) => row["Geographic Level"] === "Bgy" && row.Name)
+      .map((row) => String(row.Name).trim())
+      .filter(Boolean);
+    if (barangays.length) state.geography = { region, city, barangays: sortedBarangays(barangays) };
+  } catch (error) {
+    console.warn("KAILA geography source failed; using fallback geography.", error);
+  }
+}
+
+function renderRegisterAddress() {
+  const host = $("[data-register-address]");
+  if (!host) return;
+  host.innerHTML = addressFields("register-address", state.session?.area || "");
+  bindAddressGroup("register-address");
+}
+
 function apiBase() {
   return $("[data-socket-url]").value.trim().replace(/\/$/, "");
 }
@@ -92,7 +162,10 @@ async function apiFetch(path, options = {}) {
     headers,
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || "Request failed");
+  if (!response.ok) {
+    console.error("KAILA API error", { path, status: response.status, payload });
+    throw new Error(payload.error || response.statusText || "Request failed");
+  }
   return payload;
 }
 
@@ -144,20 +217,37 @@ function route(name) {
 function toggleProviderCategory() {
   const role = $("[data-register-form] [name='role']")?.value;
   const field = $("[data-provider-category-field]");
-  const select = field?.querySelector("select");
-  if (!field || !select) return;
+  if (!field) return;
 
   const isProvider = role === "provider";
   field.hidden = !isProvider;
-  select.required = isProvider;
-  if (!isProvider) select.value = "";
+  if (isProvider) renderCategoryChips("register-category", "");
+  else field.querySelector("[data-register-category]").innerHTML = "";
 }
 
 async function register(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = Object.fromEntries(new FormData(form).entries());
-  data.category = Array.from(form.elements.category?.selectedOptions || []).map((option) => option.value).filter(Boolean);
+  data.category = selectedCategoryChips("register-category");
+  data.area = addressValue("register-address");
+  data.dataPrivacyConsent = form.elements.dataPrivacyConsent?.checked;
+  data.validIdConsent = form.elements.validIdConsent?.checked;
+  data.consentRequests = form.elements.consentRequests?.checked;
+  data.consentRatings = form.elements.consentRatings?.checked;
+  data.rulesAgreement = form.elements.rulesAgreement?.checked;
+  if (String(data.password || "").length < 6) {
+    notify("Registration failed", "Password must be at least 6 characters.", "warning");
+    return;
+  }
+  if (!data.contactNumber || !data.preferredContactChannel || !data.dataPrivacyConsent) {
+    notify("Registration failed", "Contact number, preferred contact channel, and data consent are required.", "warning");
+    return;
+  }
+  if (data.role === "provider" && (!data.category.length || !data.specificServices || !data.coverageArea || !data.consentRequests || !data.consentRatings || !data.rulesAgreement)) {
+    notify("Registration failed", "Provider category, services, coverage area, request consent, rating consent, and rules agreement are required.", "warning");
+    return;
+  }
   let payload;
   try {
     payload = await apiFetch("/api/register", {
@@ -171,6 +261,7 @@ async function register(event) {
 
   state.session = payload.user;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+  syncSocketIdentity();
   safeApplyState(payload.state);
   form.reset();
   await successRedirect("Account created", "Welcome to KAILA.");
@@ -193,9 +284,60 @@ async function login(event) {
 
   state.session = payload.user;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+  syncSocketIdentity();
   safeApplyState(payload.state);
   form.reset();
   await successRedirect("Logged in", `Welcome back, ${state.session.name}.`);
+}
+
+async function openForgotPasswordModal() {
+  const result = await modal({
+    title: "Reset password",
+    html: `
+      <div class="swal-form">
+        <label><span>Username</span><input id="reset-username" class="form-control" autocomplete="username"></label>
+        <label><span>Full name on account</span><input id="reset-name" class="form-control" autocomplete="name"></label>
+        <label>
+          <span>New password</span>
+          <div class="password-field">
+            <input id="reset-password" class="form-control" type="password" autocomplete="new-password">
+            <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
+              <i class="fa-solid fa-eye"></i>
+            </button>
+          </div>
+        </label>
+      </div>
+    `,
+    confirmButtonText: "Reset Password",
+    didOpen: () => {
+      $$("[data-password-toggle]", window.Swal.getPopup()).forEach((button) => button.addEventListener("click", togglePasswordVisibility));
+    },
+    preConfirm: async () => {
+      const payload = {
+        username: $("#reset-username").value.trim(),
+        name: $("#reset-name").value.trim(),
+        password: $("#reset-password").value,
+      };
+      if (!payload.username || !payload.name || !payload.password) {
+        window.Swal.showValidationMessage("Username, full name, and new password are required.");
+        return false;
+      }
+      if (payload.password.length < 6) {
+        window.Swal.showValidationMessage("Password must be at least 6 characters.");
+        return false;
+      }
+      try {
+        await apiFetch("/api/forgot-password", { method: "POST", body: JSON.stringify(payload) });
+        return payload;
+      } catch (error) {
+        window.Swal.showValidationMessage(error.message);
+        return false;
+      }
+    },
+  });
+  if (!result.isConfirmed) return;
+  $("[data-login-form] [name='username']").value = result.value.username;
+  notify("Password reset", "You can log in with your new password.", "success");
 }
 
 async function logout() {
@@ -207,8 +349,10 @@ async function logout() {
   });
   if (!result.isConfirmed) return;
 
+  endAudioCall(false);
   localStorage.removeItem(STORAGE.session);
   state.session = null;
+  syncSocketIdentity();
   await window.Swal.fire({
     customClass: { popup: "kaila-popup" },
     icon: "success",
@@ -226,6 +370,7 @@ function render() {
   renderActions();
   renderRequests();
   renderProviders();
+  renderClients();
   renderActivity();
   renderSettings();
   renderStats();
@@ -240,19 +385,22 @@ function renderNav() {
   if (summary && signedIn) summary.textContent = `${state.session.name} - ${state.session.area || state.session.role}`;
   const userPhoto = $("[data-app-user-photo]");
   if (userPhoto) {
-    userPhoto.src = signedIn && state.session.photoUrl ? `${apiBase()}${state.session.photoUrl}` : "assets/android-chrome-192x192.png";
+    userPhoto.src = signedIn ? resolveMediaUrl(state.session.photoUrl) : "assets/android-chrome-192x192.png";
     userPhoto.alt = signedIn ? `${state.session.name} photo` : "";
   }
 }
 
 function renderTabs() {
   const providersTab = $("[data-providers-tab]");
+  const clientsTab = $("[data-clients-tab]");
   if (!providersTab) return;
   const hideProviders = state.session?.role === "provider";
   providersTab.hidden = hideProviders;
+  if (clientsTab) clientsTab.hidden = state.session?.role !== "admin";
   if (hideProviders && providersTab.querySelector(".nav-link")?.classList.contains("active")) {
     activateTab("#requests-pane");
   }
+  if (state.session?.role !== "admin" && clientsTab?.classList.contains("active")) activateTab("#requests-pane");
 }
 
 function activateTab(target) {
@@ -264,22 +412,43 @@ function activateTab(target) {
   });
 }
 
+function focusRequestCard(requestId, offerId = "") {
+  route("app");
+  activateTab("#requests-pane");
+  requestAnimationFrame(() => {
+    const card = $(`[data-request-card="${escapeCssIdentifier(requestId)}"]`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    card.classList.add("request-card-focus");
+    setTimeout(() => card.classList.remove("request-card-focus"), 2200);
+    if (offerId) {
+      const offerCard = card.querySelector(`[data-offer-card="${escapeCssIdentifier(offerId)}"]`);
+      offerCard?.classList.add("request-card-focus");
+      setTimeout(() => offerCard?.classList.remove("request-card-focus"), 2200);
+    }
+  });
+}
+
 function renderActions() {
   const row = $("[data-action-row]");
   if (!row || !state.session) return;
 
   const actions = [];
-  if (["client", "admin"].includes(state.session.role)) {
+  if (state.session.role === "client") {
     actions.push(`<button class="btn btn-primary" type="button" data-new-request><i class="fa-solid fa-plus"></i><span>Post Request</span></button>`);
   }
-  if (["provider", "admin"].includes(state.session.role)) {
+  if (state.session.role === "provider") {
     actions.push(`<button class="btn btn-outline-primary" type="button" data-provider-profile><i class="fa-solid fa-id-card"></i><span>${state.session.role === "provider" ? "Provider Profile" : "Add Provider"}</span></button>`);
+  }
+  if (state.session.role === "admin") {
+    actions.push(`<button class="btn btn-primary" type="button" data-admin-create-account><i class="fa-solid fa-user-plus"></i><span>Create Account</span></button>`);
   }
   actions.push(`<button class="btn btn-outline-secondary" type="button" data-team-note title="Post a short note to the shared Activity feed."><i class="fa-solid fa-note-sticky"></i><span>Team Note</span></button>`);
   row.innerHTML = actions.join("");
 
   $("[data-new-request]")?.addEventListener("click", openRequestModal);
   $("[data-provider-profile]")?.addEventListener("click", openProviderModal);
+  $("[data-admin-create-account]")?.addEventListener("click", openAdminCreateAccountModal);
   $("[data-team-note]")?.addEventListener("click", openMessageModal);
   $("[data-dashboard-title]").textContent = `${capitalize(state.session.role)} Dashboard`;
   $("[data-role-pill]").textContent = state.session.role;
@@ -287,20 +456,78 @@ function renderActions() {
 
 function renderStats() {
   $("[data-stats-row]").hidden = state.session?.role !== "admin";
-  $("[data-request-count]").textContent = state.requests.length;
-  $("[data-provider-count]").textContent = state.providers.length;
-  $("[data-offer-count]").textContent = state.requests.reduce((total, request) => total + request.offers.length, 0);
+  if (state.session?.role !== "admin") return;
+  const metrics = adminPilotMetrics();
+  $("[data-active-provider-count]").textContent = metrics.activeProviders;
+  $("[data-request-count]").textContent = metrics.requests;
+  $("[data-response-rate]").textContent = `${metrics.responseRate}%`;
+  $("[data-offers-per-request]").textContent = metrics.offersPerRequest;
+  $("[data-completed-job-count]").textContent = metrics.completedJobs;
+  $("[data-rating-average]").textContent = metrics.averageRating || "0";
+  $("[data-dispute-count]").textContent = metrics.disputes;
+  $("[data-gmv-total]").textContent = formatCurrency(metrics.gmv);
+  $$("[data-admin-metric]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.adminMetric === state.adminMetric);
+    button.onclick = () => openAdminMetric(button.dataset.adminMetric);
+  });
+}
+
+function adminPilotMetrics() {
+  const requests = state.requests || [];
+  const providers = state.providers || [];
+  const offersCount = requests.reduce((total, request) => total + visibleOffers(request).length, 0);
+  const respondedRequests = requests.filter((request) => visibleOffers(request).length || request.passedProviderIds?.length).length;
+  const completedStatuses = new Set(["Payment Released", "Rated / Closed", "Resolved"]);
+  const completedRequests = requests.filter((request) => completedStatuses.has(request.status));
+  const ratingScores = requests.flatMap((request) => [request.clientRatingScore, request.providerRatingScore])
+    .map(Number)
+    .filter((score) => Number.isFinite(score) && score > 0);
+  const gmv = completedRequests.reduce((total, request) => total + selectedOfferAmount(request), 0);
+
+  return {
+    activeProviders: providers.filter((provider) => (provider.status || "Active") === "Active").length,
+    requests: requests.length,
+    responseRate: requests.length ? Math.round((respondedRequests / requests.length) * 100) : 0,
+    offersPerRequest: requests.length ? (offersCount / requests.length).toFixed(1) : "0",
+    completedJobs: completedRequests.length,
+    averageRating: ratingScores.length ? (ratingScores.reduce((sum, score) => sum + score, 0) / ratingScores.length).toFixed(1) : "",
+    disputes: requests.filter((request) => request.status === "Disputed" || request.disputeNote).length,
+    gmv,
+  };
+}
+
+function selectedOfferAmount(request) {
+  const offer = visibleOffers(request).find((item) => item.providerId === request.acceptedProviderId) || visibleOffers(request)[0];
+  return currencyNumber(offer?.amount || request.budget);
+}
+
+function openAdminMetric(metric) {
+  if (state.session?.role !== "admin") return;
+  state.adminMetric = metric;
+  const providerMetric = ["active-providers", "response-rate", "ratings"].includes(metric);
+  if (providerMetric) {
+    activateTab("#providers-pane");
+  } else {
+    activateTab("#requests-pane");
+  }
+  render();
+  requestAnimationFrame(() => {
+    const target = providerMetric ? "[data-provider-list]" : "[data-request-list]";
+    $(target)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 }
 
 function renderRequests() {
   const host = $("[data-request-list]");
   if (!host) return;
-  const visible = state.session?.role === "provider"
+  let visible = state.session?.role === "provider"
     ? state.requests.filter(isVisibleToProvider)
     : state.requests;
+  const adminPanel = state.session?.role === "admin" ? adminRequestMetricPanel() : "";
+  if (state.session?.role === "admin") visible = adminMetricRequests(visible);
 
   if (!visible.length) {
-    host.innerHTML = emptyCard("No job requests yet", "Client requests will appear here in real time.");
+    host.innerHTML = `${adminPanel}${emptyCard("No matching requests", "This metric has no matching request records yet.")}`;
     return;
   }
 
@@ -319,14 +546,43 @@ function renderRequests() {
     </details>
   ` : "";
 
-  host.innerHTML = `${requestCards || emptyCard("No active requests", "Cancelled requests are tucked below.")}${cancelledSection}`;
+  host.innerHTML = `${adminPanel}${requestCards || emptyCard("No active requests", "Cancelled requests are tucked below.")}${cancelledSection}`;
 
   bindRequestCardActions(host);
 }
 
+function adminMetricRequests(requests) {
+  switch (state.adminMetric) {
+    case "completed-jobs":
+    case "gmv":
+      return requests.filter((request) => ["Payment Released", "Rated / Closed", "Resolved"].includes(request.status));
+    case "disputes":
+      return requests.filter((request) => request.status === "Disputed" || request.disputeNote);
+    case "offers-per-request":
+      return [...requests].sort((left, right) => visibleOffers(right).length - visibleOffers(left).length);
+    case "requests":
+      return requests;
+    default:
+      return requests;
+  }
+}
+
+function adminRequestMetricPanel() {
+  const labels = {
+    requests: ["Requests", "All client requests in the pilot tracker."],
+    "offers-per-request": ["Offers per request", "Requests sorted by the number of visible provider offers."],
+    "completed-jobs": ["Completed jobs", "Payment-released, rated, or resolved jobs."],
+    disputes: ["Disputes", "Requests with dispute status or dispute notes."],
+    gmv: ["GMV", "Completed jobs contributing to gross marketplace value."],
+  };
+  const entry = labels[state.adminMetric];
+  if (!entry) return "";
+  return `<article class="k-card admin-metric-panel"><h3>${escapeHtml(entry[0])}</h3><p>${escapeHtml(entry[1])}</p></article>`;
+}
+
 function renderRequestCard(request) {
   return `
-    <article class="k-card">
+    <article class="k-card" data-request-card="${escapeAttribute(request.id)}">
       <div class="d-flex justify-content-between gap-2">
         <div>
           <h3>${escapeHtml(request.category)}</h3>
@@ -338,8 +594,19 @@ function renderRequestCard(request) {
       <div class="meta">
         <span>${escapeHtml(request.area)}</span>
         <span>${escapeHtml(request.urgency)}</span>
+        ${request.preferredSchedule ? `<span>${escapeHtml(request.preferredSchedule)}</span>` : ""}
         <span>${escapeHtml(formatCurrency(request.budget))}</span>
       </div>
+      ${state.session?.role === "admin" || state.session?.role === "ops" ? `
+        <div class="offer">
+          <strong>Ops intake</strong>
+          <div>${escapeHtml(request.contactMethod || "No contact method")} ${request.exactLocationNotes ? `- ${escapeHtml(request.exactLocationNotes)}` : ""}</div>
+          <small>Forwarding: ${request.permissionToForward ? "Allowed" : "No"} | Rating consent: ${request.consentToRate ? "Yes" : "No"}</small>
+        </div>
+      ` : ""}
+      ${renderAdminRequestMetricDetail(request)}
+      ${renderAcceptedProviderContact(request)}
+      ${renderAcceptedClientContact(request)}
       ${renderOffers(request)}
       ${renderAttachments("Request media", request.requestAttachments, request.id)}
       ${request.proofNote ? `<div class="offer"><strong>Proof / completion note</strong><div>${escapeHtml(request.proofNote)}</div></div>` : ""}
@@ -360,6 +627,72 @@ function renderRequestCard(request) {
   `;
 }
 
+function renderAdminRequestMetricDetail(request) {
+  if (state.session?.role !== "admin" || !state.adminMetric) return "";
+  if (state.adminMetric === "offers-per-request") {
+    return `<div class="offer"><strong>Offer activity</strong><div>${visibleOffers(request).length} visible offer${visibleOffers(request).length === 1 ? "" : "s"} for this request</div></div>`;
+  }
+  if (state.adminMetric === "gmv") {
+    return `<div class="offer"><strong>GMV contribution</strong><div>${escapeHtml(formatCurrency(selectedOfferAmount(request)))} from selected or latest visible offer</div></div>`;
+  }
+  if (state.adminMetric === "completed-jobs") {
+    return `<div class="offer"><strong>Completion tracking</strong><div>Status: ${escapeHtml(request.status)}${request.paymentReleasedAt ? ` - released ${escapeHtml(formatDateTime(request.paymentReleasedAt))}` : ""}</div></div>`;
+  }
+  if (state.adminMetric === "disputes") {
+    return `<div class="offer"><strong>Dispute tracking</strong><div>${escapeHtml(request.disputeNote || request.status)}</div></div>`;
+  }
+  return "";
+}
+
+function renderAcceptedProviderContact(request) {
+  const isClientOwner = state.session?.role === "client" && request.clientId === state.session.id;
+  if (!isClientOwner || !request.acceptedProviderId) return "";
+  const provider = userProfile(request.acceptedProviderId);
+  const contact = request.acceptedProviderContact || {};
+  const name = contact.name || provider.name || "Selected provider";
+  const phone = contact.contactNumber || provider.contactNumber || "";
+  const messenger = contact.messengerLink || provider.messengerLink || "";
+  const channel = contact.preferredContactChannel || provider.preferredContactChannel || "";
+  const bestTime = contact.bestContactTime || provider.bestContactTime || "";
+  if (!phone && !messenger && !channel && !bestTime) return "";
+  return `
+    <div class="offer provider-contact-card">
+      <strong>Selected provider contact</strong>
+      <div>${escapeHtml(name)}</div>
+      <div class="meta">
+        ${phone ? `<span>${phoneLink(phone, channel)}</span>` : ""}
+        ${messenger ? `<span>${escapeHtml(messenger)}</span>` : ""}
+        ${channel ? `<span>${escapeHtml(channel)}</span>` : ""}
+        ${bestTime ? `<span>${escapeHtml(bestTime)}</span>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderAcceptedClientContact(request) {
+  const isAcceptedProvider = state.session?.role === "provider" && request.acceptedProviderId === state.session.id;
+  if (!isAcceptedProvider) return "";
+  const contact = request.clientContact || {};
+  const name = contact.name || request.clientName || "Client";
+  const phone = contact.contactNumber || "";
+  const messenger = contact.messengerLink || "";
+  const channel = contact.preferredContactChannel || "";
+  const bestTime = contact.bestContactTime || "";
+  if (!phone && !messenger && !channel && !bestTime) return "";
+  return `
+    <div class="offer provider-contact-card">
+      <strong>Client contact</strong>
+      <div>${escapeHtml(name)}</div>
+      <div class="meta">
+        ${phone ? `<span>${phoneLink(phone, channel)}</span>` : ""}
+        ${messenger ? `<span>${escapeHtml(messenger)}</span>` : ""}
+        ${channel ? `<span>${escapeHtml(channel)}</span>` : ""}
+        ${bestTime ? `<span>${escapeHtml(bestTime)}</span>` : ""}
+      </div>
+    </div>
+  `;
+}
+
 function bindRequestCardActions(host) {
   $$("[data-accept-client-price]", host).forEach((button) => button.addEventListener("click", () => acceptClientPrice(button.dataset.acceptClientPrice)));
   $$("[data-offer]", host).forEach((button) => button.addEventListener("click", () => openOfferModal(button.dataset.offer, "offer")));
@@ -371,28 +704,29 @@ function bindRequestCardActions(host) {
 }
 
 function renderOffers(request) {
-  if (!request.offers.length) return "";
+  const offers = visibleOffers(request);
+  if (!offers.length) return "";
   if (canSelectOffer(request)) {
     return `
       <section class="offers-section">
         <div class="offers-heading">
           <strong>Provider offers</strong>
-          <span>${request.offers.length} candidate${request.offers.length === 1 ? "" : "s"}</span>
+          <span>${offers.length} candidate${offers.length === 1 ? "" : "s"}</span>
         </div>
-        <div class="offers-grid">${request.offers.map((offer) => renderOffer(offer, request.id, true)).join("")}</div>
+        <div class="offers-grid">${offers.map((offer) => renderOffer(offer, request.id, true)).join("")}</div>
       </section>
     `;
   }
-  return `<section class="offers-section"><strong>Your offer</strong><div class="offers-grid">${request.offers.map((offer) => renderOffer(offer, request.id, false)).join("")}</div></section>`;
+  return `<section class="offers-section"><strong>Your offer</strong><div class="offers-grid">${offers.map((offer) => renderOffer(offer, request.id, false)).join("")}</div></section>`;
 }
 
 function renderOffer(offer, requestId, selectable) {
   return `
-    <article class="offer-card">
+    <article class="offer-card" data-offer-card="${escapeAttribute(offer.id)}">
       <div class="offer-card-head">
         <span>${escapeHtml(offer.type === "counter" ? "Counter-offer" : "Offer")}</span>
       </div>
-      ${renderIdentity(offer.providerName, offer.providerPhotoUrl, "Provider reputation", offer.providerReputation, "compact")}
+      ${renderIdentity(offer.providerName, offer.providerPhotoUrl, "Provider reputation", offerProviderReputation(offer), "compact")}
       <div class="offer-amount">${escapeHtml(formatCurrency(offer.amount))}</div>
       <div class="offer-schedule">${escapeHtml(offer.schedule || "Schedule TBD")}</div>
       ${offer.notes ? `<p>${escapeHtml(offer.notes)}</p>` : ""}
@@ -516,19 +850,24 @@ function renderIdentity(name, photoUrl, reputationLabel, reputation, size = "") 
 function renderReputationBadge(label, reputation = {}, className = "") {
   const count = Number(reputation?.count || 0);
   const average = Number(reputation?.average);
+  const responseRate = Number(reputation?.responseRate);
+  const responseText = Number.isFinite(responseRate) ? ` · ${responseRate}% response` : "";
+  const responseAria = Number.isFinite(responseRate) ? `, ${responseRate}% response rate` : "";
   if (!count || !Number.isFinite(average)) {
-    return `<span class="reputation-badge ${escapeAttribute(className)}" aria-label="${escapeAttribute(label)}: No reviews yet"><span class="reputation-stars">&#9734;&#9734;&#9734;&#9734;&#9734;</span><span>No reviews yet</span></span>`;
+    return `<span class="reputation-badge ${escapeAttribute(className)}" aria-label="${escapeAttribute(label)}: No reviews yet${escapeAttribute(responseAria)}"><span class="reputation-stars">&#9734;&#9734;&#9734;&#9734;&#9734;</span><span>No reviews yet${escapeHtml(responseText)}</span></span>`;
   }
   return `
-    <span class="reputation-badge ${escapeAttribute(className)}" aria-label="${escapeAttribute(label)}: ${escapeAttribute(average.toFixed(1))} stars from ${count} review${count === 1 ? "" : "s"}">
+    <span class="reputation-badge ${escapeAttribute(className)}" aria-label="${escapeAttribute(label)}: ${escapeAttribute(average.toFixed(1))} stars from ${count} review${count === 1 ? "" : "s"}${escapeAttribute(responseAria)}">
       <span class="reputation-stars">${ratingStars(average)}</span>
-      <span>${escapeHtml(average.toFixed(1))} (${count} review${count === 1 ? "" : "s"})</span>
+      <span>${escapeHtml(average.toFixed(1))} (${count} review${count === 1 ? "" : "s"})${escapeHtml(responseText)}</span>
     </span>
   `;
 }
 
 function resolveMediaUrl(url) {
-  return url ? `${apiBase()}${url}` : "assets/android-chrome-192x192.png";
+  if (!url) return "assets/android-chrome-192x192.png";
+  if (/^https?:\/\//i.test(url)) return url;
+  return `${apiBase()}${url}`;
 }
 
 function userProfile(userId) {
@@ -538,32 +877,155 @@ function userProfile(userId) {
 function renderProviders() {
   const host = $("[data-provider-list]");
   if (!host) return;
-  if (!state.providers.length) {
+  let providers = state.providers;
+  if (state.session?.role === "admin") providers = adminMetricProviders(providers);
+  const adminPanel = state.session?.role === "admin" ? adminProviderMetricPanel() : "";
+  if (!providers.length) {
     host.innerHTML = emptyCard("No providers yet", "Registered providers will appear here.");
     return;
   }
-  host.innerHTML = state.providers.map((provider) => `
+  host.innerHTML = `${adminPanel}${providers.map((provider) => `
     <article class="k-card">
       <div class="d-flex justify-content-between gap-2">
         <div>
-          ${renderIdentity(provider.name, provider.photoUrl, "Provider reputation", provider.reputation)}
-          <p>${escapeHtml(provider.skills || "No skills added yet.")}</p>
+          ${renderIdentity(provider.displayName || provider.name, provider.photoUrl, "Provider reputation", providerReputation(provider))}
+          <p>${escapeHtml(provider.specificServices || provider.skills || "No services added yet.")}</p>
         </div>
-        <span class="badge text-bg-light align-self-start">${escapeHtml(provider.availability || "Available")}</span>
+        <span class="badge text-bg-light align-self-start">${escapeHtml(provider.status || "Active")}</span>
       </div>
       <div class="meta">
         ${categoryList(provider.category).map((category) => `<span>${escapeHtml(category)}</span>`).join("") || "<span>General</span>"}
         <span>${escapeHtml(provider.area)}</span>
+        <span>${escapeHtml(provider.trustLevel || "Listed")}</span>
+        ${provider.yearsExperience ? `<span>${escapeHtml(provider.yearsExperience)} yrs</span>` : ""}
+        ${provider.minimumFee ? `<span>${escapeHtml(provider.minimumFee)}</span>` : ""}
       </div>
+      ${state.session?.role === "admin" ? `
+        <div class="offer">
+          <strong>Provider ops profile</strong>
+          <div>${escapeHtml(provider.coverageArea || "No coverage area")} ${provider.availableDays ? `- ${escapeHtml(provider.availableDays)}` : ""} ${provider.availableTime ? `- ${escapeHtml(provider.availableTime)}` : ""}</div>
+          <small>Requests: ${provider.consentRequests ? "Yes" : "No"} | Ratings: ${provider.consentRatings ? "Yes" : "No"} | Rules: ${provider.rulesAgreement ? "Yes" : "No"}</small>
+        </div>
+      ` : ""}
+      ${renderAdminProviderMetricDetail(provider)}
     </article>
-  `).join("");
+  `).join("")}`;
+}
+
+function adminMetricProviders(providers) {
+  if (state.adminMetric === "active-providers") return providers.filter((provider) => (provider.status || "Active") === "Active");
+  if (state.adminMetric === "response-rate") return [...providers].sort((left, right) => providerResponseStats(right).rate - providerResponseStats(left).rate);
+  if (state.adminMetric === "ratings") return [...providers].sort((left, right) => Number(right.reputation?.average || 0) - Number(left.reputation?.average || 0));
+  return providers;
+}
+
+function adminProviderMetricPanel() {
+  const labels = {
+    "active-providers": ["Active providers", "Providers currently marked Active."],
+    "response-rate": ["Response rate per provider", "Matching requests compared with offer/pass replies."],
+    ratings: ["Provider ratings", "Providers sorted by average rating."],
+  };
+  const entry = labels[state.adminMetric];
+  if (!entry) return "";
+  return `<article class="k-card admin-metric-panel"><h3>${escapeHtml(entry[0])}</h3><p>${escapeHtml(entry[1])}</p></article>`;
+}
+
+function renderAdminProviderMetricDetail(provider) {
+  if (state.session?.role !== "admin" || !state.adminMetric) return "";
+  if (state.adminMetric === "response-rate") {
+    const stats = providerResponseStats(provider);
+    return `
+      <div class="offer">
+        <strong>Response rate</strong>
+        <div>${stats.rate}% response rate</div>
+        <small>${stats.replies} replies / ${stats.matchingRequests} matching requests - ${stats.offers} offers, ${stats.passes} passes</small>
+      </div>
+    `;
+  }
+  if (state.adminMetric === "ratings") {
+    return `<div class="offer"><strong>Rating</strong><div>${provider.reputation?.average || "No rating"} (${provider.reputation?.count || 0} reviews)</div></div>`;
+  }
+  if (state.adminMetric === "active-providers") {
+    return `<div class="offer"><strong>Active status</strong><div>${escapeHtml(provider.status || "Active")} - ${escapeHtml(provider.trustLevel || "Listed")}</div></div>`;
+  }
+  return "";
+}
+
+function providerResponseStats(provider) {
+  const categories = categoryList(provider.category);
+  const matching = state.requests.filter((request) => categories.includes(request.category) && request.status !== "Cancelled");
+  const offers = matching.filter((request) => visibleOffers(request).some((offer) => offer.providerId === provider.userId)).length;
+  const passes = matching.filter((request) => request.passedProviderIds?.includes(provider.userId)).length;
+  const replies = offers + passes;
+  return {
+    matchingRequests: matching.length,
+    offers,
+    passes,
+    replies,
+    rate: matching.length ? Math.round((replies / matching.length) * 100) : 0,
+  };
+}
+
+function providerReputation(provider = {}) {
+  const stats = providerResponseStats(provider);
+  return { ...(provider.reputation || {}), responseRate: stats.rate };
+}
+
+function offerProviderReputation(offer = {}) {
+  const provider = state.providers.find((item) => item.userId === offer.providerId);
+  if (!provider) return offer.providerReputation || {};
+  return { ...(offer.providerReputation || provider.reputation || {}), responseRate: providerResponseStats(provider).rate };
+}
+
+function acceptedProviderReputation(request = {}) {
+  const provider = state.providers.find((item) => item.userId === request.acceptedProviderId);
+  if (!provider) return request.acceptedProviderReputation || {};
+  return { ...(request.acceptedProviderReputation || provider.reputation || {}), responseRate: providerResponseStats(provider).rate };
+}
+
+function renderClients() {
+  const host = $("[data-client-list]");
+  if (!host) return;
+  if (state.session?.role !== "admin") {
+    host.innerHTML = "";
+    return;
+  }
+
+  const clients = state.users.filter((user) => user.role === "client");
+  if (!clients.length) {
+    host.innerHTML = emptyCard("No clients yet", "Registered clients will appear here.");
+    return;
+  }
+
+  host.innerHTML = clients.map((client) => {
+    const requests = state.requests.filter((request) => request.clientId === client.id);
+    const activeCount = requests.filter((request) => !["Cancelled", "Rated / Closed", "Resolved"].includes(request.status)).length;
+    return `
+      <article class="k-card">
+        <div class="d-flex justify-content-between gap-2">
+          <div>
+            ${renderIdentity(client.name, client.photoUrl, "Client reputation", client.reputation)}
+            <p>${escapeHtml(client.username || "No username")} ${client.contactNumber ? `- ${escapeHtml(client.contactNumber)}` : ""}</p>
+          </div>
+          <span class="badge text-bg-light align-self-start">${requests.length} request${requests.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="meta">
+          <span>${escapeHtml(client.area || "No area")}</span>
+          ${client.preferredContactChannel ? `<span>${escapeHtml(client.preferredContactChannel)}</span>` : ""}
+          ${client.bestContactTime ? `<span>${escapeHtml(client.bestContactTime)}</span>` : ""}
+          <span>${activeCount} active</span>
+        </div>
+      </article>
+    `;
+  }).join("");
 }
 
 function renderSettings() {
   const host = $("[data-settings-panel]");
   if (!host || !state.session) return;
-  const isProvider = ["provider", "admin"].includes(state.session.role);
-  const photoUrl = state.session.photoUrl ? `${apiBase()}${state.session.photoUrl}` : "assets/android-chrome-192x192.png";
+  const isProvider = state.session.role === "provider";
+  const isAdmin = state.session.role === "admin";
+  const photoUrl = resolveMediaUrl(state.session.photoUrl);
   try {
     host.innerHTML = `
     <form class="settings-card" data-settings-form>
@@ -577,16 +1039,23 @@ function renderSettings() {
       </div>
       <div class="settings-grid">
         <label><span>Name</span><input class="form-control" name="name" value="${escapeAttribute(state.session.name || "")}" required></label>
-        <label><span>Area</span><input class="form-control" name="area" value="${escapeAttribute(state.session.area || "")}" required></label>
-        ${isProvider ? `<label class="wide"><span>Service categories</span>${categorySelect("settings-category", false, state.session.category || "", true)}</label>` : ""}
+        <label><span>Contact number</span><input class="form-control" name="contactNumber" value="${escapeAttribute(state.session.contactNumber || "")}"></label>
+        <label><span>Messenger / Facebook</span><input class="form-control" name="messengerLink" value="${escapeAttribute(state.session.messengerLink || "")}"></label>
+        <label><span>Preferred contact</span>${select("settings-contact-channel", ["Messenger", "SMS", "Call", "Email", "Other"], state.session.preferredContactChannel || "Messenger")}</label>
+        <label><span>Best contact time</span><input class="form-control" name="bestContactTime" value="${escapeAttribute(state.session.bestContactTime || "")}"></label>
+        ${isAdmin ? "" : `<label class="wide"><span>Address</span>${addressFields("settings-address", state.session.area || "")}</label>`}
+        ${isProvider ? `<label class="wide"><span>Service categories</span>${categoryChips("settings-category", state.session.category || "")}</label>` : ""}
         <label class="wide"><span>Theme</span>${select("settings-theme", ["System", "Light", "Dark"], capitalize(state.theme))}</label>
         <label class="wide"><span>Photo</span><input class="form-control" name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
+        <label class="wide consent-line"><input type="checkbox" name="dataPrivacyConsent" ${state.session.dataPrivacyConsent ? "checked" : ""}> Data privacy consent for pilot matching</label>
       </div>
       <div class="upload-preview settings-preview" data-settings-photo-preview></div>
       <button class="btn btn-primary" type="submit">Save Settings</button>
     </form>
   `;
     $("[data-settings-form]")?.addEventListener("submit", saveSettings);
+    bindCategoryChips("settings-category");
+    bindAddressGroup("settings-address");
     bindAttachmentPreview("[data-settings-form] [name='photo']", "[data-settings-photo-preview]", 1);
   } catch (error) {
     console.error("Settings render failed:", error);
@@ -609,28 +1078,41 @@ async function openRequestModal() {
       <div class="swal-form two">
         <label><span>Category</span>${categorySelect("request-category", true)}</label>
         <label><span>Urgency</span>${select("request-urgency", URGENCY_OPTIONS, "Today")}</label>
-        <label><span>Area</span><input id="request-area" class="form-control" value="${escapeAttribute(state.session.area)}"></label>
+        <label><span>Preferred schedule</span>${select("request-schedule", URGENCY_OPTIONS, "Today")}</label>
+        <label><span>Contact method</span><input id="request-contact-method" class="form-control" value="${escapeAttribute(state.session.preferredContactChannel || state.session.contactNumber || "")}" placeholder="Messenger / SMS / Call"></label>
+        <label class="wide"><span>Address</span>${addressFields("request-address", state.session.area)}</label>
         <label><span>Budget</span><input id="request-budget" class="form-control" inputmode="decimal" placeholder="Open / ₱1,500.00"></label>
+        <label class="wide"><span>Exact location notes <small>(not forwarded too early)</small></span><textarea id="request-location-notes" class="form-control" rows="2"></textarea></label>
         <label class="wide"><span>Details</span><textarea id="request-details" class="form-control" rows="3"></textarea></label>
         <label class="wide"><span>Photos or videos (optional, up to 3 files)</span><input id="request-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
         <div class="wide upload-preview" data-request-attachment-preview></div>
+        <label class="wide consent-line"><input id="request-forward-consent" type="checkbox" checked> Permission to forward request details to matching providers.</label>
+        <label class="wide consent-line"><input id="request-rate-consent" type="checkbox" checked> I agree to rate after completion.</label>
       </div>
     `,
     confirmButtonText: "Post",
-    didOpen: () => bindAttachmentPreview("#request-attachments", "[data-request-attachment-preview]", 3),
+    didOpen: () => {
+      bindAddressGroup("request-address");
+      bindAttachmentPreview("#request-attachments", "[data-request-attachment-preview]", 3);
+    },
     preConfirm: async () => {
       const attachments = await readMediaAttachments("#request-attachments");
       if (!attachments) return false;
       const request = {
         category: $("#request-category").value,
         urgency: $("#request-urgency").value,
-        area: $("#request-area").value.trim(),
+        area: addressValue("request-address"),
         budget: normalizeCurrencyInput($("#request-budget").value) || "Open",
+        preferredSchedule: $("#request-schedule").value,
+        contactMethod: $("#request-contact-method").value.trim(),
+        exactLocationNotes: $("#request-location-notes").value.trim(),
+        permissionToForward: $("#request-forward-consent").checked,
+        consentToRate: $("#request-rate-consent").checked,
         details: $("#request-details").value.trim(),
         attachments,
       };
-      if (!request.category || !request.area || !request.details) {
-        window.Swal.showValidationMessage("Category, area, and details are required.");
+      if (!request.category || !request.area || !request.details || !request.permissionToForward || !request.consentToRate) {
+        window.Swal.showValidationMessage("Category, area, details, forwarding permission, and rating consent are required.");
         return false;
       }
       return request;
@@ -652,22 +1134,59 @@ async function openProviderModal() {
     title: existing ? "Update provider" : "Provider profile",
     html: `
       <div class="swal-form two">
-        <label class="wide"><span>Categories</span>${categorySelect("provider-category", false, existing?.category || state.session.category, true)}</label>
-        <label><span>Area</span><input id="provider-area" class="form-control" value="${escapeAttribute(existing?.area || state.session.area || "")}"></label>
+        <label><span>Display name</span><input id="provider-display-name" class="form-control" value="${escapeAttribute(existing?.displayName || state.session.name || "")}"></label>
+        <label><span>Provider type</span>${select("provider-type", ["Individual", "Freelancer", "Shop", "Small team", "Business"], existing?.providerType || "Individual")}</label>
+        <label class="wide"><span>Categories</span>${categoryChips("provider-category", existing?.category || state.session.category)}</label>
+        <label class="wide"><span>Address</span>${addressFields("provider-address", existing?.area || state.session.area || "")}</label>
         <label><span>Availability</span>${select("provider-availability", ["Today", "Weekdays", "Weekends", "Emergency only"], existing?.availability)}</label>
-        <label class="wide"><span>Skills</span><textarea id="provider-skills" class="form-control" rows="3">${escapeHtml(existing?.skills || "")}</textarea></label>
+        <label><span>Experience</span>${select("provider-experience", ["Less than 1", "1-2", "3-5", "6-10", "10+"], existing?.yearsExperience || "1-2")}</label>
+        <label><span>Emergency availability</span>${select("provider-emergency", ["Yes", "No", "Sometimes"], existing?.emergencyAvailability || "Sometimes")}</label>
+        <label><span>Available days</span><input id="provider-days" class="form-control" value="${escapeAttribute(existing?.availableDays || "")}" placeholder="Mon-Sat"></label>
+        <label><span>Available time</span><input id="provider-time" class="form-control" value="${escapeAttribute(existing?.availableTime || "")}" placeholder="Evenings only"></label>
+        <label class="wide"><span>Specific services</span><textarea id="provider-services" class="form-control" rows="3">${escapeHtml(existing?.specificServices || existing?.skills || "")}</textarea></label>
+        <label class="wide"><span>Coverage area</span><textarea id="provider-coverage" class="form-control" rows="2">${escapeHtml(existing?.coverageArea || "")}</textarea></label>
+        <label class="wide"><span>Travel limits</span><textarea id="provider-travel" class="form-control" rows="2">${escapeHtml(existing?.travelLimits || "")}</textarea></label>
+        <label><span>Minimum fee</span><input id="provider-minimum-fee" class="form-control" value="${escapeAttribute(existing?.minimumFee || "")}" placeholder="PHP 300"></label>
+        <label><span>Price range</span><input id="provider-price-range" class="form-control" value="${escapeAttribute(existing?.priceRange || "")}" placeholder="PHP 500-800"></label>
+        <label class="wide"><span>Work sample link</span><input id="provider-work-samples" class="form-control" value="${escapeAttribute(existing?.workSamples || "")}"></label>
+        <label class="wide"><span>Certificate / permit link</span><input id="provider-certificate" class="form-control" value="${escapeAttribute(existing?.certificateProof || "")}"></label>
+        <label class="wide consent-line"><input id="provider-valid-id" type="checkbox" ${existing?.validIdConsent ? "checked" : ""}> Optional ID may be used for verification.</label>
+        <label class="wide consent-line"><input id="provider-consent-requests" type="checkbox" ${existing?.consentRequests ? "checked" : ""}> I agree to receive pilot job requests.</label>
+        <label class="wide consent-line"><input id="provider-consent-ratings" type="checkbox" ${existing?.consentRatings ? "checked" : ""}> I agree to receive ratings.</label>
+        <label class="wide consent-line"><input id="provider-rules" type="checkbox" ${existing?.rulesAgreement ? "checked" : ""}> I understand and agree to provider rules.</label>
       </div>
     `,
     confirmButtonText: "Save",
+    didOpen: () => {
+      bindCategoryChips("provider-category");
+      bindAddressGroup("provider-address");
+    },
     preConfirm: () => {
       const provider = {
-        category: selectedValues("#provider-category"),
-        area: $("#provider-area").value.trim(),
+        category: selectedCategoryChips("provider-category"),
+        area: addressValue("provider-address"),
         availability: $("#provider-availability").value,
-        skills: $("#provider-skills").value.trim(),
+        skills: $("#provider-services").value.trim(),
+        displayName: $("#provider-display-name").value.trim(),
+        providerType: $("#provider-type").value,
+        specificServices: $("#provider-services").value.trim(),
+        yearsExperience: $("#provider-experience").value,
+        coverageArea: $("#provider-coverage").value.trim(),
+        emergencyAvailability: $("#provider-emergency").value,
+        availableDays: $("#provider-days").value.trim(),
+        availableTime: $("#provider-time").value.trim(),
+        travelLimits: $("#provider-travel").value.trim(),
+        minimumFee: $("#provider-minimum-fee").value.trim(),
+        priceRange: $("#provider-price-range").value.trim(),
+        workSamples: $("#provider-work-samples").value.trim(),
+        certificateProof: $("#provider-certificate").value.trim(),
+        validIdConsent: $("#provider-valid-id").checked,
+        consentRequests: $("#provider-consent-requests").checked,
+        consentRatings: $("#provider-consent-ratings").checked,
+        rulesAgreement: $("#provider-rules").checked,
       };
-      if (!provider.category.length || !provider.area) {
-        window.Swal.showValidationMessage("At least one category and area are required.");
+      if (!provider.category.length || !provider.area || !provider.specificServices || !provider.coverageArea || !provider.consentRequests || !provider.consentRatings || !provider.rulesAgreement) {
+        window.Swal.showValidationMessage("Category, area, services, coverage, request consent, rating consent, and rules agreement are required.");
         return false;
       }
       return provider;
@@ -692,7 +1211,7 @@ async function openOfferModal(requestId, type) {
       <div class="swal-form">
         ${renderIdentity(request.clientName, request.clientPhotoUrl, "Client reputation", request.clientReputation, "compact")}
         <label><span>Amount</span><input id="offer-amount" class="form-control" inputmode="decimal" placeholder="₱1,500.00"></label>
-        <label><span>Schedule</span><input id="offer-schedule" class="form-control" placeholder="Today / scheduled"></label>
+        <label><span>Schedule</span>${select("offer-schedule", URGENCY_OPTIONS, "Today")}</label>
         <label><span>Notes</span><textarea id="offer-notes" class="form-control" rows="3"></textarea></label>
       </div>
     `,
@@ -701,7 +1220,7 @@ async function openOfferModal(requestId, type) {
       const offer = {
         type,
         amount: normalizeCurrencyInput($("#offer-amount").value),
-        schedule: $("#offer-schedule").value.trim(),
+        schedule: $("#offer-schedule").value,
         notes: $("#offer-notes").value.trim(),
       };
       if (!offer.amount) {
@@ -748,13 +1267,17 @@ async function acceptClientPrice(requestId) {
 
 async function confirmRequest(requestId, offerId) {
   const request = state.requests.find((item) => item.id === requestId);
-  const offer = request?.offers.find((item) => item.id === offerId);
+  const offer = visibleOffers(request).find((item) => item.id === offerId);
   if (!request || !offer) return;
+  if (request.passedProviderIds?.includes(offer.providerId)) {
+    notify("Offer unavailable", "This provider already declined the request.", "warning");
+    return;
+  }
   const result = await modal({
     title: "Select this provider?",
     html: `
       <div class="text-start">
-        ${renderIdentity(offer.providerName, offer.providerPhotoUrl, "Provider reputation", offer.providerReputation, "compact")}
+        ${renderIdentity(offer.providerName, offer.providerPhotoUrl, "Provider reputation", offerProviderReputation(offer), "compact")}
         <p class="mt-3 mb-0">${escapeHtml(formatCurrency(offer.amount))}. This confirms the job and opens messaging.</p>
       </div>
     `,
@@ -819,6 +1342,14 @@ function conversationHtml(messages, writable, activeUserIds = [], request = null
   return `
     <div class="chat-shell">
       ${conversationIdentityHtml(request)}
+      ${writable ? `
+        <div class="chat-call-row">
+          <span>Need to clarify the job?</span>
+          <button class="btn btn-sm btn-outline-primary" type="button" data-audio-call="${request?.id || ""}">
+            <i class="fa-solid fa-phone"></i> Audio Call
+          </button>
+        </div>
+      ` : ""}
       <div class="chat-presence" data-chat-presence>${conversationPresenceText(activeUserIds)}</div>
       <div class="chat-transcript" data-chat-transcript>${transcript}</div>
       <div class="chat-typing" data-chat-typing></div>
@@ -837,13 +1368,14 @@ function conversationIdentityHtml(request) {
   const viewingAsClient = request.clientId === state.session.id;
   if (viewingAsClient && request.acceptedProviderId) {
     const provider = userProfile(request.acceptedProviderId);
-    return `<div class="chat-reputation">${renderIdentity(provider.name || "Provider", request.acceptedProviderPhotoUrl || provider.photoUrl, "Provider reputation", request.acceptedProviderReputation || provider.reputation, "compact")}</div>`;
+    return `<div class="chat-reputation">${renderIdentity(provider.name || "Provider", request.acceptedProviderPhotoUrl || provider.photoUrl, "Provider reputation", acceptedProviderReputation(request), "compact")}</div>`;
   }
   return `<div class="chat-reputation">${renderIdentity(request.clientName, request.clientPhotoUrl, "Client reputation", request.clientReputation, "compact")}</div>`;
 }
 
 function bindConversationInput(requestId, writable) {
   scrollConversationToBottom();
+  $("[data-audio-call]")?.addEventListener("click", () => startAudioCall(requestId));
   if (!writable) return;
   const input = $("[data-chat-input]");
   $("[data-chat-send]")?.addEventListener("click", () => sendConversationMessage(requestId));
@@ -948,6 +1480,319 @@ function conversationPresenceText(activeUserIds = []) {
   return activeUserIds.some((userId) => userId !== state.session.id)
     ? "Other party is viewing this conversation."
     : "Other party is not viewing this conversation.";
+}
+
+const RTC_CONFIG = {
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+};
+let callTone = null;
+
+function callSupported() {
+  return Boolean(window.RTCPeerConnection && navigator.mediaDevices?.getUserMedia);
+}
+
+function audioCallUnavailableMessage() {
+  if (!window.isSecureContext) {
+    return "Microphone access requires HTTPS on Android Chrome. Open KAILA from an HTTPS URL, including its socket/API endpoint.";
+  }
+  return "This browser does not support WebRTC audio calls.";
+}
+
+async function startAudioCall(requestId) {
+  if (!callSupported()) return notify("Audio call unavailable", audioCallUnavailableMessage(), "warning");
+  if (!state.connected || !state.socket) return notify("Audio call unavailable", "Reconnect the live socket before calling.", "warning");
+  if (state.call) return notify("Call already active", "End the current call before starting another.", "warning");
+  const request = state.requests.find((item) => item.id === requestId);
+  if (!request || !canViewConversation(request)) return;
+  try {
+    if (!await callRecipientIsOnline(requestId)) {
+      return notify("Audio call", "The other party is offline.", "info");
+    }
+    const call = createCallState(requestId, createBrowserId(), "outgoing", conversationOtherPartyName(request));
+    state.call = call;
+    renderCallPanel();
+    startCallTone("outgoing");
+    scheduleCallTimeout(call);
+    call.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    call.peerConnection = createPeerConnection(call);
+    call.localStream.getTracks().forEach((track) => call.peerConnection.addTrack(track, call.localStream));
+    const offer = await call.peerConnection.createOffer();
+    await call.peerConnection.setLocalDescription(offer);
+    emitCallSignal("offer", { description: call.peerConnection.localDescription });
+  } catch (error) {
+    endAudioCall(false);
+    notify("Call failed", microphoneErrorText(error), "error");
+  }
+}
+
+function callRecipientIsOnline(requestId) {
+  return new Promise((resolve) => {
+    state.socket.timeout(4000).emit("kaila.call.check", { requestId }, (error, response = {}) => resolve(!error && response.ok));
+  });
+}
+
+function createCallState(requestId, callId, direction, otherName) {
+  return {
+    requestId,
+    callId,
+    direction,
+    otherName: otherName || "Job contact",
+    status: direction === "incoming" ? "incoming" : "ringing",
+    muted: false,
+    localStream: null,
+    peerConnection: null,
+    pendingCandidates: [],
+  };
+}
+
+function createBrowserId() {
+  return window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function createPeerConnection(call) {
+  const peer = new RTCPeerConnection(RTC_CONFIG);
+  peer.addEventListener("icecandidate", ({ candidate }) => {
+    if (candidate) emitCallSignal("candidate", { candidate });
+  });
+  peer.addEventListener("track", ({ streams, track }) => {
+    const audio = ensureRemoteAudio();
+    audio.srcObject = streams[0] || new MediaStream([track]);
+    audio.play().catch(() => {});
+  });
+  peer.addEventListener("connectionstatechange", () => {
+    if (!state.call || state.call.callId !== call.callId) return;
+    if (peer.connectionState === "connected") {
+      clearTimeout(call.ringingTimer);
+      stopCallTone();
+      call.status = "connected";
+      renderCallPanel();
+    }
+    if (["failed", "closed"].includes(peer.connectionState)) endAudioCall(false);
+    if (peer.connectionState === "disconnected") {
+      call.status = "reconnecting";
+      renderCallPanel();
+    }
+  });
+  return peer;
+}
+
+function ensureRemoteAudio() {
+  let audio = $("[data-call-audio]");
+  if (audio) return audio;
+  audio = document.createElement("audio");
+  audio.dataset.callAudio = "";
+  audio.autoplay = true;
+  document.body.appendChild(audio);
+  return audio;
+}
+
+function renderCallPanel() {
+  let panel = $("[data-call-panel]");
+  if (!state.call) {
+    panel?.remove();
+    const audio = $("[data-call-audio]");
+    if (audio) {
+      audio.srcObject = null;
+      audio.remove();
+    }
+    return;
+  }
+  if (!panel) {
+    panel = document.createElement("aside");
+    panel.dataset.callPanel = "";
+    panel.className = "audio-call-panel";
+    document.body.appendChild(panel);
+  }
+  const call = state.call;
+  const incoming = call.status === "incoming";
+  const status = incoming ? "Incoming audio call" : call.status === "ringing" ? "Calling..." : call.status === "connected" ? "Audio call connected" : call.status === "connecting" ? "Connecting..." : "Reconnecting...";
+  panel.innerHTML = `
+    <div>
+      <strong>${escapeHtml(call.otherName)}</strong>
+      <span>${status}</span>
+    </div>
+    <div class="audio-call-actions">
+      ${incoming ? `
+        <button class="btn btn-sm btn-success" type="button" data-call-accept><i class="fa-solid fa-phone"></i> Answer</button>
+        <button class="btn btn-sm btn-danger" type="button" data-call-decline><i class="fa-solid fa-phone-slash"></i> Decline</button>
+      ` : `
+        <button class="btn btn-sm btn-outline-secondary" type="button" data-call-mute><i class="fa-solid fa-microphone${call.muted ? "-slash" : ""}"></i> ${call.muted ? "Unmute" : "Mute"}</button>
+        <button class="btn btn-sm btn-danger" type="button" data-call-end><i class="fa-solid fa-phone-slash"></i> End</button>
+      `}
+    </div>
+  `;
+  $("[data-call-accept]", panel)?.addEventListener("click", acceptAudioCall);
+  $("[data-call-decline]", panel)?.addEventListener("click", declineAudioCall);
+  $("[data-call-mute]", panel)?.addEventListener("click", toggleAudioMute);
+  $("[data-call-end]", panel)?.addEventListener("click", () => endAudioCall(true));
+}
+
+async function acceptAudioCall() {
+  const call = state.call;
+  if (!call || call.status !== "incoming") return;
+  try {
+    stopCallTone();
+    call.status = "connecting";
+    renderCallPanel();
+    call.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    call.peerConnection = createPeerConnection(call);
+    call.localStream.getTracks().forEach((track) => call.peerConnection.addTrack(track, call.localStream));
+    await call.peerConnection.setRemoteDescription(call.remoteDescription);
+    await flushPendingCandidates(call);
+    const answer = await call.peerConnection.createAnswer();
+    await call.peerConnection.setLocalDescription(answer);
+    emitCallSignal("answer", { description: call.peerConnection.localDescription });
+  } catch (error) {
+    emitCallSignal("reject");
+    endAudioCall(false);
+    notify("Call failed", microphoneErrorText(error), "error");
+  }
+}
+
+function declineAudioCall() {
+  if (!state.call) return;
+  emitCallSignal("reject");
+  endAudioCall(false);
+}
+
+function toggleAudioMute() {
+  if (!state.call?.localStream) return;
+  state.call.muted = !state.call.muted;
+  state.call.localStream.getAudioTracks().forEach((track) => {
+    track.enabled = !state.call.muted;
+  });
+  renderCallPanel();
+}
+
+function endAudioCall(notifyOther = true) {
+  if (!state.call) return;
+  if (notifyOther) emitCallSignal("hangup");
+  clearTimeout(state.call.ringingTimer);
+  stopCallTone();
+  state.call.localStream?.getTracks().forEach((track) => track.stop());
+  state.call.peerConnection?.close();
+  state.call = null;
+  renderCallPanel();
+}
+
+function emitCallSignal(type, extra = {}) {
+  if (!state.call || !state.socket) return;
+  state.socket.emit("kaila.call.signal", {
+    requestId: state.call.requestId,
+    callId: state.call.callId,
+    type,
+    ...extra,
+  }, (response = {}) => {
+    if (response.ok || !state.call) return;
+    endAudioCall(false);
+    notify("Audio call", response.code === "recipient_offline" ? "The other party is offline." : response.error || "Could not reach the other party.", response.code === "recipient_offline" ? "info" : "error");
+  });
+}
+
+async function handleCallSignal(signal = {}) {
+  if (!state.session || signal.senderId === state.session.id) return;
+  if (signal.type === "offer") {
+    if (!callSupported()) {
+      state.socket?.emit("kaila.call.signal", { requestId: signal.requestId, callId: signal.callId, type: "reject" });
+      notify("Audio call unavailable", audioCallUnavailableMessage(), "warning");
+      return;
+    }
+    if (state.call) {
+      state.socket?.emit("kaila.call.signal", { requestId: signal.requestId, callId: signal.callId, type: "busy" });
+      return;
+    }
+    state.call = createCallState(signal.requestId, signal.callId, "incoming", signal.senderName);
+    state.call.remoteDescription = signal.description;
+    scheduleCallTimeout(state.call);
+    renderCallPanel();
+    startCallTone("incoming");
+    notifyIncomingCall(signal.senderName);
+    return;
+  }
+  if (!state.call || signal.callId !== state.call.callId) return;
+  if (signal.type === "answer") {
+    stopCallTone();
+    await state.call.peerConnection?.setRemoteDescription(signal.description);
+    await flushPendingCandidates(state.call);
+  } else if (signal.type === "candidate") {
+    if (state.call.peerConnection?.remoteDescription) await state.call.peerConnection.addIceCandidate(signal.candidate);
+    else state.call.pendingCandidates.push(signal.candidate);
+  } else if (["hangup", "reject", "busy", "offline"].includes(signal.type)) {
+    const message = signal.type === "busy" ? "The other party is already on a call." : signal.type === "reject" ? "The other party declined the call." : signal.type === "offline" ? "The other party went offline." : "The audio call ended.";
+    endAudioCall(false);
+    notify("Audio call", message, ["busy", "offline"].includes(signal.type) ? "warning" : "info");
+  }
+}
+
+function notifyIncomingCall(senderName) {
+  notify("Incoming audio call", `${senderName || "Your job contact"} is calling.`, "info");
+  navigator.vibrate?.([450, 180, 450, 180, 700]);
+  if (document.hidden && window.Notification?.permission === "granted") {
+    new Notification("Incoming KAILA audio call", { body: `${senderName || "Your job contact"} is calling.` });
+  }
+}
+
+function startCallTone(mode) {
+  stopCallTone();
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return;
+  const context = new AudioContext();
+  const playBeep = (frequency, duration, delay = 0) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const start = context.currentTime + delay;
+    oscillator.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.12, start + 0.025);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(start + duration + 0.03);
+  };
+  const playPattern = () => {
+    if (mode === "incoming") {
+      playBeep(740, 0.35);
+      playBeep(880, 0.42, 0.42);
+      navigator.vibrate?.([350, 120, 420]);
+    } else {
+      playBeep(440, 0.22);
+      playBeep(440, 0.22, 0.34);
+    }
+  };
+  context.resume().then(playPattern).catch(() => {});
+  callTone = { context, timer: setInterval(playPattern, mode === "incoming" ? 1800 : 2600) };
+}
+
+function stopCallTone() {
+  if (!callTone) return;
+  clearInterval(callTone.timer);
+  callTone.context.close().catch(() => {});
+  callTone = null;
+  navigator.vibrate?.(0);
+}
+
+function scheduleCallTimeout(call) {
+  call.ringingTimer = setTimeout(() => {
+    if (!state.call || state.call.callId !== call.callId || state.call.status === "connected") return;
+    emitCallSignal("hangup");
+    endAudioCall(false);
+    notify("Audio call", "No answer.", "info");
+  }, 30000);
+}
+
+async function flushPendingCandidates(call) {
+  while (call.pendingCandidates.length) await call.peerConnection.addIceCandidate(call.pendingCandidates.shift());
+}
+
+function microphoneErrorText(error) {
+  return error?.name === "NotAllowedError"
+    ? "Microphone permission is required for an audio call."
+    : error?.message || "Could not start the audio call.";
+}
+
+function conversationOtherPartyName(request) {
+  if (request.clientId === state.session?.id) return userProfile(request.acceptedProviderId).name || "Provider";
+  return request.clientName || "Client";
 }
 
 async function openJobAction(requestId, action) {
@@ -1089,19 +1934,46 @@ async function readMediaAttachments(selector) {
 async function readProfilePhoto(selector) {
   const file = $(selector)?.files?.[0];
   if (!file) return null;
-  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+  const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+  if (!allowedTypes.includes(file.type)) {
     window.Swal?.showValidationMessage?.("Profile photo must be JPG, PNG, or WebP.");
     throw new Error("Profile photo must be JPG, PNG, or WebP.");
   }
-  if (file.size > 2 * 1024 * 1024) {
-    window.Swal?.showValidationMessage?.("Profile photo must be 2 MB or smaller.");
-    throw new Error("Profile photo must be 2 MB or smaller.");
+  try {
+    return await compressProfilePhoto(file);
+  } catch (error) {
+    window.Swal?.showValidationMessage?.(error.message);
+    throw error;
   }
+}
+
+async function compressProfilePhoto(file) {
+  const image = await loadImageFile(file);
+  const maxSize = 512;
+  const scale = Math.min(1, maxSize / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+  canvas.height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+  const context = canvas.getContext("2d");
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.86);
+  if (dataUrl.length > Math.ceil((2 * 1024 * 1024 * 4) / 3)) throw new Error("Profile photo must be 2 MB or smaller.");
+  return { name: file.name.replace(/\.[^.]+$/, ".jpg"), dataUrl };
+}
+
+function loadImageFile(file) {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve({ name: file.name, dataUrl: reader.result });
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
-    reader.readAsDataURL(file);
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not prepare this profile photo. Try a JPG, PNG, or WebP image."));
+    };
+    image.src = url;
   });
 }
 
@@ -1144,8 +2016,13 @@ async function saveSettings(event) {
   }
   const payload = {
     name: form.elements.name.value.trim(),
-    area: form.elements.area.value.trim(),
-    category: selectedValues("#settings-category"),
+    area: state.session.role === "admin" ? state.session.area || "" : addressValue("settings-address"),
+    category: state.session.role === "provider" ? selectedCategoryChips("settings-category") : [],
+    contactNumber: form.elements.contactNumber.value.trim(),
+    messengerLink: form.elements.messengerLink.value.trim(),
+    preferredContactChannel: $("#settings-contact-channel")?.value || "",
+    bestContactTime: form.elements.bestContactTime.value.trim(),
+    dataPrivacyConsent: form.elements.dataPrivacyConsent?.checked,
     ...(photo ? { photo } : {}),
   };
   applyTheme(($("#settings-theme")?.value || "System").toLowerCase());
@@ -1227,10 +2104,132 @@ async function openMessageModal() {
   }
 }
 
+async function openAdminCreateAccountModal() {
+  const result = await modal({
+    title: "Create account",
+    html: `
+      <div class="swal-form two">
+        <label><span>Role</span>${select("admin-account-role", ["client", "provider", "ops"], "client")}</label>
+        <label><span>Full name</span><input id="admin-account-name" class="form-control" autocomplete="name"></label>
+        <label><span>Username</span><input id="admin-account-username" class="form-control" autocomplete="username"></label>
+        <label><span>Contact number</span><input id="admin-account-contact" class="form-control"></label>
+        <label><span>Messenger / Facebook</span><input id="admin-account-messenger" class="form-control"></label>
+        <label><span>Preferred contact</span>${select("admin-account-channel", ["Messenger", "SMS", "Call", "Email", "Other"], "Messenger")}</label>
+        <label><span>Best contact time</span><input id="admin-account-best-time" class="form-control"></label>
+        <label>
+          <span>Password</span>
+          <div class="password-field">
+            <input id="admin-account-password" class="form-control" type="password" autocomplete="new-password">
+            <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
+              <i class="fa-solid fa-eye"></i>
+            </button>
+          </div>
+        </label>
+        <label class="wide" data-admin-account-address><span>Address</span>${addressFields("admin-account-address", state.session.area || "")}</label>
+        <div class="wide" data-admin-provider-fields hidden>
+          <label><span>Display name</span><input id="admin-provider-display" class="form-control"></label>
+          <label><span>Provider type</span>${select("admin-provider-type", ["Individual", "Freelancer", "Shop", "Small team", "Business"], "Individual")}</label>
+          <label><span>Service categories</span>${categoryChips("admin-account-category", "")}</label>
+          <label><span>Specific services</span><textarea id="admin-provider-services" class="form-control" rows="2"></textarea></label>
+          <label><span>Experience</span>${select("admin-provider-experience", ["Less than 1", "1-2", "3-5", "6-10", "10+"], "1-2")}</label>
+          <label><span>Coverage area</span><textarea id="admin-provider-coverage" class="form-control" rows="2"></textarea></label>
+          <label><span>Emergency availability</span>${select("admin-provider-emergency", ["Yes", "No", "Sometimes"], "Sometimes")}</label>
+          <label><span>Available days</span><input id="admin-provider-days" class="form-control"></label>
+          <label><span>Available time</span><input id="admin-provider-time" class="form-control"></label>
+          <label><span>Travel limits</span><input id="admin-provider-travel" class="form-control"></label>
+          <label><span>Minimum fee</span><input id="admin-provider-min-fee" class="form-control"></label>
+          <label><span>Price range</span><input id="admin-provider-price-range" class="form-control"></label>
+          <label><span>Work samples</span><input id="admin-provider-work-samples" class="form-control"></label>
+          <label><span>Certificate / permit</span><input id="admin-provider-certificate" class="form-control"></label>
+          <label class="consent-line"><input id="admin-provider-valid-id" type="checkbox"> Optional ID may be used for verification.</label>
+          <label class="consent-line"><input id="admin-provider-requests" type="checkbox" checked> Provider agrees to receive pilot requests.</label>
+          <label class="consent-line"><input id="admin-provider-ratings" type="checkbox" checked> Provider agrees to receive ratings.</label>
+          <label class="consent-line"><input id="admin-provider-rules" type="checkbox" checked> Provider agrees to rules.</label>
+        </div>
+        <label class="wide consent-line"><input id="admin-account-privacy" type="checkbox" checked> Data privacy consent recorded.</label>
+      </div>
+    `,
+    confirmButtonText: "Create Account",
+    didOpen: () => {
+      bindAddressGroup("admin-account-address");
+      bindCategoryChips("admin-account-category");
+      $$("[data-password-toggle]", window.Swal.getPopup()).forEach((button) => button.addEventListener("click", togglePasswordVisibility));
+      $("#admin-account-role")?.addEventListener("change", syncAdminAccountFields);
+      syncAdminAccountFields();
+    },
+    preConfirm: () => {
+      const role = $("#admin-account-role").value;
+      const payload = {
+        role,
+        name: $("#admin-account-name").value.trim(),
+        username: $("#admin-account-username").value.trim(),
+        password: $("#admin-account-password").value,
+        contactNumber: $("#admin-account-contact").value.trim(),
+        messengerLink: $("#admin-account-messenger").value.trim(),
+        preferredContactChannel: $("#admin-account-channel").value,
+        bestContactTime: $("#admin-account-best-time").value.trim(),
+        dataPrivacyConsent: $("#admin-account-privacy").checked,
+        area: role === "ops" ? "Operations" : addressValue("admin-account-address"),
+        category: role === "provider" ? selectedCategoryChips("admin-account-category") : [],
+        displayName: $("#admin-provider-display")?.value.trim() || "",
+        providerType: $("#admin-provider-type")?.value || "",
+        specificServices: $("#admin-provider-services")?.value.trim() || "",
+        yearsExperience: $("#admin-provider-experience")?.value || "",
+        coverageArea: $("#admin-provider-coverage")?.value.trim() || "",
+        emergencyAvailability: $("#admin-provider-emergency")?.value || "",
+        availableDays: $("#admin-provider-days")?.value.trim() || "",
+        availableTime: $("#admin-provider-time")?.value.trim() || "",
+        travelLimits: $("#admin-provider-travel")?.value.trim() || "",
+        minimumFee: $("#admin-provider-min-fee")?.value.trim() || "",
+        priceRange: $("#admin-provider-price-range")?.value.trim() || "",
+        workSamples: $("#admin-provider-work-samples")?.value.trim() || "",
+        certificateProof: $("#admin-provider-certificate")?.value.trim() || "",
+        validIdConsent: $("#admin-provider-valid-id")?.checked || false,
+        consentRequests: $("#admin-provider-requests")?.checked || false,
+        consentRatings: $("#admin-provider-ratings")?.checked || false,
+        rulesAgreement: $("#admin-provider-rules")?.checked || false,
+      };
+      if (!payload.name || !payload.username || !payload.password || !payload.contactNumber || !payload.preferredContactChannel || !payload.dataPrivacyConsent) {
+        window.Swal.showValidationMessage("Name, username, password, contact number, preferred contact, and consent are required.");
+        return false;
+      }
+      if (payload.password.length < 6) {
+        window.Swal.showValidationMessage("Password must be at least 6 characters.");
+        return false;
+      }
+      if (role !== "ops" && !payload.area) {
+        window.Swal.showValidationMessage("Address is required.");
+        return false;
+      }
+      if (role === "provider" && (!payload.category.length || !payload.specificServices || !payload.coverageArea || !payload.consentRequests || !payload.consentRatings || !payload.rulesAgreement)) {
+        window.Swal.showValidationMessage("Provider category, services, coverage, request consent, rating consent, and rules agreement are required.");
+        return false;
+      }
+      return payload;
+    },
+  });
+  if (!result.isConfirmed) return;
+  try {
+    const payload = await apiFetch("/api/admin/users", { method: "POST", body: JSON.stringify(result.value) });
+    applyServerState(payload.state);
+    notify("Account created", `${payload.user.name} can now log in.`, "success");
+  } catch (error) {
+    notify("Account failed", error.message, "error");
+  }
+}
+
+function syncAdminAccountFields() {
+  const role = $("#admin-account-role")?.value || "client";
+  const address = $("[data-admin-account-address]");
+  const providerFields = $("[data-admin-provider-fields]");
+  if (address) address.hidden = role === "ops";
+  if (providerFields) providerFields.hidden = role !== "provider";
+}
+
 function connectSocket(force = false) {
   const urlInput = $("[data-socket-url]");
   const savedUrl = localStorage.getItem(STORAGE.socketUrl) || "";
-  const socketUrl = urlInput.value.trim() || normalizeSocketUrl(savedUrl) || defaultSocketUrl();
+  const socketUrl = normalizeSocketUrl(urlInput.value.trim()) || normalizeSocketUrl(savedUrl) || defaultSocketUrl();
   urlInput.value = socketUrl;
   localStorage.setItem(STORAGE.socketUrl, socketUrl);
   if (force && state.socket) {
@@ -1239,27 +2238,36 @@ function connectSocket(force = false) {
   }
   if (state.socket) return;
   loadSocketClient(socketUrl).then(() => {
-    state.socket = window.io(socketUrl);
+    state.socket = window.io(socketIoOrigin(socketUrl), { path: socketIoPath(socketUrl) });
     state.socket.on("connect", () => {
       state.connected = true;
       $("[data-socket-dot]").classList.add("connected");
       state.socket.emit("subscribe", CHANNEL);
+      syncSocketIdentity();
     });
     state.socket.on("disconnect", () => {
       state.connected = false;
       $("[data-socket-dot]").classList.remove("connected");
+      if (state.call) {
+        endAudioCall(false);
+        notify("Audio call", "The live connection was lost.", "warning");
+      }
     });
     state.socket.on("kaila.state.updated", applyServerState);
     state.socket.on("kaila.request.created", handleRequestCreated);
     state.socket.on("kaila.provider.saved", loadState);
     state.socket.on("kaila.offer.saved", handleOfferSaved);
     state.socket.on("kaila.request.confirmed", loadState);
-    state.socket.on("kaila.request.passed", loadState);
+    state.socket.on("kaila.request.passed", handleRequestPassed);
     state.socket.on("kaila.request.action", loadState);
     state.socket.on("kaila.message.saved", handleMessageSaved);
     state.socket.on("kaila.typing.changed", handleTypingChanged);
     state.socket.on("kaila.message.reaction", ({ requestId }) => refreshConversation(requestId));
     state.socket.on("kaila.presence.changed", ({ requestId }) => updateConversationPresence(requestId));
+    state.socket.on("kaila.call.signal", (signal) => handleCallSignal(signal).catch((error) => {
+      endAudioCall(false);
+      notify("Call failed", error.message || "Audio call signaling failed.", "error");
+    }));
     state.socket.on("kaila.activity", (activity) => {
       if (!state.activity.some((item) => item.id === activity.id)) state.activity.unshift(activity);
       renderActivity();
@@ -1267,15 +2275,19 @@ function connectSocket(force = false) {
   }).catch(() => addActivity("Socket offline", "Start kaila/socket."));
 }
 
+function syncSocketIdentity() {
+  state.socket?.emit("identify", state.session?.id || "");
+}
+
 function handleRequestCreated({ request } = {}) {
   loadState();
   if (!request || !state.session || request.clientId === state.session.id) return;
-  if (!["provider", "admin"].includes(state.session.role)) return;
+  if (state.session.role !== "provider") return;
   if (state.session.role === "provider" && !providerMatchesRequest(request)) return;
   const client = userProfile(request.clientId);
 
   queueAttentionModal({
-    icon: "info",
+    customClass: { popup: "kaila-popup attention-request-popup" },
     title: "New job request",
     confirmButtonText: "Offer/Counter",
     onConfirm: () => openOfferModal(request.id, "offer"),
@@ -1288,37 +2300,175 @@ function handleRequestCreated({ request } = {}) {
       onCancel: () => persistPassRequest(request.id),
     } : {}),
     html: `
-      <div class="text-start">
-        ${renderIdentity(request.clientName, request.clientPhotoUrl || client.photoUrl, "Client reputation", request.clientReputation || client.reputation)}
-        <strong>${escapeHtml(request.category)}</strong>
-        <p class="mb-2">${escapeHtml(request.details)}</p>
-        <div class="small text-muted">${escapeHtml(request.area)} - ${escapeHtml(request.urgency)} - ${escapeHtml(formatCurrency(request.budget))}</div>
+      <div class="attention-request">
+        ${renderAttentionProfile(request.clientName, request.clientPhotoUrl || client.photoUrl, "Client reputation", request.clientReputation || client.reputation)}
+        <div class="attention-request-details">
+          <strong>${escapeHtml(request.category)}</strong>
+          <p>${escapeHtml(request.details)}</p>
+          <span>${escapeHtml(request.area)} - ${escapeHtml(request.urgency)} - ${escapeHtml(formatCurrency(request.budget))}</span>
+        </div>
       </div>
     `,
   });
+}
+
+function renderAttentionProfile(name, photoUrl, reputationLabel, reputation) {
+  return `
+    <div class="attention-profile">
+      <img class="attention-profile-photo" src="${escapeAttribute(resolveMediaUrl(photoUrl))}" alt="${escapeAttribute(name)} photo">
+      <strong>${escapeHtml(name)}</strong>
+      ${renderReputationBadge(reputationLabel, reputation)}
+    </div>
+  `;
 }
 
 async function handleOfferSaved({ requestId, offer } = {}) {
   await loadState();
   const request = state.requests.find((item) => item.id === requestId);
   if (!request || !offer || !state.session || offer.providerId === state.session.id) return;
-  if (request.clientId !== state.session.id && state.session.role !== "admin") return;
+  if (request.clientId !== state.session.id) return;
+  const offers = visibleOffers(request);
+  if (!offers.some((item) => item.providerId === offer.providerId)) return;
 
   const isCounter = offer.type === "counter";
-  const enrichedOffer = request.offers.find((item) => item.providerId === offer.providerId) || offer;
+  const enrichedOffer = offers.find((item) => item.providerId === offer.providerId) || offer;
   const provider = userProfile(offer.providerId);
+  if (offers.length > 1) {
+    if (updateActiveOfferPrompt(request, isCounter)) return;
+    queueAttentionModal(compactOfferAttentionOptions(request, isCounter));
+    return;
+  }
   queueAttentionModal({
-    icon: isCounter ? "warning" : "info",
+    customClass: { popup: "kaila-popup attention-request-popup" },
     title: isCounter ? "New counter-offer" : "New offer received",
+    confirmButtonText: "View request",
+    onConfirm: () => focusRequestCard(request.id),
+    didOpen: () => {
+      state.activeOfferPromptRequestId = request.id;
+    },
+    willClose: () => {
+      if (state.activeOfferPromptRequestId === request.id) state.activeOfferPromptRequestId = null;
+    },
     html: `
-      <div class="text-start">
-        ${renderIdentity(offer.providerName, enrichedOffer.providerPhotoUrl || provider.photoUrl, "Provider reputation", enrichedOffer.providerReputation || provider.reputation)}
-        <strong>${escapeHtml(formatCurrency(offer.amount))} for ${escapeHtml(request.category)}</strong>
-        <p class="mb-2">${escapeHtml(offer.providerName)} - ${escapeHtml(offer.schedule || "Schedule TBD")}</p>
-        ${offer.notes ? `<div class="small text-muted">${escapeHtml(offer.notes)}</div>` : ""}
+      <div class="attention-request">
+        ${renderAttentionProfile(offer.providerName, enrichedOffer.providerPhotoUrl || provider.photoUrl, "Provider reputation", offerProviderReputation(enrichedOffer))}
+        <div class="attention-request-details">
+          <strong>${escapeHtml(formatCurrency(offer.amount))} for ${escapeHtml(request.category)}</strong>
+          <p>${escapeHtml(offer.schedule || "Schedule TBD")}</p>
+          ${offer.notes ? `<span>${escapeHtml(offer.notes)}</span>` : ""}
+        </div>
       </div>
     `,
   });
+}
+
+async function handleRequestPassed({ requestId } = {}) {
+  await loadState();
+  if (!requestId || state.activeOfferPromptRequestId !== requestId || !window.Swal.isVisible()) return;
+  const request = state.requests.find((item) => item.id === requestId);
+  const offers = visibleOffers(request);
+  if (offers.length) {
+    updateActiveOfferPrompt(request);
+    return;
+  }
+  window.Swal.close();
+}
+
+function compactOfferAttentionOptions(request, isCounter = false) {
+  return {
+    customClass: { popup: "kaila-popup attention-request-popup compact-offers-popup" },
+    title: isCounter ? "Counter-offers updated" : "Offers received",
+    confirmButtonText: "View request",
+    onConfirm: () => focusRequestCard(request.id),
+    didOpen: () => {
+      state.activeOfferPromptRequestId = request.id;
+      bindCompactOfferButtons(request.id);
+    },
+    willClose: () => {
+      if (state.activeOfferPromptRequestId === request.id) state.activeOfferPromptRequestId = null;
+    },
+    html: renderCompactOffersPrompt(request),
+  };
+}
+
+function updateActiveOfferPrompt(request, isCounter = false) {
+  if (!window.Swal.isVisible() || state.activeOfferPromptRequestId !== request.id) return false;
+  document.querySelector(".swal2-popup")?.classList.add("attention-request-popup", "compact-offers-popup");
+  window.Swal.update({
+    title: isCounter ? "Counter-offers updated" : "Offers received",
+    html: renderCompactOffersPrompt(request),
+    confirmButtonText: "View request",
+    showDenyButton: false,
+    showCancelButton: false,
+  });
+  bindCompactOfferButtons(request.id);
+  return true;
+}
+
+function bindCompactOfferButtons(requestId) {
+  $$("[data-offer-detail]").forEach((button) => {
+    button.addEventListener("click", () => {
+      window.Swal.close();
+      openOfferDetailModal(requestId, button.dataset.offerDetail);
+    });
+  });
+}
+
+function renderCompactOffersPrompt(request) {
+  const offers = visibleOffers(request);
+  return `
+    <div class="compact-offers">
+      <div class="compact-offers-summary">
+        <strong>${escapeHtml(offers.length)} offers for ${escapeHtml(request.category)}</strong>
+        <span>${escapeHtml(request.area)} - ${escapeHtml(formatCurrency(request.budget))}</span>
+      </div>
+      <div class="compact-offer-photos" aria-label="Provider offers">
+        ${offers.map((offer) => `
+          <button class="compact-offer-photo" type="button" data-offer-detail="${escapeAttribute(offer.id)}" aria-label="View ${escapeAttribute(offer.providerName)} offer">
+            <img src="${escapeAttribute(resolveMediaUrl(offer.providerPhotoUrl))}" alt="">
+            <span>${escapeHtml(formatCurrency(offer.amount))}</span>
+          </button>
+        `).join("")}
+      </div>
+      <small>Tap a provider photo to inspect the offer.</small>
+    </div>
+  `;
+}
+
+async function openOfferDetailModal(requestId, offerId) {
+  const request = state.requests.find((item) => item.id === requestId);
+  const offer = visibleOffers(request).find((item) => item.id === offerId);
+  if (!request || !offer) return;
+
+  const result = await window.Swal.fire({
+    customClass: { popup: "kaila-popup attention-request-popup" },
+    title: "Offer details",
+    html: `
+      <div class="attention-request">
+        ${renderAttentionProfile(offer.providerName, offer.providerPhotoUrl, "Provider reputation", offerProviderReputation(offer))}
+        <div class="attention-request-details">
+          <strong>${escapeHtml(formatCurrency(offer.amount))} for ${escapeHtml(request.category)}</strong>
+          <p>${escapeHtml(offer.schedule || "Schedule TBD")}</p>
+          ${offer.notes ? `<span>${escapeHtml(offer.notes)}</span>` : ""}
+        </div>
+      </div>
+    `,
+    showDenyButton: true,
+    showCancelButton: true,
+    confirmButtonText: "Select Offer",
+    denyButtonText: "Back to Offers",
+    cancelButtonText: "View Request",
+    reverseButtons: true,
+    focusConfirm: false,
+  });
+
+  if (result.isConfirmed) {
+    confirmRequest(requestId, offerId);
+  } else if (result.isDenied) {
+    queueAttentionModal(compactOfferAttentionOptions(request));
+  } else if (result.dismiss === window.Swal.DismissReason.cancel) {
+    focusRequestCard(requestId, offerId);
+  }
 }
 
 function handleMessageSaved({ requestId, message } = {}) {
@@ -1372,8 +2522,8 @@ function showNextAttentionModal() {
     ...modalOptions,
   }).then((result) => {
     if (result.isConfirmed) {
-      route("app");
       if (onConfirm) onConfirm();
+      else route("app");
     } else if (result.isDenied && onDeny) {
       route("app");
       onDeny();
@@ -1389,7 +2539,7 @@ function showNextAttentionModal() {
 function defaultSocketUrl() {
   const protocol = window.location.protocol === "https:" ? "https:" : "http:";
   const host = window.location.hostname || "localhost";
-  return `${protocol}//${host}:6002`;
+  return window.location.protocol === "https:" ? `${protocol}//${host}/kaila-api` : `${protocol}//${host}:6002`;
 }
 
 function normalizeSocketUrl(value) {
@@ -1397,10 +2547,20 @@ function normalizeSocketUrl(value) {
   try {
     const url = new URL(value);
     if (["localhost", "127.0.0.1", "::1"].includes(url.hostname) && !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)) return "";
+    if (window.location.protocol === "https:" && url.protocol !== "https:") return "";
     return value;
   } catch {
     return "";
   }
+}
+
+function socketIoOrigin(socketUrl) {
+  return new URL(socketUrl).origin;
+}
+
+function socketIoPath(socketUrl) {
+  const path = new URL(socketUrl).pathname.replace(/\/$/, "");
+  return `${path}/socket.io`;
 }
 
 function loadSocketClient(socketUrl) {
@@ -1421,7 +2581,7 @@ function addActivity(title, detail) {
 }
 
 function canOffer(request) {
-  return state.session && ["provider", "admin"].includes(state.session.role) && ["Posted", "Offers Received", "Countered"].includes(request.status);
+  return state.session?.role === "provider" && ["Posted", "Offers Received", "Countered"].includes(request.status);
 }
 
 function hasClientPrice(request) {
@@ -1469,33 +2629,37 @@ async function persistPassRequest(requestId) {
 }
 
 function canSelectOffer(request) {
-  return state.session && (request.clientId === state.session.id || state.session.role === "admin") && request.offers.length > 0 && ["Offers Received", "Countered"].includes(request.status);
+  return state.session?.role === "client" && request.clientId === state.session.id && visibleOffers(request).length > 0 && ["Offers Received", "Countered"].includes(request.status);
+}
+
+function visibleOffers(request) {
+  if (!request?.offers?.length) return [];
+  const passedProviderIds = new Set(request.passedProviderIds || []);
+  return request.offers.filter((offer) => !passedProviderIds.has(offer.providerId));
 }
 
 function canViewConversation(request) {
   if (!state.session || !request.acceptedProviderId) return false;
-  return state.session.role === "admin" || request.clientId === state.session.id || request.acceptedProviderId === state.session.id;
+  return request.clientId === state.session.id || request.acceptedProviderId === state.session.id;
 }
 
 function jobActionButtons(request) {
   if (!state.session) return "";
   const buttons = [];
-  const isClient = request.clientId === state.session.id;
-  const isProvider = state.session.role === "admin" || request.acceptedProviderId === state.session.id;
+  const isClient = state.session.role === "client" && request.clientId === state.session.id;
+  const isProvider = state.session.role === "provider" && request.acceptedProviderId === state.session.id;
   const add = (action, label, style = "outline-secondary") => {
     buttons.push(`<button class="btn btn-sm btn-${style}" data-request-id="${request.id}" data-job-action="${action}">${label}</button>`);
   };
 
   if (isProvider && request.status === "Accepted") add("start", "Start", "outline-primary");
   if (isProvider && ["Accepted", "In Progress", "Revision Requested"].includes(request.status)) add("provider_complete", "Job Done", "outline-success");
-  if ((isClient || state.session.role === "admin") && request.status === "Provider Marked Done") add("client_complete", "Confirm Completion", "outline-success");
-  if ((isClient || state.session.role === "admin") && request.status === "Provider Marked Done") add("request_revision", "Request Revision", "outline-warning");
-  if ((isClient || state.session.role === "admin") && request.status === "Payment Released" && !request.clientRatedAt) add("rate", "Rate Provider", "outline-primary");
-  if ((isProvider || state.session.role === "admin") && request.status === "Payment Released" && !request.providerRatedAt) add("rate", "Rate Client", "outline-primary");
-  if ((isClient || state.session.role === "admin") && ["Posted", "Offers Received", "Countered", "Accepted"].includes(request.status)) add("cancel", "Cancel", "outline-danger");
-  if ((isClient || isProvider || state.session.role === "admin") && ["Accepted", "In Progress", "Provider Marked Done", "Payment Released"].includes(request.status)) add("dispute", "Dispute", "outline-warning");
-  if (state.session.role === "admin" && request.status === "Disputed") add("resolve_dispute", "Resolve", "outline-success");
-
+  if (isClient && request.status === "Provider Marked Done") add("client_complete", "Confirm Completion", "outline-success");
+  if (isClient && request.status === "Provider Marked Done") add("request_revision", "Request Revision", "outline-warning");
+  if (isClient && request.status === "Payment Released" && !request.clientRatedAt) add("rate", "Rate Provider", "outline-primary");
+  if (isProvider && request.status === "Payment Released" && !request.providerRatedAt) add("rate", "Rate Client", "outline-primary");
+  if (isClient && ["Posted", "Offers Received", "Countered", "Accepted"].includes(request.status)) add("cancel", "Cancel", "outline-danger");
+  if ((isClient || isProvider) && ["Accepted", "In Progress", "Provider Marked Done", "Payment Released"].includes(request.status)) add("dispute", "Dispute", "outline-warning");
   return buttons.join("");
 }
 
@@ -1523,6 +2687,105 @@ function select(id, options, selected = "", blank = "", multiple = false) {
 
 function categorySelect(id, blank = false, selected = "", multiple = false) {
   return select(id, SERVICE_CATEGORIES, selected, blank ? "Choose category" : "", multiple);
+}
+
+function categoryChips(id, selected = "") {
+  const selectedItems = categoryList(selected);
+  const availableItems = SERVICE_CATEGORIES.filter((category) => !selectedItems.includes(category));
+  return `
+    <div class="category-chip-box" data-category-chip-box="${escapeAttribute(id)}">
+      <div class="category-chip-selected" data-category-selected>
+        ${selectedItems.map((category) => categoryChip(category, true)).join("") || `<span class="category-chip-empty">Select categories below</span>`}
+      </div>
+      <div class="category-chip-options" data-category-options>
+        ${availableItems.map((category) => categoryChip(category)).join("") || `<span class="category-chip-empty">All categories selected</span>`}
+      </div>
+    </div>
+  `;
+}
+
+function categoryChip(category, selected = false) {
+  return `<button class="category-chip ${selected ? "selected" : ""}" type="button" data-category-chip="${escapeAttribute(category)}">${escapeHtml(category)}</button>`;
+}
+
+function renderCategoryChips(id, selected = "") {
+  const host = $(`[data-${id.replace(/-/g, "-")}], [data-register-category]`);
+  if (host) {
+    host.innerHTML = categoryChips(id, selected);
+    bindCategoryChips(id);
+  }
+}
+
+function bindCategoryChips(id) {
+  const box = $(`[data-category-chip-box="${escapeCssIdentifier(id)}"]`);
+  if (!box) return;
+  $$("[data-category-chip]", box).forEach((button) => button.addEventListener("click", () => {
+    const selected = selectedCategoryChips(id);
+    const category = button.dataset.categoryChip;
+    const next = selected.includes(category) ? selected.filter((item) => item !== category) : [...selected, category];
+    box.outerHTML = categoryChips(id, next);
+    bindCategoryChips(id);
+  }));
+}
+
+function selectedCategoryChips(id) {
+  const box = $(`[data-category-chip-box="${escapeCssIdentifier(id)}"]`);
+  if (!box) return [];
+  return $$("[data-category-selected] .category-chip", box).map((button) => button.dataset.categoryChip).filter(Boolean);
+}
+
+function addressFields(id, value = "") {
+  const address = parseAddress(value);
+  const barangays = sortedBarangays(state.geography.barangays);
+  const selectedBarangay = barangays.includes(address.barangay) ? address.barangay : "";
+  return `
+    <div class="address-grid" data-address-group="${escapeAttribute(id)}">
+      <label><span>Region</span>${select(`${id}-region`, [state.geography.region], state.geography.region)}</label>
+      <label><span>City</span>${select(`${id}-city`, [state.geography.city], state.geography.city)}</label>
+      <label><span>Barangay</span>${select(`${id}-barangay`, barangays, selectedBarangay, "Choose barangay")}</label>
+      <label><span>Purok</span><input class="form-control" data-address-purok value="${escapeAttribute(address.purok)}" placeholder="Purok / Zone"></label>
+      <label><span>House No. <small>(optional)</small></span><input class="form-control" data-address-house value="${escapeAttribute(address.house)}" placeholder="House no."></label>
+    </div>
+  `;
+}
+
+function bindAddressGroup(id) {
+  const group = $(`[data-address-group="${escapeCssIdentifier(id)}"]`);
+  if (!group) return;
+  const city = $(`#${id}-city`, group);
+  const barangay = $(`#${id}-barangay`, group);
+  city?.addEventListener("change", () => {
+    barangay.innerHTML = `<option value="">Choose barangay</option>${sortedBarangays(state.geography.barangays).map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
+  });
+}
+
+function sortedBarangays(barangays = []) {
+  return Array.from(new Set(barangays.map((item) => String(item || "").trim()).filter(Boolean)))
+    .sort((left, right) => BARANGAY_COLLATOR.compare(left, right));
+}
+
+function addressValue(id) {
+  const group = $(`[data-address-group="${escapeCssIdentifier(id)}"]`);
+  if (!group) return "";
+  const barangay = $(`#${id}-barangay`, group)?.value || "";
+  if (!barangay) return "";
+  const city = $(`#${id}-city`, group)?.value || state.geography.city;
+  const purok = $("[data-address-purok]", group)?.value.trim() || "";
+  const house = $("[data-address-house]", group)?.value.trim() || "";
+  return [house, purok, barangay, city].filter(Boolean).join(", ");
+}
+
+function parseAddress(value = "") {
+  const parts = String(value || "").split(",").map((part) => part.trim()).filter(Boolean);
+  const cityIndex = parts.findIndex((part) => /gingoog/i.test(part));
+  const beforeCity = cityIndex >= 0 ? parts.slice(0, cityIndex) : parts;
+  const barangay = [...beforeCity].reverse().find((part) => state.geography.barangays.includes(part)) || beforeCity[beforeCity.length - 1] || "";
+  const detailParts = beforeCity.filter((part) => part !== barangay);
+  return {
+    house: detailParts.length > 1 ? detailParts[0] : "",
+    purok: detailParts.length ? detailParts[detailParts.length - 1] : "",
+    barangay,
+  };
 }
 
 function selectedValues(selector) {
@@ -1572,6 +2835,19 @@ function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, "&#096;");
 }
 
+function escapeCssIdentifier(value) {
+  return window.CSS?.escape ? window.CSS.escape(String(value)) : String(value).replace(/["\\]/g, "\\$&");
+}
+
+function phoneLink(value, preferredChannel = "") {
+  const label = String(value || "").trim();
+  const tel = label.replace(/[^\d+]/g, "");
+  if (!tel) return escapeHtml(label);
+  const scheme = /sms/i.test(preferredChannel) ? "sms" : "tel";
+  const action = scheme === "sms" ? "SMS" : "Call";
+  return `<a href="${scheme}:${escapeAttribute(tel)}" title="${action} ${escapeAttribute(label)}">${escapeHtml(label)}</a>`;
+}
+
 function formatDateTime(value) {
   if (!value) return "";
   const date = new Date(value);
@@ -1585,6 +2861,13 @@ function normalizeCurrencyInput(value) {
   const cleaned = raw.replace(/[₱,\s]/g, "").replace(/^php/i, "");
   const amount = Number(cleaned);
   return Number.isFinite(amount) && amount >= 0 ? amount.toFixed(2) : raw;
+}
+
+function currencyNumber(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.toLowerCase() === "open") return 0;
+  const amount = Number(raw.replace(/[^\d.]/g, ""));
+  return Number.isFinite(amount) ? amount : 0;
 }
 
 function formatCurrency(value) {

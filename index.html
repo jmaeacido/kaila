@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#0f3e46">
   <title>KAILA MVP</title>
+  <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="assets/favicon.ico" sizes="any">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16x16.png">
@@ -12,7 +13,7 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
-  <link rel="stylesheet" href="style.css?v=20260601-reputation">
+  <link rel="stylesheet" href="style.css?v=20260602-audio-calls">
 </head>
 <body>
   <nav class="navbar bg-white border-bottom sticky-top py-2">
@@ -93,24 +94,69 @@
           <form data-register-form class="compact-form">
             <input class="form-control" name="name" placeholder="Full name" required>
             <input class="form-control" name="username" placeholder="Username" required>
-            <input class="form-control" name="password" type="password" placeholder="Password" required>
+            <div class="password-field">
+              <input class="form-control" name="password" type="password" placeholder="Password" autocomplete="new-password" required>
+              <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
+                <i class="fa-solid fa-eye"></i>
+              </button>
+            </div>
             <select class="form-select" name="role" required>
               <option value="client">Client</option>
               <option value="provider">Provider</option>
             </select>
-            <input class="form-control" name="area" placeholder="Barangay / area" required>
+            <input class="form-control" name="contactNumber" placeholder="Contact number" required>
+            <input class="form-control" name="messengerLink" placeholder="Messenger / Facebook link">
+            <select class="form-select" name="preferredContactChannel" required>
+              <option value="">Preferred contact channel</option>
+              <option>Messenger</option>
+              <option>SMS</option>
+              <option>Call</option>
+              <option>Email</option>
+              <option>Other</option>
+            </select>
+            <input class="form-control" name="bestContactTime" placeholder="Best time to contact">
+            <div data-register-address></div>
             <div data-provider-category-field hidden>
-              <select class="form-select" name="category" multiple size="4">
-                <option>Appliance repair</option>
-                <option>Plumbing</option>
-                <option>Electrical</option>
-                <option>Computer repair</option>
-                <option>Mechanical / motorcycle</option>
-                <option>Carpentry / home maintenance</option>
-                <option>Graphic / digital services</option>
-                <option>General odd jobs</option>
+              <input class="form-control" name="displayName" placeholder="Provider display name">
+              <select class="form-select" name="providerType">
+                <option value="">Provider type</option>
+                <option>Individual</option>
+                <option>Freelancer</option>
+                <option>Shop</option>
+                <option>Small team</option>
+                <option>Business</option>
               </select>
+              <span class="auth-field-label">Service categories</span>
+              <div data-register-category></div>
+              <textarea class="form-control" name="specificServices" rows="2" placeholder="Specific services offered"></textarea>
+              <select class="form-select" name="yearsExperience">
+                <option value="">Years of experience</option>
+                <option>Less than 1</option>
+                <option>1-2</option>
+                <option>3-5</option>
+                <option>6-10</option>
+                <option>10+</option>
+              </select>
+              <textarea class="form-control" name="coverageArea" rows="2" placeholder="Coverage area / barangays served"></textarea>
+              <select class="form-select" name="emergencyAvailability">
+                <option value="">Emergency availability</option>
+                <option>Yes</option>
+                <option>No</option>
+                <option>Sometimes</option>
+              </select>
+              <input class="form-control" name="availableDays" placeholder="Available days, e.g. Mon-Sat">
+              <input class="form-control" name="availableTime" placeholder="Available time, e.g. evenings only">
+              <input class="form-control" name="travelLimits" placeholder="Travel limits / areas not covered">
+              <input class="form-control" name="minimumFee" placeholder="Minimum service fee, e.g. PHP 300">
+              <textarea class="form-control" name="priceRange" rows="2" placeholder="Sample price range examples"></textarea>
+              <input class="form-control" name="workSamples" placeholder="Work sample photo link / folder">
+              <input class="form-control" name="certificateProof" placeholder="Certificate / training / permit link">
+              <label class="consent-line"><input type="checkbox" name="validIdConsent" value="yes"> Optional ID may be used for verification.</label>
+              <label class="consent-line"><input type="checkbox" name="consentRequests" value="yes"> I agree to receive pilot job requests.</label>
+              <label class="consent-line"><input type="checkbox" name="consentRatings" value="yes"> I agree to receive ratings.</label>
+              <label class="consent-line"><input type="checkbox" name="rulesAgreement" value="yes"> I understand and agree to provider rules.</label>
             </div>
+            <label class="consent-line"><input type="checkbox" name="dataPrivacyConsent" value="yes" required> I allow KAILA to use my submitted details for pilot matching.</label>
             <button class="btn btn-primary w-100" type="submit">Create Account</button>
           </form>
         </div>
@@ -126,8 +172,14 @@
           </div>
           <form data-login-form class="compact-form">
             <input class="form-control" name="username" placeholder="Username" required>
-            <input class="form-control" name="password" type="password" placeholder="Password" required>
+            <div class="password-field">
+              <input class="form-control" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+              <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
+                <i class="fa-solid fa-eye"></i>
+              </button>
+            </div>
             <button class="btn btn-primary w-100" type="submit">Login</button>
+            <button class="btn btn-sm btn-link justify-self-center" type="button" data-forgot-password>Forgot password?</button>
           </form>
         </div>
       </div>
@@ -161,9 +213,14 @@
           </div>
 
           <div class="stats-row admin-stats" data-stats-row>
-            <div><i class="fa-solid fa-list-check"></i><strong data-request-count>0</strong><span>Requests</span></div>
-            <div><i class="fa-solid fa-user-gear"></i><strong data-provider-count>0</strong><span>Providers</span></div>
-            <div><i class="fa-solid fa-handshake-angle"></i><strong data-offer-count>0</strong><span>Offers</span></div>
+            <button type="button" data-admin-metric="active-providers"><i class="fa-solid fa-user-check"></i><strong data-active-provider-count>0</strong><span>Active providers</span></button>
+            <button type="button" data-admin-metric="requests"><i class="fa-solid fa-list-check"></i><strong data-request-count>0</strong><span>Requests</span></button>
+            <button type="button" data-admin-metric="response-rate"><i class="fa-solid fa-reply"></i><strong data-response-rate>0%</strong><span>Response rate</span></button>
+            <button type="button" data-admin-metric="offers-per-request"><i class="fa-solid fa-handshake-angle"></i><strong data-offers-per-request>0</strong><span>Offers/request</span></button>
+            <button type="button" data-admin-metric="completed-jobs"><i class="fa-solid fa-circle-check"></i><strong data-completed-job-count>0</strong><span>Completed jobs</span></button>
+            <button type="button" data-admin-metric="ratings"><i class="fa-solid fa-star"></i><strong data-rating-average>0</strong><span>Ratings</span></button>
+            <button type="button" data-admin-metric="disputes"><i class="fa-solid fa-triangle-exclamation"></i><strong data-dispute-count>0</strong><span>Disputes</span></button>
+            <button type="button" data-admin-metric="gmv"><i class="fa-solid fa-peso-sign"></i><strong data-gmv-total>₱0</strong><span>GMV</span></button>
           </div>
 
           <nav class="nav nav-pills nav-fill compact-tabs app-tabs" role="tablist">
@@ -172,6 +229,9 @@
             </button>
             <button class="nav-link" data-bs-toggle="pill" data-bs-target="#providers-pane" type="button" data-providers-tab>
               <i class="fa-solid fa-people-carry-box"></i><span>Providers</span>
+            </button>
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#clients-pane" type="button" data-clients-tab hidden>
+              <i class="fa-solid fa-users"></i><span>Clients</span>
             </button>
             <button class="nav-link" data-bs-toggle="pill" data-bs-target="#activity-pane" type="button">
               <i class="fa-solid fa-bell"></i><span>Activity</span>
@@ -187,6 +247,9 @@
             </div>
             <div class="tab-pane fade" id="providers-pane">
               <div class="stack" data-provider-list></div>
+            </div>
+            <div class="tab-pane fade" id="clients-pane">
+              <div class="stack" data-client-list></div>
             </div>
             <div class="tab-pane fade" id="activity-pane">
               <div class="stack" data-activity-feed></div>
@@ -214,6 +277,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script src="app.js?v=20260601-reputation"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="app.js?v=20260602-call-ringtones"></script>
 </body>
 </html>

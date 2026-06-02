@@ -19,6 +19,10 @@ Job-message content is encrypted at rest with AES-256-GCM. Set `KAILA_MESSAGE_EN
 
 Service requests and provider completion proofs accept optional JPG, PNG, WebP, MP4, or WebM attachments. The server stores up to 3 files per stage with a 10 MB limit per file in `socket/uploads` and serves them through opaque `/media/:id` URLs.
 
+## Audio Calls
+
+Active confirmed-job conversations support peer-to-peer WebRTC audio calls. Socket.IO relays authorized call signaling only between the confirmed client and provider. Serve the PWA over HTTPS outside local development and configure a TURN server before production rollout for reliable calls across restrictive mobile networks.
+
 ## Events
 
 Clients join the shared MVP pilot room:

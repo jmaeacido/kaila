@@ -1,0 +1,25 @@
+{
+  "name": "KAILA",
+  "short_name": "KAILA",
+  "description": "Find trusted local help faster with KAILA.",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7faf8",
+  "theme_color": "#0f3e46",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "assets/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
