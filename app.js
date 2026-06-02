@@ -1929,29 +1929,62 @@ async function toggleCallVideo() {
   }
 }
 
+async function acquireCameraTrack(facingMode) {
+  const baseVideo = callMediaConstraints(true, facingMode).video;
+  const attempts = [
+    { ...baseVideo, facingMode: { exact: facingMode } },
+    { ...baseVideo, facingMode: { ideal: facingMode } },
+    true,
+  ];
+  let lastError = null;
+  for (const video of attempts) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+      const track = stream.getVideoTracks()[0];
+      if (!track) throw new Error("Camera is unavailable.");
+      stream.getVideoTracks().filter((item) => item !== track).forEach((item) => item.stop());
+      return track;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Camera is unavailable.");
+}
+
 async function switchCallCamera() {
   const call = state.call;
   if (!call?.localVideoEnabled || !call.videoSender || !call.localStream) return;
+  const previousFacingMode = call.cameraFacingMode;
   const facingMode = call.cameraFacingMode === "environment" ? "user" : "environment";
+  const oldTrack = call.localStream.getVideoTracks()[0];
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { ...callMediaConstraints(true, facingMode).video, facingMode: { exact: facingMode } },
-      audio: false,
-    });
-    const track = stream.getVideoTracks()[0];
-    if (!track) throw new Error("Alternate camera is unavailable.");
-    const oldTrack = call.localStream.getVideoTracks()[0];
-    await call.videoSender.replaceTrack(track);
     if (oldTrack) {
       call.localStream.removeTrack(oldTrack);
       oldTrack.stop();
     }
+    await call.videoSender.replaceTrack(null);
+    const track = await acquireCameraTrack(facingMode);
+    await call.videoSender.replaceTrack(track);
     call.localStream.addTrack(track);
-    call.cameraFacingMode = facingMode;
+    call.cameraFacingMode = track.getSettings().facingMode || facingMode;
     call.qualityBadSamples = 0;
+    call.lastVideoStats = null;
     renderCallPanel();
   } catch (error) {
+    try {
+      const fallbackTrack = await acquireCameraTrack(previousFacingMode);
+      await call.videoSender.replaceTrack(fallbackTrack);
+      call.localStream.addTrack(fallbackTrack);
+      call.cameraFacingMode = fallbackTrack.getSettings().facingMode || previousFacingMode;
+    } catch {
+      call.localVideoEnabled = false;
+      call.requestedVideo = false;
+      await renegotiateCall().catch(() => {});
+    }
+    call.qualityBadSamples = 0;
+    call.lastVideoStats = null;
     notify("Camera switch unavailable", cameraErrorText(error), "warning");
+    renderCallPanel();
   }
 }
 
@@ -1971,6 +2004,7 @@ async function disableCallVideo({ automatic = false } = {}) {
   call.localVideoEnabled = false;
   call.requestedVideo = false;
   call.qualityBadSamples = 0;
+  call.lastVideoStats = null;
   await renegotiateCall();
   renderCallPanel();
   if (automatic) notify("Switched to audio only", "Video was paused because the connection is slow.", "warning");
@@ -2159,11 +2193,23 @@ async function checkCallVideoQuality(call) {
       if (report.type === "remote-inbound-rtp" && report.kind === "video") remoteInbound = report;
     });
     if (!outbound) return;
-    const slow = (Number.isFinite(pair?.currentRoundTripTime) && pair.currentRoundTripTime > 1.5)
-      || (Number.isFinite(pair?.availableOutgoingBitrate) && pair.availableOutgoingBitrate < 90000)
-      || (Number.isFinite(remoteInbound?.fractionLost) && remoteInbound.fractionLost > 0.25);
-    call.qualityBadSamples = slow ? call.qualityBadSamples + 1 : 0;
-    if (call.qualityBadSamples >= 4) await disableCallVideo({ automatic: true });
+    const previous = call.lastVideoStats;
+    const current = {
+      framesEncoded: outbound.framesEncoded,
+    };
+    call.lastVideoStats = current;
+    const stalled = previous
+      && Number.isFinite(previous.framesEncoded)
+      && Number.isFinite(current.framesEncoded)
+      && current.framesEncoded <= previous.framesEncoded;
+    const severeSignals = [
+      Number.isFinite(pair?.currentRoundTripTime) && pair.currentRoundTripTime > 3,
+      Number.isFinite(pair?.availableOutgoingBitrate) && pair.availableOutgoingBitrate < 35000,
+      Number.isFinite(remoteInbound?.fractionLost) && remoteInbound.fractionLost > 0.45,
+    ].filter(Boolean).length;
+    const slow = stalled || severeSignals >= 2;
+    call.qualityBadSamples = slow ? call.qualityBadSamples + 1 : Math.max(0, call.qualityBadSamples - 1);
+    if (call.qualityBadSamples >= 8) await disableCallVideo({ automatic: true });
   } catch {}
 }
 
