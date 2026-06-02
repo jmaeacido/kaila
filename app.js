@@ -44,6 +44,7 @@ document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
   registerServiceWorker();
+  setupAttentionNotifications();
   initializeTheme();
   bindEvents();
   initializeSocketUrl();
@@ -52,6 +53,13 @@ async function init() {
   await loadState();
   route(state.session ? "app" : "landing");
   connectSocket();
+}
+
+function setupAttentionNotifications() {
+  if (!("Notification" in window) || Notification.permission !== "default") return;
+  document.addEventListener("pointerdown", () => {
+    Notification.requestPermission().catch(() => {});
+  }, { once: true });
 }
 
 function registerServiceWorker() {
@@ -1486,6 +1494,8 @@ const RTC_CONFIG = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
 };
 let callTone = null;
+let callClockTimer = null;
+let attentionTone = null;
 
 function callSupported() {
   return Boolean(window.RTCPeerConnection && navigator.mediaDevices?.getUserMedia);
@@ -1508,7 +1518,7 @@ async function startAudioCall(requestId) {
     if (!await callRecipientIsOnline(requestId)) {
       return notify("Audio call", "The other party is offline.", "info");
     }
-    const call = createCallState(requestId, createBrowserId(), "outgoing", conversationOtherPartyName(request));
+    const call = createCallState(requestId, createBrowserId(), "outgoing", conversationOtherPartyName(request), conversationOtherPartyPhoto(request));
     state.call = call;
     renderCallPanel();
     startCallTone("outgoing");
@@ -1531,14 +1541,17 @@ function callRecipientIsOnline(requestId) {
   });
 }
 
-function createCallState(requestId, callId, direction, otherName) {
+function createCallState(requestId, callId, direction, otherName, otherPhotoUrl = "") {
   return {
     requestId,
     callId,
     direction,
     otherName: otherName || "Job contact",
+    otherPhotoUrl,
     status: direction === "incoming" ? "incoming" : "ringing",
     muted: false,
+    minimized: false,
+    connectedAt: null,
     localStream: null,
     peerConnection: null,
     pendingCandidates: [],
@@ -1565,6 +1578,9 @@ function createPeerConnection(call) {
       clearTimeout(call.ringingTimer);
       stopCallTone();
       call.status = "connected";
+      call.minimized = false;
+      call.connectedAt ||= Date.now();
+      startCallClock();
       renderCallPanel();
     }
     if (["failed", "closed"].includes(peer.connectionState)) endAudioCall(false);
@@ -1590,6 +1606,7 @@ function renderCallPanel() {
   let panel = $("[data-call-panel]");
   if (!state.call) {
     panel?.remove();
+    document.body.classList.remove("call-overlay-open");
     const audio = $("[data-call-audio]");
     if (audio) {
       audio.srcObject = null;
@@ -1605,26 +1622,108 @@ function renderCallPanel() {
   }
   const call = state.call;
   const incoming = call.status === "incoming";
+  const onCall = ["connected", "reconnecting"].includes(call.status);
+  const minimized = call.minimized;
   const status = incoming ? "Incoming audio call" : call.status === "ringing" ? "Calling..." : call.status === "connected" ? "Audio call connected" : call.status === "connecting" ? "Connecting..." : "Reconnecting...";
+  panel.className = `audio-call-panel${!minimized ? " audio-call-overlay" : ""}${minimized ? " minimized" : ""}`;
+  document.body.classList.toggle("call-overlay-open", !minimized);
+  if (minimized) {
+    panel.innerHTML = `
+      <button class="audio-call-minimized-main" type="button" data-call-restore aria-label="Return to active audio call">
+        ${renderCallPhoto(call, "audio-call-mini-photo")}
+        <span>
+          <strong>${escapeHtml(call.otherName)}</strong>
+          <small>${onCall ? `ON CALL <b data-call-duration>${formatCallDuration(call)}</b>` : escapeHtml(status)}</small>
+        </span>
+      </button>
+      <button class="audio-call-mini-action" type="button" data-call-mute aria-label="${call.muted ? "Unmute" : "Mute"} microphone">
+        <i class="fa-solid fa-microphone${call.muted ? "-slash" : ""}"></i>
+      </button>
+      <button class="audio-call-mini-action end" type="button" data-call-end aria-label="End audio call">
+        <i class="fa-solid fa-phone-slash"></i>
+      </button>
+    `;
+    bindCallPanelActions(panel);
+    return;
+  }
   panel.innerHTML = `
-    <div>
-      <strong>${escapeHtml(call.otherName)}</strong>
-      <span>${status}</span>
-    </div>
-    <div class="audio-call-actions">
-      ${incoming ? `
-        <button class="btn btn-sm btn-success" type="button" data-call-accept><i class="fa-solid fa-phone"></i> Answer</button>
-        <button class="btn btn-sm btn-danger" type="button" data-call-decline><i class="fa-solid fa-phone-slash"></i> Decline</button>
-      ` : `
-        <button class="btn btn-sm btn-outline-secondary" type="button" data-call-mute><i class="fa-solid fa-microphone${call.muted ? "-slash" : ""}"></i> ${call.muted ? "Unmute" : "Mute"}</button>
-        <button class="btn btn-sm btn-danger" type="button" data-call-end><i class="fa-solid fa-phone-slash"></i> End</button>
-      `}
-    </div>
-  `;
+      <div class="audio-call-overlay-head">
+        <span class="audio-call-secure"><i class="fa-solid fa-lock"></i> KAILA AUDIO</span>
+        <button class="audio-call-minimize" type="button" data-call-minimize aria-label="Minimize audio call">
+          <i class="fa-solid fa-window-minimize"></i>
+        </button>
+      </div>
+      <div class="audio-call-stage">
+        ${renderCallPhoto(call, "audio-call-avatar")}
+        <div class="audio-call-state"><span class="audio-call-live-dot"></span> ${incoming ? "INCOMING CALL" : call.status === "ringing" ? "CALLING" : call.status === "connecting" ? "CONNECTING" : "ON CALL"}</div>
+        <h2>${escapeHtml(call.otherName)}</h2>
+        <p>${status}</p>
+        ${onCall ? `<strong class="audio-call-duration" data-call-duration>${formatCallDuration(call)}</strong>` : ""}
+      </div>
+      <div class="audio-call-overlay-actions">
+        ${incoming ? `
+          <button class="audio-call-control answer" type="button" data-call-accept>
+            <span><i class="fa-solid fa-phone"></i></span>
+            <b>Answer</b>
+          </button>
+          <button class="audio-call-control end" type="button" data-call-decline>
+            <span><i class="fa-solid fa-phone-slash"></i></span>
+            <b>Decline</b>
+          </button>
+        ` : `
+          ${call.localStream ? `
+            <button class="audio-call-control" type="button" data-call-mute>
+              <span><i class="fa-solid fa-microphone${call.muted ? "-slash" : ""}"></i></span>
+              <b>${call.muted ? "Unmute" : "Mute"}</b>
+            </button>
+          ` : ""}
+          <button class="audio-call-control end" type="button" data-call-end>
+            <span><i class="fa-solid fa-phone-slash"></i></span>
+            <b>${onCall ? "End" : "Cancel"}</b>
+          </button>
+        `}
+      </div>
+    `;
+  bindCallPanelActions(panel);
+}
+
+function bindCallPanelActions(panel) {
   $("[data-call-accept]", panel)?.addEventListener("click", acceptAudioCall);
   $("[data-call-decline]", panel)?.addEventListener("click", declineAudioCall);
   $("[data-call-mute]", panel)?.addEventListener("click", toggleAudioMute);
   $("[data-call-end]", panel)?.addEventListener("click", () => endAudioCall(true));
+  $("[data-call-minimize]", panel)?.addEventListener("click", () => setCallMinimized(true));
+  $("[data-call-restore]", panel)?.addEventListener("click", () => setCallMinimized(false));
+}
+
+function setCallMinimized(minimized) {
+  if (!state.call) return;
+  state.call.minimized = minimized;
+  renderCallPanel();
+}
+
+function callInitials(name = "") {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "K";
+}
+
+function renderCallPhoto(call, className) {
+  const photoUrl = resolveMediaUrl(call.otherPhotoUrl);
+  return `<img class="${className}" src="${escapeAttribute(photoUrl)}" alt="${escapeAttribute(call.otherName)} photo">`;
+}
+
+function formatCallDuration(call) {
+  const seconds = Math.max(0, Math.floor((Date.now() - (call.connectedAt || Date.now())) / 1000));
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function startCallClock() {
+  clearInterval(callClockTimer);
+  callClockTimer = setInterval(() => {
+    if (!state.call?.connectedAt) return;
+    $$("[data-call-duration]").forEach((host) => {
+      host.textContent = formatCallDuration(state.call);
+    });
+  }, 1000);
 }
 
 async function acceptAudioCall() {
@@ -1672,6 +1771,8 @@ function endAudioCall(notifyOther = true) {
   state.call.localStream?.getTracks().forEach((track) => track.stop());
   state.call.peerConnection?.close();
   state.call = null;
+  clearInterval(callClockTimer);
+  callClockTimer = null;
   renderCallPanel();
 }
 
@@ -1701,7 +1802,8 @@ async function handleCallSignal(signal = {}) {
       state.socket?.emit("kaila.call.signal", { requestId: signal.requestId, callId: signal.callId, type: "busy" });
       return;
     }
-    state.call = createCallState(signal.requestId, signal.callId, "incoming", signal.senderName);
+    const request = state.requests.find((item) => item.id === signal.requestId);
+    state.call = createCallState(signal.requestId, signal.callId, "incoming", signal.senderName, userProfile(signal.senderId).photoUrl || conversationOtherPartyPhoto(request));
     state.call.remoteDescription = signal.description;
     scheduleCallTimeout(state.call);
     renderCallPanel();
@@ -1737,13 +1839,14 @@ function startCallTone(mode) {
   const AudioContext = window.AudioContext || window.webkitAudioContext;
   if (!AudioContext) return;
   const context = new AudioContext();
-  const playBeep = (frequency, duration, delay = 0) => {
+  const playBeep = (frequency, duration, delay = 0, type = "square", volume = 0.3) => {
     const oscillator = context.createOscillator();
     const gain = context.createGain();
     const start = context.currentTime + delay;
     oscillator.frequency.value = frequency;
+    oscillator.type = type;
     gain.gain.setValueAtTime(0.0001, start);
-    gain.gain.exponentialRampToValueAtTime(0.12, start + 0.025);
+    gain.gain.exponentialRampToValueAtTime(volume, start + 0.015);
     gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
     oscillator.connect(gain).connect(context.destination);
     oscillator.start(start);
@@ -1751,16 +1854,18 @@ function startCallTone(mode) {
   };
   const playPattern = () => {
     if (mode === "incoming") {
-      playBeep(740, 0.35);
-      playBeep(880, 0.42, 0.42);
-      navigator.vibrate?.([350, 120, 420]);
+      playBeep(820, 0.22);
+      playBeep(1120, 0.22, 0.27, "sawtooth", 0.34);
+      playBeep(820, 0.22, 0.54);
+      playBeep(1120, 0.34, 0.81, "sawtooth", 0.34);
+      navigator.vibrate?.([420, 100, 420, 100, 650]);
     } else {
-      playBeep(440, 0.22);
-      playBeep(440, 0.22, 0.34);
+      playBeep(520, 0.18, 0, "square", 0.22);
+      playBeep(680, 0.18, 0.25, "square", 0.22);
     }
   };
   context.resume().then(playPattern).catch(() => {});
-  callTone = { context, timer: setInterval(playPattern, mode === "incoming" ? 1800 : 2600) };
+  callTone = { context, timer: setInterval(playPattern, mode === "incoming" ? 1450 : 1900) };
 }
 
 function stopCallTone() {
@@ -1793,6 +1898,11 @@ function microphoneErrorText(error) {
 function conversationOtherPartyName(request) {
   if (request.clientId === state.session?.id) return userProfile(request.acceptedProviderId).name || "Provider";
   return request.clientName || "Client";
+}
+
+function conversationOtherPartyPhoto(request = {}) {
+  if (request.clientId === state.session?.id) return request.acceptedProviderPhotoUrl || userProfile(request.acceptedProviderId).photoUrl || "";
+  return request.clientPhotoUrl || userProfile(request.clientId).photoUrl || "";
 }
 
 async function openJobAction(requestId, action) {
@@ -2255,11 +2365,11 @@ function connectSocket(force = false) {
     });
     state.socket.on("kaila.state.updated", applyServerState);
     state.socket.on("kaila.request.created", handleRequestCreated);
-    state.socket.on("kaila.provider.saved", loadState);
+    state.socket.on("kaila.provider.saved", handleProviderSaved);
     state.socket.on("kaila.offer.saved", handleOfferSaved);
-    state.socket.on("kaila.request.confirmed", loadState);
+    state.socket.on("kaila.request.confirmed", handleRequestConfirmed);
     state.socket.on("kaila.request.passed", handleRequestPassed);
-    state.socket.on("kaila.request.action", loadState);
+    state.socket.on("kaila.request.action", handleRequestAction);
     state.socket.on("kaila.message.saved", handleMessageSaved);
     state.socket.on("kaila.typing.changed", handleTypingChanged);
     state.socket.on("kaila.message.reaction", ({ requestId }) => refreshConversation(requestId));
@@ -2285,6 +2395,7 @@ function handleRequestCreated({ request } = {}) {
   if (state.session.role !== "provider") return;
   if (state.session.role === "provider" && !providerMatchesRequest(request)) return;
   const client = userProfile(request.clientId);
+  announceAttentionEvent("New job request", `${request.category} in ${request.area}`, "request");
 
   queueAttentionModal({
     customClass: { popup: "kaila-popup attention-request-popup" },
@@ -2333,6 +2444,7 @@ async function handleOfferSaved({ requestId, offer } = {}) {
   const isCounter = offer.type === "counter";
   const enrichedOffer = offers.find((item) => item.providerId === offer.providerId) || offer;
   const provider = userProfile(offer.providerId);
+  announceAttentionEvent(isCounter ? "New counter-offer" : "New offer received", `${offer.providerName} sent ${formatCurrency(offer.amount)} for ${request.category}`, "offer");
   if (offers.length > 1) {
     if (updateActiveOfferPrompt(request, isCounter)) return;
     queueAttentionModal(compactOfferAttentionOptions(request, isCounter));
@@ -2479,6 +2591,7 @@ function handleMessageSaved({ requestId, message } = {}) {
     refreshConversation(requestId);
     return;
   }
+  announceAttentionEvent("New job message", `${message.senderName}: ${message.detail}`, "message");
 
   queueAttentionModal({
     icon: "info",
@@ -2494,10 +2607,87 @@ function handleMessageSaved({ requestId, message } = {}) {
   });
 }
 
+async function handleProviderSaved({ provider } = {}) {
+  await loadState();
+  if (!provider || !state.session || provider.userId === state.session.id || state.session.role !== "admin") return;
+  announceAttentionEvent("Provider profile updated", `${provider.name || "A provider"} updated their service profile.`, "update");
+}
+
+async function handleRequestConfirmed({ requestId, actorId } = {}) {
+  await loadState();
+  const request = state.requests.find((item) => item.id === requestId);
+  if (!request || !isRequestParty(request) || actorId === state.session?.id) return;
+  announceAttentionEvent("Offer confirmed", `${request.category} is now confirmed. Messaging and audio calls are open.`, "confirmed");
+}
+
+async function handleRequestAction({ requestId, action, status, actorId } = {}) {
+  await loadState();
+  const request = state.requests.find((item) => item.id === requestId);
+  if (!request || !isRequestParty(request) || actorId === state.session?.id) return;
+  const titles = {
+    start: "Job started",
+    provider_complete: "Job marked done",
+    client_complete: "Completion confirmed",
+    rate: "New rating submitted",
+    cancel: "Job cancelled",
+    dispute: "Job disputed",
+    request_revision: "Revision requested",
+    auto_confirm: "Job auto-confirmed",
+    rating_window_closed: "Rating window closed",
+  };
+  announceAttentionEvent(titles[action] || "Job updated", `${request.category}: ${status || request.status}`, ["dispute", "cancel", "request_revision"].includes(action) ? "urgent" : "update");
+}
+
+function isRequestParty(request = {}) {
+  return Boolean(state.session && (request.clientId === state.session.id || request.acceptedProviderId === state.session.id));
+}
+
 function handleTypingChanged({ requestId, senderId, senderName, typing } = {}) {
   if (requestId !== state.activeConversationId || senderId === state.session?.id) return;
   const host = $("[data-chat-typing]");
   if (host) host.textContent = typing ? `${senderName} is typing...` : "";
+}
+
+function announceAttentionEvent(title, detail = "", kind = "update") {
+  playAttentionTone(kind);
+  navigator.vibrate?.(kind === "urgent" ? [500, 100, 500, 100, 700] : [280, 90, 280, 90, 420]);
+  if (document.hidden && window.Notification?.permission === "granted") {
+    new Notification(`KAILA: ${title}`, {
+      body: detail,
+      icon: "assets/android-chrome-192x192.png",
+      tag: `kaila-${kind}`,
+    });
+  }
+}
+
+function playAttentionTone(kind = "update") {
+  if (state.call || callTone) return;
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return;
+  attentionTone?.close().catch(() => {});
+  const context = new AudioContext();
+  attentionTone = context;
+  const urgent = kind === "urgent";
+  const notes = urgent ? [980, 720, 980, 720] : [880, 1120, 880];
+  notes.forEach((frequency, index) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const start = context.currentTime + index * 0.18;
+    oscillator.type = index % 2 ? "square" : "sawtooth";
+    oscillator.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(urgent ? 0.34 : 0.26, start + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.15);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(start + 0.18);
+  });
+  context.resume().catch(() => {});
+  setTimeout(() => {
+    if (attentionTone !== context) return;
+    context.close().catch(() => {});
+    attentionTone = null;
+  }, notes.length * 180 + 180);
 }
 
 function queueAttentionModal(options) {

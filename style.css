@@ -1851,6 +1851,218 @@ select[multiple].form-select {
   gap: 0.35rem;
 }
 
+body.call-overlay-open {
+  overflow: hidden;
+}
+
+.audio-call-panel.audio-call-overlay {
+  inset: 0;
+  display: grid;
+  width: 100vw;
+  min-height: 100vh;
+  min-height: 100dvh;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 1fr auto;
+  align-items: stretch;
+  justify-content: stretch;
+  gap: 1rem;
+  max-width: none;
+  margin: 0;
+  padding: max(1rem, env(safe-area-inset-top)) 1rem max(1.5rem, env(safe-area-inset-bottom));
+  border: 0;
+  border-radius: 0;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(242, 198, 109, 0.2), transparent 15rem),
+    linear-gradient(155deg, #0b4552 0%, #082f39 62%, #061f27 100%);
+  box-shadow: none;
+  color: #fff;
+  text-align: center;
+}
+
+.audio-call-overlay-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.audio-call-secure,
+.audio-call-state {
+  color: rgba(255, 255, 255, 0.78) !important;
+  font-size: 0.7rem !important;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+}
+
+.audio-call-secure i {
+  margin-right: 0.25rem;
+}
+
+.audio-call-minimize,
+.audio-call-mini-action {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.audio-call-stage {
+  display: grid;
+  width: 100%;
+  align-content: center;
+  justify-items: center;
+  justify-self: stretch;
+  gap: 0.65rem;
+}
+
+.audio-call-avatar {
+  width: clamp(7.5rem, 32vw, 10rem);
+  aspect-ratio: 1;
+  margin-bottom: 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 0 0 0.65rem rgba(255, 255, 255, 0.05);
+  object-fit: cover;
+}
+
+.audio-call-state {
+  display: flex !important;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.audio-call-live-dot {
+  display: inline-block !important;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #71e2a1;
+  box-shadow: 0 0 0 0.24rem rgba(113, 226, 161, 0.18);
+}
+
+.audio-call-stage h2 {
+  margin: 0;
+  color: #fff;
+  font-size: clamp(1.65rem, 7vw, 2.4rem);
+  font-weight: 900;
+}
+
+.audio-call-stage p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.86rem;
+}
+
+.audio-call-duration {
+  color: #fff;
+  font-size: 1.45rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+}
+
+.audio-call-overlay-actions {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  justify-self: stretch;
+  gap: clamp(1.4rem, 12vw, 3rem);
+}
+
+.audio-call-control {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  min-width: 4.5rem;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-size: 0.78rem;
+}
+
+.audio-call-control span {
+  display: grid;
+  width: 4.25rem;
+  height: 4.25rem;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 1.25rem;
+}
+
+.audio-call-control.end span,
+.audio-call-mini-action.end {
+  border-color: transparent;
+  background: #dc3545;
+}
+
+.audio-call-control.answer span {
+  background: #20a66a;
+}
+
+.audio-call-panel.minimized {
+  max-width: 34rem;
+  padding: 0.5rem;
+  border-color: rgba(11, 69, 82, 0.25);
+  background: var(--surface-soft);
+  backdrop-filter: blur(18px);
+}
+
+.audio-call-minimized-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 0.65rem;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.audio-call-minimized-main span:last-child {
+  min-width: 0;
+}
+
+.audio-call-mini-photo {
+  width: 2.6rem;
+  height: 2.6rem;
+  flex: 0 0 auto;
+  border: 2px solid rgba(32, 166, 106, 0.48);
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.audio-call-minimized-main strong,
+.audio-call-minimized-main small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-call-minimized-main small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.audio-call-mini-action {
+  flex: 0 0 auto;
+  width: 2.45rem;
+  height: 2.45rem;
+  border-color: var(--line);
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
 .chat-transcript {
   display: grid;
   gap: 0.45rem;

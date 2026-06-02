@@ -1302,7 +1302,7 @@ app.post("/api/requests/:id/confirm", requireUser, async (req, res) => {
   const timestamp = nowMysql();
   await pool.query("UPDATE requests SET status = 'Accepted', accepted_provider_id = ?, confirmed_at = ?, updated_at = ? WHERE id = ?", [offerRows[0].provider_id, timestamp, timestamp, req.params.id]);
   await addActivity("Offer accepted", `${request.category} for ${request.client_name}`);
-  broadcast("kaila.request.confirmed", { requestId: req.params.id });
+  broadcast("kaila.request.confirmed", { requestId: req.params.id, actorId: req.user.id });
   res.json({ state: await getStateFor(req.user) });
 });
 
@@ -1406,7 +1406,7 @@ app.post("/api/requests/:id/action", requireUser, async (req, res) => {
     [nextStatus, timestamp, ...extraParams, req.params.id]
   );
   await addActivity(activityTitle, activityDetail);
-  broadcast("kaila.request.action", { requestId: req.params.id, action, status: nextStatus });
+  broadcast("kaila.request.action", { requestId: req.params.id, action, status: nextStatus, actorId: req.user.id });
   res.json({ state: await getStateFor(req.user) });
 });
 
