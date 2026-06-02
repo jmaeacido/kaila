@@ -1541,11 +1541,15 @@ async function startCall(requestId, withVideo = false) {
     call.localStream = await acquireCallMedia(withVideo);
     call.localVideoEnabled = Boolean(call.localStream.getVideoTracks().length);
     call.requestedVideo = call.localVideoEnabled;
+    await refreshCallCameraAvailability(call);
     renderCallPanel();
     call.peerConnection = createPeerConnection(call);
     call.localStream.getTracks().forEach((track) => {
       const sender = call.peerConnection.addTrack(track, call.localStream);
-      if (track.kind === "video") call.videoSender = sender;
+      if (track.kind === "video") {
+        call.videoSender = sender;
+        monitorLocalVideoTrack(call, track);
+      }
     });
     const offer = await call.peerConnection.createOffer();
     await call.peerConnection.setLocalDescription(offer);
@@ -1573,12 +1577,17 @@ function createCallState(requestId, callId, direction, otherName, otherPhotoUrl 
     muted: false,
     localVideoEnabled: withVideo,
     cameraFacingMode: "user",
+    availableVideoInputs: 0,
+    cameraRecoveryTimer: null,
+    recoveringLocalVideo: false,
+    cameraRecoverySuppressed: false,
     remoteVideoEnabled: false,
     remoteVideoExpected: direction === "incoming" && withVideo,
     remoteVideoPaused: false,
     requestedVideo: withVideo,
     remoteStream: new MediaStream(),
     qualityBadSamples: 0,
+    qualityWarningShown: false,
     lastVideoStats: null,
     minimized: false,
     connectedAt: null,
@@ -1709,6 +1718,20 @@ function syncCallMedia(call = state.call) {
   updateCallVideoWaiting(call);
 }
 
+async function refreshCallCameraAvailability(call = state.call) {
+  if (!call || !navigator.mediaDevices?.enumerateDevices) return;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    if (state.call?.callId !== call.callId) return;
+    const availableVideoInputs = devices.filter((device) => device.kind === "videoinput").length;
+    if (call.availableVideoInputs === availableVideoInputs) return;
+    call.availableVideoInputs = availableVideoInputs;
+    renderCallPanel();
+  } catch {}
+}
+
+navigator.mediaDevices?.addEventListener?.("devicechange", () => refreshCallCameraAvailability());
+
 function updateCallVideoWaiting(call = state.call) {
   const waiting = $("[data-call-video-waiting]");
   if (!waiting || !call || state.call?.callId !== call.callId) return;
@@ -1741,10 +1764,18 @@ function renderCallPanel() {
   const showRemoteVideo = (onCall && call.remoteVideoExpected) || call.remoteVideoEnabled;
   const callLabel = call.requestedVideo || call.localVideoEnabled || call.remoteVideoEnabled ? "video call" : "audio call";
   const status = incoming ? `Incoming ${callLabel}` : call.status === "ringing" ? "Calling..." : call.status === "connected" ? `${capitalize(callLabel)} connected` : call.status === "connecting" ? "Connecting..." : "Reconnecting...";
-  panel.className = `audio-call-panel${!minimized ? " audio-call-overlay" : ""}${minimized ? " minimized" : ""}${showRemoteVideo && !minimized ? " video-active" : ""}`;
+  panel.className = `audio-call-panel${!minimized ? " audio-call-overlay" : ""}${minimized ? " minimized" : ""}${showRemoteVideo && !minimized ? " video-active" : ""}${showRemoteVideo && minimized ? " video-minimized" : ""}`;
   document.body.classList.toggle("call-overlay-open", !minimized);
   if (minimized) {
     panel.innerHTML = `
+      ${showRemoteVideo ? `
+        <button class="audio-call-mini-video" type="button" data-call-restore aria-label="Return to active video call">
+          <video data-call-remote-video autoplay muted playsinline></video>
+          <span class="audio-call-mini-video-waiting" data-call-video-waiting${call.remoteVideoPaused ? "" : " hidden"}>
+            <i class="fa-solid fa-video-slash"></i>
+          </span>
+        </button>
+      ` : ""}
       <button class="audio-call-minimized-main" type="button" data-call-restore aria-label="Return to active audio call">
         ${renderCallPhoto(call, "audio-call-mini-photo")}
         <span>
@@ -1760,6 +1791,7 @@ function renderCallPanel() {
       </button>
     `;
     bindCallPanelActions(panel);
+    syncCallMedia(call);
     return;
   }
   panel.innerHTML = `
@@ -1804,7 +1836,7 @@ function renderCallPanel() {
               <span><i class="fa-solid fa-video${call.localVideoEnabled ? "-slash" : ""}"></i></span>
               <b>${call.localVideoEnabled ? "Audio only" : "Start video"}</b>
             </button>
-            ${call.localVideoEnabled ? `
+            ${call.localVideoEnabled && call.availableVideoInputs > 1 ? `
               <button class="audio-call-control" type="button" data-call-switch-camera>
                 <span><i class="fa-solid fa-camera-rotate"></i></span>
                 <b>Flip camera</b>
@@ -1830,7 +1862,7 @@ function bindCallPanelActions(panel) {
   $("[data-call-switch-camera]", panel)?.addEventListener("click", switchCallCamera);
   $("[data-call-end]", panel)?.addEventListener("click", () => endAudioCall(true));
   $("[data-call-minimize]", panel)?.addEventListener("click", () => setCallMinimized(true));
-  $("[data-call-restore]", panel)?.addEventListener("click", () => setCallMinimized(false));
+  $$("[data-call-restore]", panel).forEach((button) => button.addEventListener("click", () => setCallMinimized(false)));
 }
 
 function setCallMinimized(minimized) {
@@ -1872,11 +1904,15 @@ async function acceptAudioCall() {
     renderCallPanel();
     call.localStream = await acquireCallMedia(call.requestedVideo);
     call.localVideoEnabled = Boolean(call.localStream.getVideoTracks().length);
+    await refreshCallCameraAvailability(call);
     renderCallPanel();
     call.peerConnection = createPeerConnection(call);
     call.localStream.getTracks().forEach((track) => {
       const sender = call.peerConnection.addTrack(track, call.localStream);
-      if (track.kind === "video") call.videoSender = sender;
+      if (track.kind === "video") {
+        call.videoSender = sender;
+        monitorLocalVideoTrack(call, track);
+      }
     });
     await call.peerConnection.setRemoteDescription(call.remoteDescription);
     await flushPendingCandidates(call);
@@ -1919,9 +1955,13 @@ async function toggleCallVideo() {
     state.call.localStream.addTrack(track);
     if (state.call.videoSender) await state.call.videoSender.replaceTrack(track);
     else state.call.videoSender = state.call.peerConnection.addTrack(track, state.call.localStream);
+    monitorLocalVideoTrack(state.call, track);
     state.call.localVideoEnabled = true;
     state.call.requestedVideo = true;
     state.call.qualityBadSamples = 0;
+    state.call.qualityWarningShown = false;
+    state.call.lastVideoStats = null;
+    await refreshCallCameraAvailability(state.call);
     await renegotiateCall();
     renderCallPanel();
   } catch (error) {
@@ -1951,13 +1991,49 @@ async function acquireCameraTrack(facingMode) {
   throw lastError || new Error("Camera is unavailable.");
 }
 
+function monitorLocalVideoTrack(call, track) {
+  if (!call || !track || track.kind !== "video") return;
+  track.addEventListener("ended", () => scheduleLocalVideoRecovery(call, track));
+  track.addEventListener("mute", () => scheduleLocalVideoRecovery(call, track));
+  track.addEventListener("unmute", () => clearTimeout(call.cameraRecoveryTimer));
+}
+
+function scheduleLocalVideoRecovery(call, track) {
+  if (!state.call || state.call.callId !== call.callId || !call.localVideoEnabled || call.cameraRecoverySuppressed) return;
+  clearTimeout(call.cameraRecoveryTimer);
+  call.cameraRecoveryTimer = setTimeout(() => recoverLocalVideoTrack(call, track), 2500);
+}
+
+async function recoverLocalVideoTrack(call, failedTrack) {
+  if (!state.call || state.call.callId !== call.callId || !call.localVideoEnabled || call.cameraRecoverySuppressed || call.recoveringLocalVideo) return;
+  if (failedTrack.readyState !== "ended" && !failedTrack.muted) return;
+  call.recoveringLocalVideo = true;
+  try {
+    const track = await acquireCameraTrack(call.cameraFacingMode);
+    await call.videoSender?.replaceTrack(track);
+    if (call.localStream.getTracks().includes(failedTrack)) call.localStream.removeTrack(failedTrack);
+    if (failedTrack.readyState !== "ended") failedTrack.stop();
+    call.localStream.addTrack(track);
+    call.cameraFacingMode = track.getSettings().facingMode || call.cameraFacingMode;
+    monitorLocalVideoTrack(call, track);
+    call.qualityBadSamples = 0;
+    call.lastVideoStats = null;
+    renderCallPanel();
+  } catch (error) {
+    notify("Camera recovery failed", cameraErrorText(error), "warning");
+  } finally {
+    call.recoveringLocalVideo = false;
+  }
+}
+
 async function switchCallCamera() {
   const call = state.call;
-  if (!call?.localVideoEnabled || !call.videoSender || !call.localStream) return;
+  if (!call?.localVideoEnabled || !call.videoSender || !call.localStream || call.availableVideoInputs < 2) return;
   const previousFacingMode = call.cameraFacingMode;
   const facingMode = call.cameraFacingMode === "environment" ? "user" : "environment";
   const oldTrack = call.localStream.getVideoTracks()[0];
   try {
+    call.cameraRecoverySuppressed = true;
     if (oldTrack) {
       call.localStream.removeTrack(oldTrack);
       oldTrack.stop();
@@ -1967,8 +2043,10 @@ async function switchCallCamera() {
     await call.videoSender.replaceTrack(track);
     call.localStream.addTrack(track);
     call.cameraFacingMode = track.getSettings().facingMode || facingMode;
+    monitorLocalVideoTrack(call, track);
     call.qualityBadSamples = 0;
     call.lastVideoStats = null;
+    await refreshCallCameraAvailability(call);
     renderCallPanel();
   } catch (error) {
     try {
@@ -1976,6 +2054,7 @@ async function switchCallCamera() {
       await call.videoSender.replaceTrack(fallbackTrack);
       call.localStream.addTrack(fallbackTrack);
       call.cameraFacingMode = fallbackTrack.getSettings().facingMode || previousFacingMode;
+      monitorLocalVideoTrack(call, fallbackTrack);
     } catch {
       call.localVideoEnabled = false;
       call.requestedVideo = false;
@@ -1985,29 +2064,38 @@ async function switchCallCamera() {
     call.lastVideoStats = null;
     notify("Camera switch unavailable", cameraErrorText(error), "warning");
     renderCallPanel();
+  } finally {
+    call.cameraRecoverySuppressed = false;
   }
 }
 
 async function disableCallVideo({ automatic = false } = {}) {
   const call = state.call;
   if (!call?.peerConnection || !call.localStream) return;
-  const videoTracks = call.localStream.getVideoTracks();
-  for (const track of videoTracks) {
-    const sender = call.peerConnection.getSenders().find((item) => item.track === track);
-    if (sender) {
-      call.videoSender = sender;
-      await sender.replaceTrack(null);
+  call.cameraRecoverySuppressed = true;
+  clearTimeout(call.cameraRecoveryTimer);
+  try {
+    const videoTracks = call.localStream.getVideoTracks();
+    for (const track of videoTracks) {
+      const sender = call.peerConnection.getSenders().find((item) => item.track === track);
+      if (sender) {
+        call.videoSender = sender;
+        await sender.replaceTrack(null);
+      }
+      call.localStream.removeTrack(track);
+      track.stop();
     }
-    call.localStream.removeTrack(track);
-    track.stop();
+    call.localVideoEnabled = false;
+    call.requestedVideo = false;
+    call.qualityBadSamples = 0;
+    call.qualityWarningShown = false;
+    call.lastVideoStats = null;
+    await renegotiateCall();
+    renderCallPanel();
+    if (automatic) notify("Switched to audio only", "Video was paused because the connection is slow.", "warning");
+  } finally {
+    call.cameraRecoverySuppressed = false;
   }
-  call.localVideoEnabled = false;
-  call.requestedVideo = false;
-  call.qualityBadSamples = 0;
-  call.lastVideoStats = null;
-  await renegotiateCall();
-  renderCallPanel();
-  if (automatic) notify("Switched to audio only", "Video was paused because the connection is slow.", "warning");
 }
 
 async function renegotiateCall() {
@@ -2022,6 +2110,7 @@ function endAudioCall(notifyOther = true) {
   if (!state.call) return;
   if (notifyOther) emitCallSignal("hangup");
   clearTimeout(state.call.ringingTimer);
+  clearTimeout(state.call.cameraRecoveryTimer);
   stopCallTone();
   state.call.localStream?.getTracks().forEach((track) => track.stop());
   state.call.peerConnection?.close();
@@ -2203,13 +2292,16 @@ async function checkCallVideoQuality(call) {
       && Number.isFinite(current.framesEncoded)
       && current.framesEncoded <= previous.framesEncoded;
     const severeSignals = [
-      Number.isFinite(pair?.currentRoundTripTime) && pair.currentRoundTripTime > 3,
-      Number.isFinite(pair?.availableOutgoingBitrate) && pair.availableOutgoingBitrate < 35000,
-      Number.isFinite(remoteInbound?.fractionLost) && remoteInbound.fractionLost > 0.45,
+      Number.isFinite(pair?.currentRoundTripTime) && pair.currentRoundTripTime > 4,
+      Number.isFinite(pair?.availableOutgoingBitrate) && pair.availableOutgoingBitrate < 20000,
+      Number.isFinite(remoteInbound?.fractionLost) && remoteInbound.fractionLost > 0.6,
     ].filter(Boolean).length;
-    const slow = stalled || severeSignals >= 2;
+    const slow = stalled && severeSignals >= 2;
     call.qualityBadSamples = slow ? call.qualityBadSamples + 1 : Math.max(0, call.qualityBadSamples - 1);
-    if (call.qualityBadSamples >= 8) await disableCallVideo({ automatic: true });
+    if (call.qualityBadSamples >= 12 && !call.qualityWarningShown) {
+      call.qualityWarningShown = true;
+      notify("Weak video connection", "Video quality may be reduced. The call will remain on video unless you switch to audio only.", "warning");
+    }
   } catch {}
 }
 
