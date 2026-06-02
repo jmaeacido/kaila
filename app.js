@@ -1579,17 +1579,21 @@ function createCallState(requestId, callId, direction, otherName, otherPhotoUrl 
     cameraFacingMode: "user",
     availableVideoInputs: 0,
     cameraRecoveryTimer: null,
+    remoteRecoveryTimer: null,
     recoveringLocalVideo: false,
     cameraRecoverySuppressed: false,
+    lastCameraRecoveryAt: 0,
     remoteVideoEnabled: false,
     remoteVideoExpected: direction === "incoming" && withVideo,
     remoteVideoPaused: false,
     requestedVideo: withVideo,
     remoteStream: new MediaStream(),
     qualityBadSamples: 0,
+    cameraStallSamples: 0,
     qualityWarningShown: false,
     lastVideoStats: null,
     minimized: false,
+    miniVideoPosition: null,
     connectedAt: null,
     localStream: null,
     peerConnection: null,
@@ -1641,12 +1645,14 @@ function createPeerConnection(call) {
     track.addEventListener("mute", () => {
       if (track.kind !== "video") return;
       call.remoteVideoPaused = true;
+      scheduleRemoteVideoRecoveryRequest(call);
       updateCallVideoWaiting(call);
     });
     track.addEventListener("unmute", () => {
       if (track.kind !== "video") return;
       call.remoteVideoEnabled = true;
       call.remoteVideoPaused = false;
+      clearTimeout(call.remoteRecoveryTimer);
       updateCallVideoWaiting(call);
     });
     if (track.kind === "video") {
@@ -1698,14 +1704,17 @@ function syncCallMedia(call = state.call) {
     remoteVideo.srcObject = call.remoteStream;
     remoteVideo.addEventListener("playing", () => {
       call.remoteVideoPaused = false;
+      clearTimeout(call.remoteRecoveryTimer);
       updateCallVideoWaiting(call);
     });
     remoteVideo.addEventListener("waiting", () => {
       call.remoteVideoPaused = true;
+      scheduleRemoteVideoRecoveryRequest(call);
       updateCallVideoWaiting(call);
     });
     remoteVideo.addEventListener("stalled", () => {
       call.remoteVideoPaused = true;
+      scheduleRemoteVideoRecoveryRequest(call);
       updateCallVideoWaiting(call);
     });
     remoteVideo.play().catch(() => {});
@@ -1736,6 +1745,12 @@ function updateCallVideoWaiting(call = state.call) {
   const waiting = $("[data-call-video-waiting]");
   if (!waiting || !call || state.call?.callId !== call.callId) return;
   waiting.hidden = !call.remoteVideoPaused;
+}
+
+function scheduleRemoteVideoRecoveryRequest(call) {
+  if (!state.call || state.call.callId !== call.callId || !call.remoteVideoExpected) return;
+  clearTimeout(call.remoteRecoveryTimer);
+  call.remoteRecoveryTimer = setTimeout(() => emitCallSignal("video-stalled"), 3000);
 }
 
 function renderCallPanel() {
@@ -1769,7 +1784,7 @@ function renderCallPanel() {
   if (minimized) {
     panel.innerHTML = `
       ${showRemoteVideo ? `
-        <button class="audio-call-mini-video" type="button" data-call-restore aria-label="Return to active video call">
+        <button class="audio-call-mini-video" type="button" data-call-mini-video data-call-restore aria-label="Drag receiver video or tap to return to active video call">
           <video data-call-remote-video autoplay muted playsinline></video>
           <span class="audio-call-mini-video-waiting" data-call-video-waiting${call.remoteVideoPaused ? "" : " hidden"}>
             <i class="fa-solid fa-video-slash"></i>
@@ -1862,8 +1877,66 @@ function bindCallPanelActions(panel) {
   $("[data-call-switch-camera]", panel)?.addEventListener("click", switchCallCamera);
   $("[data-call-end]", panel)?.addEventListener("click", () => endAudioCall(true));
   $("[data-call-minimize]", panel)?.addEventListener("click", () => setCallMinimized(true));
-  $$("[data-call-restore]", panel).forEach((button) => button.addEventListener("click", () => setCallMinimized(false)));
+  const miniVideo = $("[data-call-mini-video]", panel);
+  if (miniVideo) bindDraggableMiniVideo(miniVideo);
+  $$("[data-call-restore]", panel).forEach((button) => button.addEventListener("click", () => {
+    if (button === miniVideo && miniVideo.dataset.preventRestore) {
+      delete miniVideo.dataset.preventRestore;
+      return;
+    }
+    setCallMinimized(false);
+  }));
 }
+
+function bindDraggableMiniVideo(tile) {
+  const call = state.call;
+  if (!call) return;
+  applyMiniVideoPosition(tile, call.miniVideoPosition);
+  tile.addEventListener("pointerdown", (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    const rect = tile.getBoundingClientRect();
+    const start = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
+    let dragged = false;
+    tile.setPointerCapture?.(event.pointerId);
+    const move = (moveEvent) => {
+      const left = start.left + moveEvent.clientX - start.x;
+      const top = start.top + moveEvent.clientY - start.y;
+      if (Math.abs(moveEvent.clientX - start.x) > 5 || Math.abs(moveEvent.clientY - start.y) > 5) dragged = true;
+      call.miniVideoPosition = applyMiniVideoPosition(tile, { left, top });
+    };
+    const stop = () => {
+      tile.removeEventListener("pointermove", move);
+      tile.removeEventListener("pointerup", stop);
+      tile.removeEventListener("pointercancel", stop);
+      if (dragged) tile.dataset.preventRestore = "true";
+    };
+    tile.addEventListener("pointermove", move);
+    tile.addEventListener("pointerup", stop);
+    tile.addEventListener("pointercancel", stop);
+  });
+}
+
+function applyMiniVideoPosition(tile, position) {
+  if (!position) return null;
+  const margin = 8;
+  const maxLeft = Math.max(margin, window.innerWidth - tile.offsetWidth - margin);
+  const maxTop = Math.max(margin, window.innerHeight - tile.offsetHeight - margin);
+  const next = {
+    left: Math.min(maxLeft, Math.max(margin, position.left)),
+    top: Math.min(maxTop, Math.max(margin, position.top)),
+  };
+  tile.style.left = `${next.left}px`;
+  tile.style.top = `${next.top}px`;
+  tile.style.right = "auto";
+  tile.style.bottom = "auto";
+  return next;
+}
+
+window.addEventListener("resize", () => {
+  const tile = $("[data-call-mini-video]");
+  if (!tile || !state.call?.miniVideoPosition) return;
+  state.call.miniVideoPosition = applyMiniVideoPosition(tile, state.call.miniVideoPosition);
+});
 
 function setCallMinimized(minimized) {
   if (!state.call) return;
@@ -1998,16 +2071,19 @@ function monitorLocalVideoTrack(call, track) {
   track.addEventListener("unmute", () => clearTimeout(call.cameraRecoveryTimer));
 }
 
-function scheduleLocalVideoRecovery(call, track) {
-  if (!state.call || state.call.callId !== call.callId || !call.localVideoEnabled || call.cameraRecoverySuppressed) return;
+function scheduleLocalVideoRecovery(call, track, force = false) {
+  if (!state.call || state.call.callId !== call.callId || !call.localVideoEnabled || call.cameraRecoverySuppressed || call.recoveringLocalVideo) return;
+  if (!force && !call.localStream?.getTracks().includes(track) && call.videoSender?.track !== track) return;
   clearTimeout(call.cameraRecoveryTimer);
-  call.cameraRecoveryTimer = setTimeout(() => recoverLocalVideoTrack(call, track), 2500);
+  call.cameraRecoveryTimer = setTimeout(() => recoverLocalVideoTrack(call, track, force), force ? 400 : 2500);
 }
 
-async function recoverLocalVideoTrack(call, failedTrack) {
+async function recoverLocalVideoTrack(call, failedTrack, force = false) {
   if (!state.call || state.call.callId !== call.callId || !call.localVideoEnabled || call.cameraRecoverySuppressed || call.recoveringLocalVideo) return;
-  if (failedTrack.readyState !== "ended" && !failedTrack.muted) return;
+  if (!force && failedTrack.readyState !== "ended" && !failedTrack.muted) return;
+  if (force && Date.now() - call.lastCameraRecoveryAt < 10000) return;
   call.recoveringLocalVideo = true;
+  call.lastCameraRecoveryAt = Date.now();
   try {
     const track = await acquireCameraTrack(call.cameraFacingMode);
     await call.videoSender?.replaceTrack(track);
@@ -2017,6 +2093,7 @@ async function recoverLocalVideoTrack(call, failedTrack) {
     call.cameraFacingMode = track.getSettings().facingMode || call.cameraFacingMode;
     monitorLocalVideoTrack(call, track);
     call.qualityBadSamples = 0;
+    call.cameraStallSamples = 0;
     call.lastVideoStats = null;
     renderCallPanel();
   } catch (error) {
@@ -2074,6 +2151,7 @@ async function disableCallVideo({ automatic = false } = {}) {
   if (!call?.peerConnection || !call.localStream) return;
   call.cameraRecoverySuppressed = true;
   clearTimeout(call.cameraRecoveryTimer);
+  clearTimeout(call.remoteRecoveryTimer);
   try {
     const videoTracks = call.localStream.getVideoTracks();
     for (const track of videoTracks) {
@@ -2111,6 +2189,7 @@ function endAudioCall(notifyOther = true) {
   if (notifyOther) emitCallSignal("hangup");
   clearTimeout(state.call.ringingTimer);
   clearTimeout(state.call.cameraRecoveryTimer);
+  clearTimeout(state.call.remoteRecoveryTimer);
   stopCallTone();
   state.call.localStream?.getTracks().forEach((track) => track.stop());
   state.call.peerConnection?.close();
@@ -2136,7 +2215,15 @@ function emitCallSignal(type, extra = {}) {
 }
 
 async function handleCallSignal(signal = {}) {
-  if (!state.session || signal.senderId === state.session.id) return;
+  if (!state.session) return;
+  if (signal.type === "answered-elsewhere") {
+    if (state.call?.callId === signal.callId && state.call.status === "incoming") {
+      endAudioCall(false);
+      notify("Call answered", "This call was answered on another signed-in device.", "info");
+    }
+    return;
+  }
+  if (signal.senderId === state.session.id) return;
   if (signal.type === "offer") {
     if (!callSupported()) {
       state.socket?.emit("kaila.call.signal", { requestId: signal.requestId, callId: signal.callId, type: "reject" });
@@ -2176,6 +2263,9 @@ async function handleCallSignal(signal = {}) {
   } else if (signal.type === "candidate") {
     if (state.call.peerConnection?.remoteDescription) await state.call.peerConnection.addIceCandidate(signal.candidate);
     else state.call.pendingCandidates.push(signal.candidate);
+  } else if (signal.type === "video-stalled") {
+    const track = state.call.localStream?.getVideoTracks()[0];
+    if (track) scheduleLocalVideoRecovery(state.call, track, true);
   } else if (["hangup", "reject", "busy", "offline"].includes(signal.type)) {
     const message = signal.type === "busy" ? "The other party is already on a call." : signal.type === "reject" ? "The other party declined the call." : signal.type === "offline" ? "The other party went offline." : "The audio call ended.";
     endAudioCall(false);
@@ -2291,6 +2381,12 @@ async function checkCallVideoQuality(call) {
       && Number.isFinite(previous.framesEncoded)
       && Number.isFinite(current.framesEncoded)
       && current.framesEncoded <= previous.framesEncoded;
+    call.cameraStallSamples = stalled ? call.cameraStallSamples + 1 : 0;
+    if (call.cameraStallSamples >= 3) {
+      const track = call.localStream?.getVideoTracks()[0];
+      if (track) scheduleLocalVideoRecovery(call, track, true);
+      call.cameraStallSamples = 0;
+    }
     const severeSignals = [
       Number.isFinite(pair?.currentRoundTripTime) && pair.currentRoundTripTime > 4,
       Number.isFinite(pair?.availableOutgoingBitrate) && pair.availableOutgoingBitrate < 20000,

@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v46";
+const CACHE_NAME = "kaila-pwa-v49";
 const APP_PATH = new URL("./", self.location.href).pathname;
 const APP_SHELL = [
   "./",

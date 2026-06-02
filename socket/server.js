@@ -1582,7 +1582,7 @@ io.on("connection", (socket) => {
       const requestId = String(payload.requestId || "");
       const callId = String(payload.callId || "");
       const type = String(payload.type || "");
-      if (!requestId || !callId || !["offer", "answer", "candidate", "renegotiate", "hangup", "reject", "busy"].includes(type)) {
+      if (!requestId || !callId || !["offer", "answer", "candidate", "renegotiate", "video-stalled", "hangup", "reject", "busy"].includes(type)) {
         throw new Error("Invalid call signal");
       }
       const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
@@ -1595,7 +1595,29 @@ io.on("connection", (socket) => {
         activeCalls.delete(callId);
         return acknowledge({ ok: false, code: "recipient_offline", error: "The other party is offline" });
       }
-      if (type === "offer") activeCalls.set(callId, { requestId, userIds: [user.id, targetUserId] });
+      if (type === "offer") activeCalls.set(callId, { requestId, userIds: [user.id, targetUserId], answeredBySocketId: "", declinedSocketIds: new Set() });
+      const activeCall = activeCalls.get(callId);
+      if (type === "answer") {
+        if (activeCall?.answeredBySocketId && activeCall.answeredBySocketId !== socket.id) {
+          return acknowledge({ ok: false, code: "answered_elsewhere", error: "This call was answered on another device" });
+        }
+        if (activeCall) activeCall.answeredBySocketId = socket.id;
+        socket.to(`user:${user.id}`).emit("kaila.call.signal", {
+          requestId,
+          callId,
+          type: "answered-elsewhere",
+          senderId: user.id,
+          senderName: user.name,
+        });
+      }
+      if (type === "reject" && activeCall?.answeredBySocketId && activeCall.answeredBySocketId !== socket.id) {
+        return acknowledge({ ok: true });
+      }
+      if (type === "reject" && activeCall && !activeCall.answeredBySocketId) {
+        activeCall.declinedSocketIds.add(socket.id);
+        const userSockets = await io.in(`user:${user.id}`).fetchSockets();
+        if (userSockets.some((item) => !activeCall.declinedSocketIds.has(item.id))) return acknowledge({ ok: true });
+      }
       if (["hangup", "reject", "busy"].includes(type)) activeCalls.delete(callId);
       relayCallSignal(targetUserId, {
         requestId,

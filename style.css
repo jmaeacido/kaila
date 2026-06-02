@@ -2091,7 +2091,6 @@ body.call-overlay-open {
   padding: 0.5rem;
   border-color: rgba(11, 69, 82, 0.25);
   background: var(--surface-soft);
-  backdrop-filter: blur(18px);
 }
 
 .audio-call-panel.video-minimized {
@@ -2099,9 +2098,10 @@ body.call-overlay-open {
 }
 
 .audio-call-mini-video {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 0.55rem);
+  position: fixed;
+  z-index: 2001;
+  right: 0.75rem;
+  bottom: 4.75rem;
   display: block;
   width: clamp(8rem, 22vw, 11rem);
   aspect-ratio: 3 / 4;
@@ -2111,6 +2111,13 @@ body.call-overlay-open {
   border-radius: 14px;
   background: #031a20;
   box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.3);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.audio-call-mini-video:active {
+  cursor: grabbing;
 }
 
 .audio-call-mini-video video {
