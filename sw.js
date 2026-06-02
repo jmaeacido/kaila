@@ -1,4 +1,5 @@
-const CACHE_NAME = "kaila-pwa-v32";
+const CACHE_NAME = "kaila-pwa-v33";
+const APP_PATH = new URL("./", self.location.href).pathname;
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -33,7 +34,7 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const requestUrl = new URL(event.request.url);
 
-  if (requestUrl.origin !== self.location.origin) return;
+  if (requestUrl.origin !== self.location.origin || !requestUrl.pathname.startsWith(APP_PATH)) return;
   const isFreshAsset = ["script", "style", "manifest"].includes(event.request.destination)
     || /\.(?:js|css|webmanifest)$/i.test(requestUrl.pathname);
 
