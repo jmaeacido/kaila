@@ -1611,17 +1611,25 @@ select[multiple].form-select {
 
 .swal2-popup.kaila-popup {
   width: min(96vw, 1040px);
+  max-width: 96vw;
   border-radius: 14px;
 }
 
 .swal2-popup.kaila-popup.profile-popup {
   width: min(96vw, 1040px);
+  max-width: 96vw;
 }
 
 .swal2-popup.kaila-popup.attention-request-popup,
 .swal2-popup.kaila-popup.compact-offers-popup,
 .swal2-popup.kaila-popup.media-popup {
   width: min(96vw, 1040px);
+  max-width: 96vw;
+}
+
+.swal2-popup.kaila-popup .swal2-html-container {
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .swal2-popup.kaila-popup .swal2-title {
@@ -1767,6 +1775,8 @@ select[multiple].form-select {
 .swal-form {
   display: grid;
   gap: 0.55rem;
+  max-width: 100%;
+  min-width: 0;
   text-align: left;
   color: var(--ink);
 }
@@ -1776,6 +1786,15 @@ select[multiple].form-select {
   align-content: start;
   align-self: start;
   gap: 0.25rem;
+  min-width: 0;
+}
+
+.swal-form .form-control,
+.swal-form .form-select,
+.address-grid .form-control,
+.address-grid .form-select {
+  width: 100%;
+  min-width: 0;
 }
 
 .validation-briefer {
@@ -1812,6 +1831,7 @@ select[multiple].form-select {
 
 .validation-draft-tools {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
@@ -1832,6 +1852,7 @@ select[multiple].form-select {
   display: inline-flex;
   width: fit-content;
   max-width: 100%;
+  min-width: 0;
   gap: 0.24rem;
   align-items: flex-start;
 }
@@ -1862,6 +1883,7 @@ select[multiple].form-select {
 
 .question-help::after {
   position: absolute;
+  display: none;
   left: 50%;
   bottom: calc(100% + 0.45rem);
   z-index: 3;
@@ -1909,6 +1931,7 @@ select[multiple].form-select {
 
 .question-help:hover::after,
 .question-help:focus-visible::after {
+  display: block;
   opacity: 1;
   transform: translate(-50%, 0);
 }
@@ -2737,11 +2760,71 @@ body.call-overlay-open {
   .swal-form .wide {
     grid-column: 1 / -1;
   }
+
+  .address-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (min-width: 900px) {
+  .swal-form.two {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .swal-form.two > label {
+    grid-column: span 2;
+  }
+
+  .swal-form.two > .field-sm {
+    grid-column: span 1;
+  }
+
+  .swal-form.two > .field-md {
+    grid-column: span 2;
+  }
+
+  .swal-form.two > .field-lg {
+    grid-column: span 3;
+  }
+
+  .swal-form.two > .wide {
+    grid-column: 1 / -1;
+  }
+
+  .address-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .address-grid label {
+    grid-column: span 1;
+  }
+
+  .address-grid .field-sm {
+    grid-column: span 1;
+  }
+
+  .address-grid .field-md {
+    grid-column: span 2;
+  }
+
+  .address-grid .field-lg {
+    grid-column: span 3;
+  }
+
+  .address-grid label:nth-child(-n + 3) {
+    grid-column: span 2;
+  }
+
+  .address-grid label:nth-child(-n + 3).field-sm {
+    grid-column: span 1;
+  }
+
+  .address-grid label:nth-child(-n + 3).field-lg {
+    grid-column: span 3;
+  }
+
   .profile-popup .swal-form.two {
-    grid-template-columns: repeat(2, minmax(20rem, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.7rem 0.85rem;
   }
 

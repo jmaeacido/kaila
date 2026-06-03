@@ -4256,14 +4256,49 @@ function categoryList(value = "") {
   return Array.from(new Set(String(value || "").split(",").map((item) => item.trim()).filter(Boolean)));
 }
 
+function tuneFormDensity(scope = document) {
+  $$(".swal-form.two > label, .address-grid > label", scope).forEach((label) => {
+    if (label.classList.contains("wide") || label.matches(".field-sm, .field-md, .field-lg")) return;
+    const control = label.querySelector("select, input, textarea");
+    if (!control) return;
+    label.classList.add(fieldDensityClass(control));
+  });
+}
+
+function fieldDensityClass(control) {
+  const tag = control.tagName;
+  if (tag === "TEXTAREA") return "field-lg";
+  if (tag === "SELECT") {
+    const longestOption = Array.from(control.options).reduce((longest, option) => Math.max(longest, option.textContent.trim().length), 0);
+    if (longestOption <= 12) return "field-sm";
+    if (longestOption <= 32) return "field-md";
+    return "field-lg";
+  }
+  if (tag === "INPUT") {
+    const type = (control.getAttribute("type") || "text").toLowerCase();
+    if (["checkbox", "radio", "number", "time", "date", "month", "week"].includes(type)) return "field-sm";
+    if (["tel", "email", "password"].includes(type)) return "field-md";
+    if (["url", "file"].includes(type)) return "field-lg";
+    const maxLength = Number(control.getAttribute("maxlength") || 0);
+    if (maxLength && maxLength <= 40) return "field-sm";
+    const placeholderLength = (control.getAttribute("placeholder") || "").trim().length;
+    if (placeholderLength && placeholderLength <= 16) return "field-sm";
+  }
+  return "field-md";
+}
+
 function modal(options) {
-  const { customClass = {}, ...modalOptions } = options;
+  const { customClass = {}, didOpen, ...modalOptions } = options;
   const popupClass = ["kaila-popup", customClass.popup].filter(Boolean).join(" ");
   return window.Swal.fire({
     customClass: { ...customClass, popup: popupClass },
     showCancelButton: true,
     reverseButtons: true,
     focusConfirm: false,
+    didOpen: (popup) => {
+      tuneFormDensity(popup);
+      didOpen?.(popup);
+    },
     ...modalOptions,
   });
 }
