@@ -51,13 +51,13 @@ python -m http.server 8000 --bind 127.0.0.1
 
 Open `http://127.0.0.1:8000`.
 
-For Laragon on this workstation, Apache HTTPS is configured at:
+On this server, nginx serves KAILA over HTTPS at:
 
 ```text
-https://localhost/kaila/
+https://kaila-app.duckdns.org/
 ```
 
-When KAILA is opened over HTTPS, the frontend automatically uses the Apache reverse proxy at `https://localhost/kaila-api`. Apache forwards API requests and Socket.IO traffic to the Node service on `http://127.0.0.1:6002`.
+The nginx site config lives in `deploy/nginx/kaila-https.conf` and is installed at `/etc/nginx/sites-available/kaila`. It serves the static PWA from `/var/www/kaila` and reverse-proxies API, media, and Socket.IO traffic from `https://kaila-app.duckdns.org/kaila-api/` to the Node service on `http://127.0.0.1:6002`.
 
 Run KAILA's MySQL-backed API/socket:
 
@@ -67,7 +67,9 @@ npm install
 npm start
 ```
 
-Default socket URL: `http://<same-host-as-the-web-app>:6002`
+Default socket URL on HTTP: `http://<same-host-as-the-web-app>:6002`
+
+Default socket URL on HTTPS: `https://<same-host-as-the-web-app>/kaila-api`
 
 For example, if the app is opened from another device at `http://crg-co1-23-0028/kaila/`, the browser connects to `http://crg-co1-23-0028:6002`.
 
