@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v53";
+const CACHE_NAME = "kaila-pwa-v54";
 const APP_PATH = new URL("./", self.location.href).pathname;
 const APP_SHELL = [
   "./",
@@ -6,12 +6,15 @@ const APP_SHELL = [
   "./style.css",
   "./app.js",
   "./manifest.webmanifest",
+  "./robots.txt",
+  "./sitemap.xml",
   "./assets/Gingoog City PSGC.xlsx",
   "./assets/android-chrome-192x192.png",
   "./assets/android-chrome-512x512.png",
   "./assets/apple-touch-icon.png",
   "./assets/kaila-icon.svg",
-  "./assets/kaila-logo.svg"
+  "./assets/kaila-logo.svg",
+  "./assets/kaila-preview.png"
 ];
 
 self.addEventListener("install", (event) => {
