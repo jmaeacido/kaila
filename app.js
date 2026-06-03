@@ -76,10 +76,12 @@ async function init() {
 function setupOfflineSync() {
   window.addEventListener("online", () => {
     addActivity("Back online", "KAILA will sync saved offline validation entries.");
+    renderConnectivity();
     syncQueuedValidationEntries();
   });
   window.addEventListener("offline", () => {
     addActivity("Offline mode", "You can keep saving validation entries. They will sync automatically later.");
+    renderConnectivity();
   });
 }
 
@@ -211,7 +213,13 @@ async function apiFetch(path, options = {}) {
       headers,
     });
   } catch (error) {
-    const offlineError = new Error(navigator.onLine ? "KAILA API is unavailable. Saved validation entries will sync later." : "You are offline. Saved validation entries will sync later.");
+    const offlineMessage = path === "/api/login"
+      ? "You are offline. Use offline login on a device that has already verified this account online."
+      : "You are offline. Saved validation entries will sync later.";
+    const unavailableMessage = path === "/api/login"
+      ? "KAILA API is unavailable. Offline login is available after one verified login on this device."
+      : "KAILA API is unavailable. Saved validation entries will sync later.";
+    const offlineError = new Error(navigator.onLine ? unavailableMessage : offlineMessage);
     offlineError.offline = true;
     offlineError.cause = error;
     throw offlineError;
@@ -416,6 +424,7 @@ function render() {
   renderActivity();
   renderSettings();
   renderStats();
+  renderConnectivity();
 }
 
 function renderNav() {
@@ -430,6 +439,33 @@ function renderNav() {
     userPhoto.src = signedIn ? resolveMediaUrl(state.session.photoUrl) : "assets/android-chrome-192x192.png";
     userPhoto.alt = signedIn ? `${state.session.name} photo` : "";
   }
+}
+
+function renderConnectivity() {
+  const summary = offlineQueueSummary();
+  const online = navigator.onLine;
+  const statusText = online ? "Online" : "Offline";
+  const queueText = summary.total ? `${summary.total} queued` : "Queue clear";
+  const detailText = summary.total
+    ? `${summary.validation} validation entr${summary.validation === 1 ? "y" : "ies"} waiting to sync.`
+    : "No saved entries are waiting to sync.";
+
+  $$("[data-queue-status]").forEach((el) => {
+    el.classList.toggle("offline", !online);
+    el.classList.toggle("has-queue", summary.total > 0);
+    el.textContent = `${statusText} / ${queueText}`;
+    el.title = detailText;
+  });
+
+  $$("[data-login-queue-status]").forEach((el) => {
+    el.classList.toggle("offline", !online);
+    el.classList.toggle("has-queue", summary.total > 0);
+    el.innerHTML = `
+      <strong>${statusText}</strong>
+      <span>${online ? "Login will verify with the server." : "Offline login works after one verified login on this device."}</span>
+      <small>${queueText}. ${escapeHtml(detailText)}</small>
+    `;
+  });
 }
 
 function renderTabs() {
@@ -1451,6 +1487,17 @@ function currentValidationQueue() {
 
 function writeValidationQueue(queue) {
   localStorage.setItem(STORAGE.validationQueue, JSON.stringify(queue));
+  renderConnectivity();
+}
+
+function offlineQueueSummary() {
+  const validation = currentValidationQueue()
+    .filter((item) => !state.session?.id || item.userId === state.session.id)
+    .length;
+  return {
+    validation,
+    total: validation,
+  };
 }
 
 function queueValidationEntry(payload) {
@@ -4235,29 +4282,31 @@ async function successRedirect(title, text) {
 }
 
 async function rememberOfflineLogin(username, password, user) {
-  if (!username || !password || !user || !window.crypto?.subtle) return;
+  if (!username || !password || !user) return;
   const key = offlineUsernameKey(username);
   const credentials = readJson(STORAGE.offlineCredentials, {});
   const salt = cryptoRandomHex(16);
+  const verifiers = await offlinePasswordVerifiers(key, password, salt);
   credentials[key] = {
     user,
     salt,
-    verifier: await offlinePasswordVerifier(key, password, salt),
+    verifier: verifiers[0],
+    verifiers,
     updatedAt: new Date().toISOString(),
   };
   localStorage.setItem(STORAGE.offlineCredentials, JSON.stringify(credentials));
 }
 
 async function tryOfflineLogin(data = {}) {
-  if (!window.crypto?.subtle) return false;
   const key = offlineUsernameKey(data.username);
   const stored = readJson(STORAGE.offlineCredentials, {})[key];
   if (!stored?.user || !stored.salt || !stored.verifier) {
-    notify("Offline login unavailable", "Log in once while online on this device first.", "warning");
+    notify("Offline login unavailable", "Log in once while online on this device first so KAILA can save an offline verifier.", "warning");
     return false;
   }
-  const verifier = await offlinePasswordVerifier(key, data.password || "", stored.salt);
-  if (verifier !== stored.verifier) {
+  const verifiers = await offlinePasswordVerifiers(key, data.password || "", stored.salt);
+  const storedVerifiers = [stored.verifier, ...(Array.isArray(stored.verifiers) ? stored.verifiers : [])].filter(Boolean);
+  if (!storedVerifiers.some((storedVerifier) => verifiers.some((verifier) => offlineVerifierMatches(storedVerifier, verifier)))) {
     notify("Offline login failed", "Use the same username and password last verified online on this device.", "error");
     return false;
   }
@@ -4281,15 +4330,46 @@ function offlineUsernameKey(username) {
 }
 
 async function offlinePasswordVerifier(usernameKey, password, salt) {
-  const bytes = new TextEncoder().encode(`${usernameKey}:${salt}:${password}`);
-  const digest = await window.crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const verifiers = await offlinePasswordVerifiers(usernameKey, password, salt);
+  return verifiers[0];
+}
+
+async function offlinePasswordVerifiers(usernameKey, password, salt) {
+  const value = `${usernameKey}:${salt}:${password}`;
+  const verifiers = [];
+  if (window.crypto?.subtle && window.TextEncoder) {
+    const bytes = new TextEncoder().encode(value);
+    const digest = await window.crypto.subtle.digest("SHA-256", bytes);
+    verifiers.push(`sha256:${Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("")}`);
+  }
+  verifiers.push(`local:${localStringVerifier(value)}`);
+  return verifiers;
+}
+
+function offlineVerifierMatches(storedVerifier, verifier) {
+  if (storedVerifier === verifier) return true;
+  if (!String(storedVerifier || "").includes(":") && verifier.startsWith("sha256:")) {
+    return storedVerifier === verifier.slice("sha256:".length);
+  }
+  return false;
 }
 
 function cryptoRandomHex(length = 16) {
+  if (!window.crypto?.getRandomValues) {
+    return Array.from({ length }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, "0")).join("");
+  }
   const bytes = new Uint8Array(length);
   window.crypto.getRandomValues(bytes);
   return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function localStringVerifier(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function notify(title, text = "", icon = "info") {
