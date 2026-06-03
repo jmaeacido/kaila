@@ -92,8 +92,8 @@
             <button class="btn btn-sm btn-link" type="button" data-route="login">Login</button>
           </div>
           <form data-register-form class="compact-form">
-            <input class="form-control" name="name" placeholder="Full name" required>
-            <input class="form-control" name="username" placeholder="Username" required>
+            <input class="form-control" name="name" placeholder="Full name" autocomplete="name" maxlength="80" required>
+            <input class="form-control" name="username" placeholder="Username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40" required>
             <div class="password-field">
               <input class="form-control" name="password" type="password" placeholder="Password" autocomplete="new-password" required>
               <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
@@ -104,8 +104,8 @@
               <option value="client">Client</option>
               <option value="provider">Provider</option>
             </select>
-            <input class="form-control" name="contactNumber" placeholder="Contact number" required>
-            <input class="form-control" name="messengerLink" placeholder="Messenger / Facebook link">
+            <input class="form-control" name="contactNumber" type="tel" inputmode="tel" autocomplete="tel" maxlength="32" placeholder="Contact number" required>
+            <input class="form-control" name="messengerLink" inputmode="url" autocomplete="url" maxlength="240" placeholder="Messenger / Facebook link">
             <select class="form-select" name="preferredContactChannel" required>
               <option value="">Preferred contact channel</option>
               <option>Messenger</option>
@@ -114,7 +114,16 @@
               <option>Email</option>
               <option>Other</option>
             </select>
-            <input class="form-control" name="bestContactTime" placeholder="Best time to contact">
+            <select class="form-select" name="bestContactTime">
+              <option value="">Best time to contact</option>
+              <option>Any time</option>
+              <option>Morning</option>
+              <option>Afternoon</option>
+              <option>Evening</option>
+              <option>Business hours</option>
+              <option>After hours</option>
+              <option>By appointment</option>
+            </select>
             <div data-register-address></div>
             <div data-provider-category-field hidden>
               <input class="form-control" name="displayName" placeholder="Provider display name">
@@ -144,13 +153,30 @@
                 <option>No</option>
                 <option>Sometimes</option>
               </select>
-              <input class="form-control" name="availableDays" placeholder="Available days, e.g. Mon-Sat">
-              <input class="form-control" name="availableTime" placeholder="Available time, e.g. evenings only">
-              <input class="form-control" name="travelLimits" placeholder="Travel limits / areas not covered">
-              <input class="form-control" name="minimumFee" placeholder="Minimum service fee, e.g. PHP 300">
-              <textarea class="form-control" name="priceRange" rows="2" placeholder="Sample price range examples"></textarea>
-              <input class="form-control" name="workSamples" placeholder="Work sample photo link / folder">
-              <input class="form-control" name="certificateProof" placeholder="Certificate / training / permit link">
+              <select class="form-select" name="availableDays">
+                <option value="">Available days</option>
+                <option>Daily</option>
+                <option>Weekdays</option>
+                <option>Weekends</option>
+                <option>Monday-Friday</option>
+                <option>Monday-Saturday</option>
+                <option>By appointment</option>
+              </select>
+              <select class="form-select" name="availableTime">
+                <option value="">Available time</option>
+                <option>Any time</option>
+                <option>Morning</option>
+                <option>Afternoon</option>
+                <option>Evening</option>
+                <option>Business hours</option>
+                <option>After hours</option>
+                <option>By appointment</option>
+              </select>
+              <textarea class="form-control" name="travelLimits" rows="2" maxlength="240" placeholder="Travel limits / areas not covered"></textarea>
+              <input class="form-control" name="minimumFee" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Minimum service fee, e.g. 300">
+              <textarea class="form-control" name="priceRange" rows="2" maxlength="160" placeholder="Sample price range examples"></textarea>
+              <input class="form-control" name="workSamples" inputmode="url" placeholder="Work sample photo link / folder">
+              <input class="form-control" name="certificateProof" inputmode="url" placeholder="Certificate / training / permit link">
               <label class="consent-line"><input type="checkbox" name="validIdConsent" value="yes"> Optional ID may be used for verification.</label>
               <label class="consent-line"><input type="checkbox" name="consentRequests" value="yes"> I agree to receive pilot job requests.</label>
               <label class="consent-line"><input type="checkbox" name="consentRatings" value="yes"> I agree to receive ratings.</label>
@@ -171,7 +197,7 @@
             <button class="btn btn-sm btn-link" type="button" data-route="register">Register</button>
           </div>
           <form data-login-form class="compact-form">
-            <input class="form-control" name="username" placeholder="Username" required>
+            <input class="form-control" name="username" placeholder="Username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
             <div class="password-field">
               <input class="form-control" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
               <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
@@ -269,7 +295,7 @@
       <button class="btn btn-sm btn-outline-secondary" type="button" data-close-live>Close</button>
     </div>
     <div class="input-group input-group-sm mb-2">
-      <input class="form-control" data-socket-url>
+      <input class="form-control" data-socket-url type="url" inputmode="url" aria-label="Socket server URL">
       <button class="btn btn-primary" type="button" data-reconnect>Connect</button>
     </div>
     <div class="stack" data-live-feed></div>

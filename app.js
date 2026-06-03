@@ -6,6 +6,13 @@ const STORAGE = {
 };
 const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
+const CONTACT_CHANNELS = ["Messenger", "SMS", "Call", "Email", "Other"];
+const PROVIDER_TYPES = ["Individual", "Freelancer", "Shop", "Small team", "Business"];
+const EXPERIENCE_OPTIONS = ["Less than 1", "1-2", "3-5", "6-10", "10+"];
+const EMERGENCY_OPTIONS = ["Yes", "No", "Sometimes"];
+const AVAILABILITY_OPTIONS = ["Today", "Weekdays", "Weekends", "Emergency only"];
+const AVAILABLE_DAY_OPTIONS = ["Daily", "Weekdays", "Weekends", "Monday-Friday", "Monday-Saturday", "By appointment"];
+const AVAILABLE_TIME_OPTIONS = ["Any time", "Morning", "Afternoon", "Evening", "Business hours", "After hours", "By appointment"];
 const APP_TIME_ZONE = "Asia/Manila";
 const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
 const GEOGRAPHY_SOURCE = "assets/Gingoog City PSGC.xlsx";
@@ -303,8 +310,8 @@ async function openForgotPasswordModal() {
     title: "Reset password",
     html: `
       <div class="swal-form">
-        <label><span>Username</span><input id="reset-username" class="form-control" autocomplete="username"></label>
-        <label><span>Full name on account</span><input id="reset-name" class="form-control" autocomplete="name"></label>
+        <label><span>Username</span><input id="reset-username" class="form-control" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40"></label>
+        <label><span>Full name on account</span><input id="reset-name" class="form-control" autocomplete="name" maxlength="80"></label>
         <label>
           <span>New password</span>
           <div class="password-field">
@@ -1046,11 +1053,11 @@ function renderSettings() {
         </div>
       </div>
       <div class="settings-grid">
-        <label><span>Name</span><input class="form-control" name="name" value="${escapeAttribute(state.session.name || "")}" required></label>
-        <label><span>Contact number</span><input class="form-control" name="contactNumber" value="${escapeAttribute(state.session.contactNumber || "")}"></label>
-        <label><span>Messenger / Facebook</span><input class="form-control" name="messengerLink" value="${escapeAttribute(state.session.messengerLink || "")}"></label>
-        <label><span>Preferred contact</span>${select("settings-contact-channel", ["Messenger", "SMS", "Call", "Email", "Other"], state.session.preferredContactChannel || "Messenger")}</label>
-        <label><span>Best contact time</span><input class="form-control" name="bestContactTime" value="${escapeAttribute(state.session.bestContactTime || "")}"></label>
+        <label><span>Name</span><input class="form-control" name="name" autocomplete="name" maxlength="80" value="${escapeAttribute(state.session.name || "")}" required></label>
+        <label><span>Contact number</span><input class="form-control" name="contactNumber" type="tel" inputmode="tel" autocomplete="tel" maxlength="32" value="${escapeAttribute(state.session.contactNumber || "")}"></label>
+        <label><span>Messenger / Facebook</span><input class="form-control" name="messengerLink" inputmode="url" autocomplete="url" maxlength="240" value="${escapeAttribute(state.session.messengerLink || "")}"></label>
+        <label><span>Preferred contact</span>${select("settings-contact-channel", CONTACT_CHANNELS, state.session.preferredContactChannel || "Messenger")}</label>
+        <label><span>Best contact time</span>${select("settings-best-time", AVAILABLE_TIME_OPTIONS, state.session.bestContactTime || "", "Choose time")}</label>
         ${isAdmin ? "" : `<label class="wide"><span>Address</span>${addressFields("settings-address", state.session.area || "")}</label>`}
         ${isProvider ? `<label class="wide"><span>Service categories</span>${categoryChips("settings-category", state.session.category || "")}</label>` : ""}
         <label class="wide"><span>Theme</span>${select("settings-theme", ["System", "Light", "Dark"], capitalize(state.theme))}</label>
@@ -1087,9 +1094,9 @@ async function openRequestModal() {
         <label><span>Category</span>${categorySelect("request-category", true)}</label>
         <label><span>Urgency</span>${select("request-urgency", URGENCY_OPTIONS, "Today")}</label>
         <label><span>Preferred schedule</span>${select("request-schedule", URGENCY_OPTIONS, "Today")}</label>
-        <label><span>Contact method</span><input id="request-contact-method" class="form-control" value="${escapeAttribute(state.session.preferredContactChannel || state.session.contactNumber || "")}" placeholder="Messenger / SMS / Call"></label>
+        <label><span>Contact method</span>${select("request-contact-method", CONTACT_CHANNELS, state.session.preferredContactChannel || "Messenger")}</label>
         <label class="wide"><span>Address</span>${addressFields("request-address", state.session.area)}</label>
-        <label><span>Budget</span><input id="request-budget" class="form-control" inputmode="decimal" placeholder="Open / ₱1,500.00"></label>
+        <label><span>Budget</span><input id="request-budget" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Open / ₱1,500.00"></label>
         <label class="wide"><span>Exact location notes <small>(not forwarded too early)</small></span><textarea id="request-location-notes" class="form-control" rows="2"></textarea></label>
         <label class="wide"><span>Details</span><textarea id="request-details" class="form-control" rows="3"></textarea></label>
         <label class="wide"><span>Photos or videos (optional, up to 3 files)</span><input id="request-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
@@ -1143,21 +1150,21 @@ async function openProviderModal() {
     html: `
       <div class="swal-form two">
         <label><span>Display name</span><input id="provider-display-name" class="form-control" value="${escapeAttribute(existing?.displayName || state.session.name || "")}"></label>
-        <label><span>Provider type</span>${select("provider-type", ["Individual", "Freelancer", "Shop", "Small team", "Business"], existing?.providerType || "Individual")}</label>
+        <label><span>Provider type</span>${select("provider-type", PROVIDER_TYPES, existing?.providerType || "Individual")}</label>
         <label class="wide"><span>Categories</span>${categoryChips("provider-category", existing?.category || state.session.category)}</label>
         <label class="wide"><span>Address</span>${addressFields("provider-address", existing?.area || state.session.area || "")}</label>
-        <label><span>Availability</span>${select("provider-availability", ["Today", "Weekdays", "Weekends", "Emergency only"], existing?.availability)}</label>
-        <label><span>Experience</span>${select("provider-experience", ["Less than 1", "1-2", "3-5", "6-10", "10+"], existing?.yearsExperience || "1-2")}</label>
-        <label><span>Emergency availability</span>${select("provider-emergency", ["Yes", "No", "Sometimes"], existing?.emergencyAvailability || "Sometimes")}</label>
-        <label><span>Available days</span><input id="provider-days" class="form-control" value="${escapeAttribute(existing?.availableDays || "")}" placeholder="Mon-Sat"></label>
-        <label><span>Available time</span><input id="provider-time" class="form-control" value="${escapeAttribute(existing?.availableTime || "")}" placeholder="Evenings only"></label>
+        <label><span>Availability</span>${select("provider-availability", AVAILABILITY_OPTIONS, existing?.availability || "Today")}</label>
+        <label><span>Experience</span>${select("provider-experience", EXPERIENCE_OPTIONS, existing?.yearsExperience || "1-2")}</label>
+        <label><span>Emergency availability</span>${select("provider-emergency", EMERGENCY_OPTIONS, existing?.emergencyAvailability || "Sometimes")}</label>
+        <label><span>Available days</span>${select("provider-days", AVAILABLE_DAY_OPTIONS, existing?.availableDays || "", "Choose days")}</label>
+        <label><span>Available time</span>${select("provider-time", AVAILABLE_TIME_OPTIONS, existing?.availableTime || "", "Choose time")}</label>
         <label class="wide"><span>Specific services</span><textarea id="provider-services" class="form-control" rows="3">${escapeHtml(existing?.specificServices || existing?.skills || "")}</textarea></label>
         <label class="wide"><span>Coverage area</span><textarea id="provider-coverage" class="form-control" rows="2">${escapeHtml(existing?.coverageArea || "")}</textarea></label>
         <label class="wide"><span>Travel limits</span><textarea id="provider-travel" class="form-control" rows="2">${escapeHtml(existing?.travelLimits || "")}</textarea></label>
-        <label><span>Minimum fee</span><input id="provider-minimum-fee" class="form-control" value="${escapeAttribute(existing?.minimumFee || "")}" placeholder="PHP 300"></label>
-        <label><span>Price range</span><input id="provider-price-range" class="form-control" value="${escapeAttribute(existing?.priceRange || "")}" placeholder="PHP 500-800"></label>
-        <label class="wide"><span>Work sample link</span><input id="provider-work-samples" class="form-control" value="${escapeAttribute(existing?.workSamples || "")}"></label>
-        <label class="wide"><span>Certificate / permit link</span><input id="provider-certificate" class="form-control" value="${escapeAttribute(existing?.certificateProof || "")}"></label>
+        <label><span>Minimum fee</span><input id="provider-minimum-fee" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeAttribute(currencyInputValue(existing?.minimumFee || ""))}" placeholder="300"></label>
+        <label><span>Price range</span><input id="provider-price-range" class="form-control" maxlength="80" value="${escapeAttribute(existing?.priceRange || "")}" placeholder="PHP 500-800"></label>
+        <label class="wide"><span>Work sample link</span><input id="provider-work-samples" class="form-control" inputmode="url" value="${escapeAttribute(existing?.workSamples || "")}"></label>
+        <label class="wide"><span>Certificate / permit link</span><input id="provider-certificate" class="form-control" inputmode="url" value="${escapeAttribute(existing?.certificateProof || "")}"></label>
         <label class="wide consent-line"><input id="provider-valid-id" type="checkbox" ${existing?.validIdConsent ? "checked" : ""}> Optional ID may be used for verification.</label>
         <label class="wide consent-line"><input id="provider-consent-requests" type="checkbox" ${existing?.consentRequests ? "checked" : ""}> I agree to receive pilot job requests.</label>
         <label class="wide consent-line"><input id="provider-consent-ratings" type="checkbox" ${existing?.consentRatings ? "checked" : ""}> I agree to receive ratings.</label>
@@ -1184,7 +1191,7 @@ async function openProviderModal() {
         availableDays: $("#provider-days").value.trim(),
         availableTime: $("#provider-time").value.trim(),
         travelLimits: $("#provider-travel").value.trim(),
-        minimumFee: $("#provider-minimum-fee").value.trim(),
+        minimumFee: normalizeCurrencyInput($("#provider-minimum-fee").value),
         priceRange: $("#provider-price-range").value.trim(),
         workSamples: $("#provider-work-samples").value.trim(),
         certificateProof: $("#provider-certificate").value.trim(),
@@ -1218,7 +1225,7 @@ async function openOfferModal(requestId, type) {
     html: `
       <div class="swal-form">
         ${renderIdentity(request.clientName, request.clientPhotoUrl, "Client reputation", request.clientReputation, "compact")}
-        <label><span>Amount</span><input id="offer-amount" class="form-control" inputmode="decimal" placeholder="₱1,500.00"></label>
+        <label><span>Amount</span><input id="offer-amount" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="₱1,500.00"></label>
         <label><span>Schedule</span>${select("offer-schedule", URGENCY_OPTIONS, "Today")}</label>
         <label><span>Notes</span><textarea id="offer-notes" class="form-control" rows="3"></textarea></label>
       </div>
@@ -2680,7 +2687,7 @@ async function saveSettings(event) {
     contactNumber: form.elements.contactNumber.value.trim(),
     messengerLink: form.elements.messengerLink.value.trim(),
     preferredContactChannel: $("#settings-contact-channel")?.value || "",
-    bestContactTime: form.elements.bestContactTime.value.trim(),
+    bestContactTime: $("#settings-best-time")?.value || "",
     dataPrivacyConsent: form.elements.dataPrivacyConsent?.checked,
     ...(photo ? { photo } : {}),
   };
@@ -2769,12 +2776,12 @@ async function openAdminCreateAccountModal() {
     html: `
       <div class="swal-form two">
         <label><span>Role</span>${select("admin-account-role", ["client", "provider", "ops"], "client")}</label>
-        <label><span>Full name</span><input id="admin-account-name" class="form-control" autocomplete="name"></label>
-        <label><span>Username</span><input id="admin-account-username" class="form-control" autocomplete="username"></label>
-        <label><span>Contact number</span><input id="admin-account-contact" class="form-control"></label>
-        <label><span>Messenger / Facebook</span><input id="admin-account-messenger" class="form-control"></label>
-        <label><span>Preferred contact</span>${select("admin-account-channel", ["Messenger", "SMS", "Call", "Email", "Other"], "Messenger")}</label>
-        <label><span>Best contact time</span><input id="admin-account-best-time" class="form-control"></label>
+        <label><span>Full name</span><input id="admin-account-name" class="form-control" autocomplete="name" maxlength="80"></label>
+        <label><span>Username</span><input id="admin-account-username" class="form-control" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40"></label>
+        <label><span>Contact number</span><input id="admin-account-contact" class="form-control" type="tel" inputmode="tel" autocomplete="tel" maxlength="32"></label>
+        <label><span>Messenger / Facebook</span><input id="admin-account-messenger" class="form-control" inputmode="url" autocomplete="url" maxlength="240"></label>
+        <label><span>Preferred contact</span>${select("admin-account-channel", CONTACT_CHANNELS, "Messenger")}</label>
+        <label><span>Best contact time</span>${select("admin-account-best-time", AVAILABLE_TIME_OPTIONS, "", "Choose time")}</label>
         <label>
           <span>Password</span>
           <div class="password-field">
@@ -2787,19 +2794,19 @@ async function openAdminCreateAccountModal() {
         <label class="wide" data-admin-account-address><span>Address</span>${addressFields("admin-account-address", state.session.area || "")}</label>
         <div class="wide" data-admin-provider-fields hidden>
           <label><span>Display name</span><input id="admin-provider-display" class="form-control"></label>
-          <label><span>Provider type</span>${select("admin-provider-type", ["Individual", "Freelancer", "Shop", "Small team", "Business"], "Individual")}</label>
+          <label><span>Provider type</span>${select("admin-provider-type", PROVIDER_TYPES, "Individual")}</label>
           <label><span>Service categories</span>${categoryChips("admin-account-category", "")}</label>
           <label><span>Specific services</span><textarea id="admin-provider-services" class="form-control" rows="2"></textarea></label>
-          <label><span>Experience</span>${select("admin-provider-experience", ["Less than 1", "1-2", "3-5", "6-10", "10+"], "1-2")}</label>
+          <label><span>Experience</span>${select("admin-provider-experience", EXPERIENCE_OPTIONS, "1-2")}</label>
           <label><span>Coverage area</span><textarea id="admin-provider-coverage" class="form-control" rows="2"></textarea></label>
-          <label><span>Emergency availability</span>${select("admin-provider-emergency", ["Yes", "No", "Sometimes"], "Sometimes")}</label>
-          <label><span>Available days</span><input id="admin-provider-days" class="form-control"></label>
-          <label><span>Available time</span><input id="admin-provider-time" class="form-control"></label>
-          <label><span>Travel limits</span><input id="admin-provider-travel" class="form-control"></label>
-          <label><span>Minimum fee</span><input id="admin-provider-min-fee" class="form-control"></label>
-          <label><span>Price range</span><input id="admin-provider-price-range" class="form-control"></label>
-          <label><span>Work samples</span><input id="admin-provider-work-samples" class="form-control"></label>
-          <label><span>Certificate / permit</span><input id="admin-provider-certificate" class="form-control"></label>
+          <label><span>Emergency availability</span>${select("admin-provider-emergency", EMERGENCY_OPTIONS, "Sometimes")}</label>
+          <label><span>Available days</span>${select("admin-provider-days", AVAILABLE_DAY_OPTIONS, "", "Choose days")}</label>
+          <label><span>Available time</span>${select("admin-provider-time", AVAILABLE_TIME_OPTIONS, "", "Choose time")}</label>
+          <label><span>Travel limits</span><textarea id="admin-provider-travel" class="form-control" rows="2"></textarea></label>
+          <label><span>Minimum fee</span><input id="admin-provider-min-fee" class="form-control" type="number" min="0" step="0.01" inputmode="decimal"></label>
+          <label><span>Price range</span><input id="admin-provider-price-range" class="form-control" maxlength="80"></label>
+          <label><span>Work samples</span><input id="admin-provider-work-samples" class="form-control" inputmode="url"></label>
+          <label><span>Certificate / permit</span><input id="admin-provider-certificate" class="form-control" inputmode="url"></label>
           <label class="consent-line"><input id="admin-provider-valid-id" type="checkbox"> Optional ID may be used for verification.</label>
           <label class="consent-line"><input id="admin-provider-requests" type="checkbox" checked> Provider agrees to receive pilot requests.</label>
           <label class="consent-line"><input id="admin-provider-ratings" type="checkbox" checked> Provider agrees to receive ratings.</label>
@@ -2839,7 +2846,7 @@ async function openAdminCreateAccountModal() {
         availableDays: $("#admin-provider-days")?.value.trim() || "",
         availableTime: $("#admin-provider-time")?.value.trim() || "",
         travelLimits: $("#admin-provider-travel")?.value.trim() || "",
-        minimumFee: $("#admin-provider-min-fee")?.value.trim() || "",
+        minimumFee: normalizeCurrencyInput($("#admin-provider-min-fee")?.value || ""),
         priceRange: $("#admin-provider-price-range")?.value.trim() || "",
         workSamples: $("#admin-provider-work-samples")?.value.trim() || "",
         certificateProof: $("#admin-provider-certificate")?.value.trim() || "",
@@ -3418,7 +3425,9 @@ function statusColor(status) {
 
 function select(id, options, selected = "", blank = "", multiple = false) {
   const selectedItems = categoryList(selected);
-  return `<select id="${id}" class="form-select" ${multiple ? "multiple size=\"4\"" : ""}>${blank ? `<option value="">${blank}</option>` : ""}${options.map((item) => {
+  const optionItems = [...options];
+  if (!multiple && selected && !optionItems.includes(selected)) optionItems.push(selected);
+  return `<select id="${id}" class="form-select" ${multiple ? "multiple size=\"4\"" : ""}>${blank ? `<option value="">${blank}</option>` : ""}${optionItems.map((item) => {
     const isSelected = multiple ? selectedItems.includes(item) : item === selected;
     return `<option value="${escapeAttribute(item)}" ${isSelected ? "selected" : ""}>${escapeHtml(item)}</option>`;
   }).join("")}</select>`;
@@ -3482,8 +3491,8 @@ function addressFields(id, value = "") {
       <label><span>Region</span>${select(`${id}-region`, [state.geography.region], state.geography.region)}</label>
       <label><span>City</span>${select(`${id}-city`, [state.geography.city], state.geography.city)}</label>
       <label><span>Barangay</span>${select(`${id}-barangay`, barangays, selectedBarangay, "Choose barangay")}</label>
-      <label><span>Purok</span><input class="form-control" data-address-purok value="${escapeAttribute(address.purok)}" placeholder="Purok / Zone"></label>
-      <label><span>House No. <small>(optional)</small></span><input class="form-control" data-address-house value="${escapeAttribute(address.house)}" placeholder="House no."></label>
+      <label><span>Purok</span><input class="form-control" data-address-purok inputmode="text" maxlength="60" value="${escapeAttribute(address.purok)}" placeholder="Purok / Zone"></label>
+      <label><span>House No. <small>(optional)</small></span><input class="form-control" data-address-house inputmode="text" maxlength="60" value="${escapeAttribute(address.house)}" placeholder="House no."></label>
     </div>
   `;
 }
@@ -3600,6 +3609,13 @@ function normalizeCurrencyInput(value) {
   const cleaned = raw.replace(/[₱,\s]/g, "").replace(/^php/i, "");
   const amount = Number(cleaned);
   return Number.isFinite(amount) && amount >= 0 ? amount.toFixed(2) : raw;
+}
+
+function currencyInputValue(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.toLowerCase() === "open") return "";
+  const amount = Number(raw.replace(/[^\d.]/g, ""));
+  return Number.isFinite(amount) ? String(amount) : raw;
 }
 
 function currencyNumber(value) {
