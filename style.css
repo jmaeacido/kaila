@@ -770,6 +770,12 @@ body.app-mode > .navbar {
   gap: 0.55rem;
 }
 
+.range-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
 .address-grid label {
   display: grid;
   gap: 0.25rem;
@@ -1500,7 +1506,18 @@ select[multiple].form-select {
 }
 
 .swal2-popup.kaila-popup {
+  width: min(96vw, 1040px);
   border-radius: 14px;
+}
+
+.swal2-popup.kaila-popup.profile-popup {
+  width: min(96vw, 1040px);
+}
+
+.swal2-popup.kaila-popup.attention-request-popup,
+.swal2-popup.kaila-popup.compact-offers-popup,
+.swal2-popup.kaila-popup.media-popup {
+  width: min(96vw, 1040px);
 }
 
 .swal2-popup.kaila-popup .swal2-title {
@@ -1652,6 +1669,8 @@ select[multiple].form-select {
 
 .swal-form label {
   display: grid;
+  align-content: start;
+  align-self: start;
   gap: 0.25rem;
 }
 
@@ -2466,5 +2485,22 @@ body.call-overlay-open {
 
   .swal-form .wide {
     grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 900px) {
+  .profile-popup .swal-form.two {
+    grid-template-columns: repeat(2, minmax(20rem, 1fr));
+    gap: 0.7rem 0.85rem;
+  }
+
+  .profile-popup [data-admin-provider-fields] {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(20rem, 1fr));
+    gap: 0.7rem 0.85rem;
+  }
+
+  .profile-popup [data-admin-provider-fields][hidden] {
+    display: none;
   }
 }

@@ -146,35 +146,26 @@
                 <option>6-10</option>
                 <option>10+</option>
               </select>
-              <textarea class="form-control" name="coverageArea" rows="2" placeholder="Coverage area / barangays served"></textarea>
+              <span class="auth-field-label">Coverage area</span>
+              <div data-register-coverage></div>
               <select class="form-select" name="emergencyAvailability">
                 <option value="">Emergency availability</option>
                 <option>Yes</option>
                 <option>No</option>
                 <option>Sometimes</option>
               </select>
-              <select class="form-select" name="availableDays">
-                <option value="">Available days</option>
-                <option>Daily</option>
-                <option>Weekdays</option>
-                <option>Weekends</option>
-                <option>Monday-Friday</option>
-                <option>Monday-Saturday</option>
-                <option>By appointment</option>
-              </select>
-              <select class="form-select" name="availableTime">
-                <option value="">Available time</option>
-                <option>Any time</option>
-                <option>Morning</option>
-                <option>Afternoon</option>
-                <option>Evening</option>
-                <option>Business hours</option>
-                <option>After hours</option>
-                <option>By appointment</option>
-              </select>
+              <span class="auth-field-label">Available days</span>
+              <div data-register-days></div>
+              <div class="range-grid" aria-label="Available time">
+                <input class="form-control" name="availableTimeStart" type="time" aria-label="Available start time">
+                <input class="form-control" name="availableTimeEnd" type="time" aria-label="Available end time">
+              </div>
               <textarea class="form-control" name="travelLimits" rows="2" maxlength="240" placeholder="Travel limits / areas not covered"></textarea>
               <input class="form-control" name="minimumFee" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Minimum service fee, e.g. 300">
-              <textarea class="form-control" name="priceRange" rows="2" maxlength="160" placeholder="Sample price range examples"></textarea>
+              <div class="range-grid" aria-label="Price range">
+                <input class="form-control" name="priceRangeMin" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Min price">
+                <input class="form-control" name="priceRangeMax" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Max price">
+              </div>
               <input class="form-control" name="workSamples" inputmode="url" placeholder="Work sample photo link / folder">
               <input class="form-control" name="certificateProof" inputmode="url" placeholder="Certificate / training / permit link">
               <label class="consent-line"><input type="checkbox" name="validIdConsent" value="yes"> Optional ID may be used for verification.</label>

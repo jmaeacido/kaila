@@ -11,7 +11,7 @@ const PROVIDER_TYPES = ["Individual", "Freelancer", "Shop", "Small team", "Busin
 const EXPERIENCE_OPTIONS = ["Less than 1", "1-2", "3-5", "6-10", "10+"];
 const EMERGENCY_OPTIONS = ["Yes", "No", "Sometimes"];
 const AVAILABILITY_OPTIONS = ["Today", "Weekdays", "Weekends", "Emergency only"];
-const AVAILABLE_DAY_OPTIONS = ["Daily", "Weekdays", "Weekends", "Monday-Friday", "Monday-Saturday", "By appointment"];
+const AVAILABLE_DAY_OPTIONS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const AVAILABLE_TIME_OPTIONS = ["Any time", "Morning", "Afternoon", "Evening", "Business hours", "After hours", "By appointment"];
 const APP_TIME_ZONE = "Asia/Manila";
 const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
@@ -156,9 +156,20 @@ async function loadGeography() {
 
 function renderRegisterAddress() {
   const host = $("[data-register-address]");
-  if (!host) return;
-  host.innerHTML = addressFields("register-address", state.session?.area || "");
-  bindAddressGroup("register-address");
+  if (host) {
+    host.innerHTML = addressFields("register-address", state.session?.area || "");
+    bindAddressGroup("register-address");
+  }
+  const coverage = $("[data-register-coverage]");
+  if (coverage) {
+    coverage.innerHTML = coverageAreaChips("register-coverage", "");
+    bindCategoryChips("register-coverage");
+  }
+  const days = $("[data-register-days]");
+  if (days) {
+    days.innerHTML = availableDaysChips("register-days", "");
+    bindCategoryChips("register-days");
+  }
 }
 
 function apiBase() {
@@ -246,6 +257,15 @@ async function register(event) {
   const data = Object.fromEntries(new FormData(form).entries());
   data.category = selectedCategoryChips("register-category");
   data.area = addressValue("register-address");
+  data.availableDays = selectedCategoryChips("register-days").join(", ");
+  data.availableTime = timeRangeValue("[data-register-form] [name='availableTimeStart']", "[data-register-form] [name='availableTimeEnd']");
+  data.coverageArea = selectedCategoryChips("register-coverage").join(", ");
+  data.minimumFee = normalizeCurrencyInput(data.minimumFee);
+  data.priceRange = priceRangeValue("[data-register-form] [name='priceRangeMin']", "[data-register-form] [name='priceRangeMax']");
+  delete data.availableTimeStart;
+  delete data.availableTimeEnd;
+  delete data.priceRangeMin;
+  delete data.priceRangeMax;
   data.dataPrivacyConsent = form.elements.dataPrivacyConsent?.checked;
   data.validIdConsent = form.elements.validIdConsent?.checked;
   data.consentRequests = form.elements.consentRequests?.checked;
@@ -1146,6 +1166,8 @@ async function openRequestModal() {
 async function openProviderModal() {
   const existing = state.providers.find((provider) => provider.userId === state.session.id);
   const result = await modal({
+    width: "min(96vw, 1040px)",
+    customClass: { popup: "profile-popup" },
     title: existing ? "Update provider" : "Provider profile",
     html: `
       <div class="swal-form two">
@@ -1156,13 +1178,13 @@ async function openProviderModal() {
         <label><span>Availability</span>${select("provider-availability", AVAILABILITY_OPTIONS, existing?.availability || "Today")}</label>
         <label><span>Experience</span>${select("provider-experience", EXPERIENCE_OPTIONS, existing?.yearsExperience || "1-2")}</label>
         <label><span>Emergency availability</span>${select("provider-emergency", EMERGENCY_OPTIONS, existing?.emergencyAvailability || "Sometimes")}</label>
-        <label><span>Available days</span>${select("provider-days", AVAILABLE_DAY_OPTIONS, existing?.availableDays || "", "Choose days")}</label>
-        <label><span>Available time</span>${select("provider-time", AVAILABLE_TIME_OPTIONS, existing?.availableTime || "", "Choose time")}</label>
+        <label><span>Available days</span>${availableDaysChips("provider-days", existing?.availableDays || "")}</label>
+        <label><span>Available time</span>${timeRangeFields("provider-time", existing?.availableTime || "")}</label>
         <label class="wide"><span>Specific services</span><textarea id="provider-services" class="form-control" rows="3">${escapeHtml(existing?.specificServices || existing?.skills || "")}</textarea></label>
-        <label class="wide"><span>Coverage area</span><textarea id="provider-coverage" class="form-control" rows="2">${escapeHtml(existing?.coverageArea || "")}</textarea></label>
+        <label class="wide"><span>Coverage area</span>${coverageAreaChips("provider-coverage", existing?.coverageArea || "")}</label>
         <label class="wide"><span>Travel limits</span><textarea id="provider-travel" class="form-control" rows="2">${escapeHtml(existing?.travelLimits || "")}</textarea></label>
         <label><span>Minimum fee</span><input id="provider-minimum-fee" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeAttribute(currencyInputValue(existing?.minimumFee || ""))}" placeholder="300"></label>
-        <label><span>Price range</span><input id="provider-price-range" class="form-control" maxlength="80" value="${escapeAttribute(existing?.priceRange || "")}" placeholder="PHP 500-800"></label>
+        <label><span>Price range</span>${priceRangeFields("provider-price-range", existing?.priceRange || "")}</label>
         <label class="wide"><span>Work sample link</span><input id="provider-work-samples" class="form-control" inputmode="url" value="${escapeAttribute(existing?.workSamples || "")}"></label>
         <label class="wide"><span>Certificate / permit link</span><input id="provider-certificate" class="form-control" inputmode="url" value="${escapeAttribute(existing?.certificateProof || "")}"></label>
         <label class="wide consent-line"><input id="provider-valid-id" type="checkbox" ${existing?.validIdConsent ? "checked" : ""}> Optional ID may be used for verification.</label>
@@ -1174,6 +1196,8 @@ async function openProviderModal() {
     confirmButtonText: "Save",
     didOpen: () => {
       bindCategoryChips("provider-category");
+      bindCategoryChips("provider-days");
+      bindCategoryChips("provider-coverage");
       bindAddressGroup("provider-address");
     },
     preConfirm: () => {
@@ -1186,13 +1210,13 @@ async function openProviderModal() {
         providerType: $("#provider-type").value,
         specificServices: $("#provider-services").value.trim(),
         yearsExperience: $("#provider-experience").value,
-        coverageArea: $("#provider-coverage").value.trim(),
+        coverageArea: selectedCategoryChips("provider-coverage").join(", "),
         emergencyAvailability: $("#provider-emergency").value,
-        availableDays: $("#provider-days").value.trim(),
-        availableTime: $("#provider-time").value.trim(),
+        availableDays: selectedCategoryChips("provider-days").join(", "),
+        availableTime: timeRangeValue("#provider-time-start", "#provider-time-end"),
         travelLimits: $("#provider-travel").value.trim(),
         minimumFee: normalizeCurrencyInput($("#provider-minimum-fee").value),
-        priceRange: $("#provider-price-range").value.trim(),
+        priceRange: priceRangeValue("#provider-price-range-min", "#provider-price-range-max"),
         workSamples: $("#provider-work-samples").value.trim(),
         certificateProof: $("#provider-certificate").value.trim(),
         validIdConsent: $("#provider-valid-id").checked,
@@ -2772,6 +2796,8 @@ async function openMessageModal() {
 
 async function openAdminCreateAccountModal() {
   const result = await modal({
+    width: "min(96vw, 1040px)",
+    customClass: { popup: "profile-popup" },
     title: "Create account",
     html: `
       <div class="swal-form two">
@@ -2798,13 +2824,13 @@ async function openAdminCreateAccountModal() {
           <label><span>Service categories</span>${categoryChips("admin-account-category", "")}</label>
           <label><span>Specific services</span><textarea id="admin-provider-services" class="form-control" rows="2"></textarea></label>
           <label><span>Experience</span>${select("admin-provider-experience", EXPERIENCE_OPTIONS, "1-2")}</label>
-          <label><span>Coverage area</span><textarea id="admin-provider-coverage" class="form-control" rows="2"></textarea></label>
+          <label><span>Coverage area</span>${coverageAreaChips("admin-provider-coverage", "")}</label>
           <label><span>Emergency availability</span>${select("admin-provider-emergency", EMERGENCY_OPTIONS, "Sometimes")}</label>
-          <label><span>Available days</span>${select("admin-provider-days", AVAILABLE_DAY_OPTIONS, "", "Choose days")}</label>
-          <label><span>Available time</span>${select("admin-provider-time", AVAILABLE_TIME_OPTIONS, "", "Choose time")}</label>
+          <label><span>Available days</span>${availableDaysChips("admin-provider-days", "")}</label>
+          <label><span>Available time</span>${timeRangeFields("admin-provider-time", "")}</label>
           <label><span>Travel limits</span><textarea id="admin-provider-travel" class="form-control" rows="2"></textarea></label>
           <label><span>Minimum fee</span><input id="admin-provider-min-fee" class="form-control" type="number" min="0" step="0.01" inputmode="decimal"></label>
-          <label><span>Price range</span><input id="admin-provider-price-range" class="form-control" maxlength="80"></label>
+          <label><span>Price range</span>${priceRangeFields("admin-provider-price-range", "")}</label>
           <label><span>Work samples</span><input id="admin-provider-work-samples" class="form-control" inputmode="url"></label>
           <label><span>Certificate / permit</span><input id="admin-provider-certificate" class="form-control" inputmode="url"></label>
           <label class="consent-line"><input id="admin-provider-valid-id" type="checkbox"> Optional ID may be used for verification.</label>
@@ -2819,6 +2845,8 @@ async function openAdminCreateAccountModal() {
     didOpen: () => {
       bindAddressGroup("admin-account-address");
       bindCategoryChips("admin-account-category");
+      bindCategoryChips("admin-provider-days");
+      bindCategoryChips("admin-provider-coverage");
       $$("[data-password-toggle]", window.Swal.getPopup()).forEach((button) => button.addEventListener("click", togglePasswordVisibility));
       $("#admin-account-role")?.addEventListener("change", syncAdminAccountFields);
       syncAdminAccountFields();
@@ -2841,13 +2869,13 @@ async function openAdminCreateAccountModal() {
         providerType: $("#admin-provider-type")?.value || "",
         specificServices: $("#admin-provider-services")?.value.trim() || "",
         yearsExperience: $("#admin-provider-experience")?.value || "",
-        coverageArea: $("#admin-provider-coverage")?.value.trim() || "",
+        coverageArea: selectedCategoryChips("admin-provider-coverage").join(", "),
         emergencyAvailability: $("#admin-provider-emergency")?.value || "",
-        availableDays: $("#admin-provider-days")?.value.trim() || "",
-        availableTime: $("#admin-provider-time")?.value.trim() || "",
+        availableDays: selectedCategoryChips("admin-provider-days").join(", "),
+        availableTime: timeRangeValue("#admin-provider-time-start", "#admin-provider-time-end"),
         travelLimits: $("#admin-provider-travel")?.value.trim() || "",
         minimumFee: normalizeCurrencyInput($("#admin-provider-min-fee")?.value || ""),
-        priceRange: $("#admin-provider-price-range")?.value.trim() || "",
+        priceRange: priceRangeValue("#admin-provider-price-range-min", "#admin-provider-price-range-max"),
         workSamples: $("#admin-provider-work-samples")?.value.trim() || "",
         certificateProof: $("#admin-provider-certificate")?.value.trim() || "",
         validIdConsent: $("#admin-provider-valid-id")?.checked || false,
@@ -3426,7 +3454,9 @@ function statusColor(status) {
 function select(id, options, selected = "", blank = "", multiple = false) {
   const selectedItems = categoryList(selected);
   const optionItems = [...options];
-  if (!multiple && selected && !optionItems.includes(selected)) optionItems.push(selected);
+  selectedItems.forEach((item) => {
+    if (item && !optionItems.includes(item)) optionItems.push(item);
+  });
   return `<select id="${id}" class="form-select" ${multiple ? "multiple size=\"4\"" : ""}>${blank ? `<option value="">${blank}</option>` : ""}${optionItems.map((item) => {
     const isSelected = multiple ? selectedItems.includes(item) : item === selected;
     return `<option value="${escapeAttribute(item)}" ${isSelected ? "selected" : ""}>${escapeHtml(item)}</option>`;
@@ -3437,16 +3467,60 @@ function categorySelect(id, blank = false, selected = "", multiple = false) {
   return select(id, SERVICE_CATEGORIES, selected, blank ? "Choose category" : "", multiple);
 }
 
+function coverageAreaChips(id, selected = "") {
+  return optionChips(id, sortedBarangays(state.geography.barangays), selected, {
+    selectedEmpty: "Select barangays below",
+    optionsEmpty: "All barangays selected",
+  });
+}
+
+function availableDaysChips(id, selected = "") {
+  const selectedDays = categoryList(selected).filter((day) => AVAILABLE_DAY_OPTIONS.includes(day));
+  return optionChips(id, AVAILABLE_DAY_OPTIONS, selectedDays, {
+    selectedEmpty: "Select days below",
+    optionsEmpty: "All days selected",
+  });
+}
+
+function timeRangeFields(id, value = "") {
+  const range = parseTimeRange(value);
+  return `
+    <div class="range-grid">
+      <input id="${escapeAttribute(id)}-start" class="form-control" type="time" value="${escapeAttribute(range.start)}" aria-label="Start time">
+      <input id="${escapeAttribute(id)}-end" class="form-control" type="time" value="${escapeAttribute(range.end)}" aria-label="End time">
+    </div>
+  `;
+}
+
+function priceRangeFields(id, value = "") {
+  const range = parsePriceRange(value);
+  return `
+    <div class="range-grid">
+      <input id="${escapeAttribute(id)}-min" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeAttribute(range.min)}" placeholder="Min">
+      <input id="${escapeAttribute(id)}-max" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeAttribute(range.max)}" placeholder="Max">
+    </div>
+  `;
+}
+
 function categoryChips(id, selected = "") {
+  return optionChips(id, SERVICE_CATEGORIES, selected, {
+    selectedEmpty: "Select categories below",
+    optionsEmpty: "All categories selected",
+  });
+}
+
+function optionChips(id, options, selected = "", labels = {}) {
   const selectedItems = categoryList(selected);
-  const availableItems = SERVICE_CATEGORIES.filter((category) => !selectedItems.includes(category));
+  const availableItems = options.filter((item) => !selectedItems.includes(item));
+  const selectedEmpty = labels.selectedEmpty || "Select options below";
+  const optionsEmpty = labels.optionsEmpty || "All options selected";
   return `
     <div class="category-chip-box" data-category-chip-box="${escapeAttribute(id)}">
       <div class="category-chip-selected" data-category-selected>
-        ${selectedItems.map((category) => categoryChip(category, true)).join("") || `<span class="category-chip-empty">Select categories below</span>`}
+        ${selectedItems.map((item) => categoryChip(item, true)).join("") || `<span class="category-chip-empty">${escapeHtml(selectedEmpty)}</span>`}
       </div>
       <div class="category-chip-options" data-category-options>
-        ${availableItems.map((category) => categoryChip(category)).join("") || `<span class="category-chip-empty">All categories selected</span>`}
+        ${availableItems.map((item) => categoryChip(item)).join("") || `<span class="category-chip-empty">${escapeHtml(optionsEmpty)}</span>`}
       </div>
     </div>
   `;
@@ -3471,7 +3545,7 @@ function bindCategoryChips(id) {
     const selected = selectedCategoryChips(id);
     const category = button.dataset.categoryChip;
     const next = selected.includes(category) ? selected.filter((item) => item !== category) : [...selected, category];
-    box.outerHTML = categoryChips(id, next);
+    box.outerHTML = chipsForId(id, next);
     bindCategoryChips(id);
   }));
 }
@@ -3480,6 +3554,12 @@ function selectedCategoryChips(id) {
   const box = $(`[data-category-chip-box="${escapeCssIdentifier(id)}"]`);
   if (!box) return [];
   return $$("[data-category-selected] .category-chip", box).map((button) => button.dataset.categoryChip).filter(Boolean);
+}
+
+function chipsForId(id, selected = "") {
+  if (id.includes("days")) return availableDaysChips(id, selected);
+  if (id.includes("coverage")) return coverageAreaChips(id, selected);
+  return categoryChips(id, selected);
 }
 
 function addressFields(id, value = "") {
@@ -3541,13 +3621,48 @@ function selectedValues(selector) {
   return element ? Array.from(element.selectedOptions).map((option) => option.value).filter(Boolean) : [];
 }
 
+function timeRangeValue(startSelector, endSelector) {
+  const start = $(startSelector)?.value || "";
+  const end = $(endSelector)?.value || "";
+  if (!start && !end) return "";
+  return [start || "Any", end || "Any"].join(" - ");
+}
+
+function parseTimeRange(value = "") {
+  const [start = "", end = ""] = String(value || "").match(/\b\d{2}:\d{2}\b/g) || [];
+  return { start, end };
+}
+
+function priceRangeValue(minSelector, maxSelector) {
+  const min = normalizeCurrencyInput($(minSelector)?.value || "");
+  const max = normalizeCurrencyInput($(maxSelector)?.value || "");
+  if (min && max) return `${min} - ${max}`;
+  return min || max || "";
+}
+
+function parsePriceRange(value = "") {
+  const numbers = String(value || "").match(/\d+(?:\.\d+)?/g) || [];
+  return {
+    min: numbers[0] ? currencyInputValue(numbers[0]) : "",
+    max: numbers[1] ? currencyInputValue(numbers[1]) : "",
+  };
+}
+
 function categoryList(value = "") {
   if (Array.isArray(value)) return Array.from(new Set(value.map((item) => String(item).trim()).filter(Boolean)));
   return Array.from(new Set(String(value || "").split(",").map((item) => item.trim()).filter(Boolean)));
 }
 
 function modal(options) {
-  return window.Swal.fire({ customClass: { popup: "kaila-popup" }, showCancelButton: true, reverseButtons: true, focusConfirm: false, ...options });
+  const { customClass = {}, ...modalOptions } = options;
+  const popupClass = ["kaila-popup", customClass.popup].filter(Boolean).join(" ");
+  return window.Swal.fire({
+    customClass: { ...customClass, popup: popupClass },
+    showCancelButton: true,
+    reverseButtons: true,
+    focusConfirm: false,
+    ...modalOptions,
+  });
 }
 
 async function successRedirect(title, text) {
