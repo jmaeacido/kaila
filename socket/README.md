@@ -19,6 +19,15 @@ Job-message content is encrypted at rest with AES-256-GCM. Set `KAILA_MESSAGE_EN
 
 Service requests and provider completion proofs accept optional JPG, PNG, WebP, MP4, or WebM attachments. The server stores up to 3 files per stage with a 10 MB limit per file in `socket/uploads` and serves them through opaque `/media/:id` URLs.
 
+## Groq AI
+
+Set `GROQ_API_KEY` in `socket/.env` to enable AI-assisted validation and dashboard analytics. The browser calls KAILA's API only; the Groq key stays on the Node service.
+
+```env
+GROQ_API_KEY=
+GROQ_MODEL=llama-3.1-8b-instant
+```
+
 ## Audio Calls
 
 Active confirmed-job conversations support peer-to-peer WebRTC audio and video calls. Socket.IO relays authorized call signaling only between the confirmed client and provider. Serve the PWA over HTTPS outside local development.

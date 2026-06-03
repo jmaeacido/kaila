@@ -9,7 +9,7 @@ const STORAGE = {
   validationQueue: "kaila.deploy.validationQueue",
   offlineCredentials: "kaila.deploy.offlineCredentials",
 };
-const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"];
+const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Cellphone repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
 const CONTACT_CHANNELS = ["Messenger", "SMS", "Call", "Email", "Other"];
 const PROVIDER_TYPES = ["Individual", "Freelancer", "Shop", "Small team", "Business"];
@@ -425,6 +425,7 @@ function render() {
   renderSettings();
   renderStats();
   renderConnectivity();
+  bindDashboardAnalytics();
 }
 
 function renderNav() {
@@ -679,7 +680,7 @@ function adminRequestMetricPanel() {
   };
   const entry = labels[state.adminMetric];
   if (!entry) return "";
-  return `<article class="k-card admin-metric-panel"><h3>${escapeHtml(entry[0])}</h3><p>${escapeHtml(entry[1])}</p></article>`;
+  return `<article class="k-card admin-metric-panel"><h3>${escapeHtml(entry[0])}</h3><p>${escapeHtml(entry[1])}</p>${analyticsInsightButton()}</article>`;
 }
 
 function renderRequestCard(request) {
@@ -1033,7 +1034,7 @@ function adminProviderMetricPanel() {
   };
   const entry = labels[state.adminMetric];
   if (!entry) return "";
-  return `<article class="k-card admin-metric-panel"><h3>${escapeHtml(entry[0])}</h3><p>${escapeHtml(entry[1])}</p></article>`;
+  return `<article class="k-card admin-metric-panel"><h3>${escapeHtml(entry[0])}</h3><p>${escapeHtml(entry[1])}</p>${analyticsInsightButton()}</article>`;
 }
 
 function renderAdminProviderMetricDetail(provider) {
@@ -1191,6 +1192,7 @@ function renderValidation() {
     <article class="k-card admin-metric-panel">
       <h3>Validation Evidence</h3>
       <p>${entries.length} entries | ${clientSurveys} client surveys | ${providerInterviews} provider interviews | ${positiveSignals} positive signals | ${blockers} blockers${pendingSync ? ` | ${pendingSync} pending sync` : ""}</p>
+      ${state.session?.role === "admin" ? analyticsInsightButton() : ""}
     </article>
   `;
 
@@ -1241,6 +1243,51 @@ function validationLabel(key) {
   return String(key || "")
     .replace(/([A-Z])/g, " $1")
     .replace(/^./, (char) => char.toUpperCase());
+}
+
+function analyticsInsightButton() {
+  return `
+    <button class="btn btn-sm btn-outline-primary ai-insight-button" type="button" data-dashboard-ai-insight>
+      <i class="fa-solid fa-wand-magic-sparkles"></i>
+      <span>Groq Insight</span>
+    </button>
+  `;
+}
+
+function bindDashboardAnalytics() {
+  $$("[data-dashboard-ai-insight]").forEach((button) => {
+    button.onclick = () => openDashboardAiInsight();
+  });
+}
+
+async function openDashboardAiInsight() {
+  if (state.session?.role !== "admin") return;
+  window.Swal.fire({
+    customClass: { popup: "kaila-popup" },
+    title: "Reading dashboard",
+    text: "Groq is summarizing the pilot analytics.",
+    allowOutsideClick: false,
+    didOpen: () => window.Swal.showLoading(),
+  });
+  try {
+    const insight = await apiFetch("/api/analytics/insights", { method: "POST", body: "{}" });
+    window.Swal.close();
+    await modal({
+      title: "Groq Dashboard Insight",
+      html: `
+        <div class="ai-insight-panel">
+          <p>${escapeHtml(insight.summary || "No summary returned.")}</p>
+          ${insight.risks?.length ? `<div><strong>Risks</strong><ul>${insight.risks.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}
+          ${insight.actions?.length ? `<div><strong>Actions</strong><ul>${insight.actions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}
+        </div>
+      `,
+      confirmButtonText: "OK",
+      showCancelButton: false,
+    });
+  } catch (error) {
+    window.Swal.close();
+    notify("Groq insight failed", error.message, "error");
+  }
 }
 
 function renderSettings() {
@@ -1320,7 +1367,7 @@ async function openClientSurveyModal() {
         <label>${questionLabel("Would upload photos/videos?", "Tests comfort with giving providers evidence for better estimates.")}${select("survey-would-upload", YES_NO_MAYBE_OPTIONS, "Maybe")}</label>
         <label>${questionLabel("Would compare offers?", "Validates the marketplace comparison workflow.")}${select("survey-would-compare", YES_NO_MAYBE_OPTIONS, "Maybe")}</label>
         <label>${questionLabel("Would rate provider?", "Checks whether two-way trust and reputation can work in the pilot.")}${select("survey-would-rate", YES_NO_MAYBE_OPTIONS, "Maybe")}</label>
-        <label>${questionLabel("Decision signal", "Ops judgment after the conversation: does this response support, weaken, or block the pilot assumption?")}${select("survey-signal", DECISION_SIGNAL_OPTIONS, "Neutral")}</label>
+        ${decisionSignalField("survey-signal", "client_survey", "Ops judgment after the conversation: does this response support, weaken, or block the pilot assumption?")}
         <label class="wide">${questionLabel("Hardest part", "Capture the pain point in the respondent's own words for decision-making and future copy.")}<textarea id="survey-hardest-part" class="form-control" rows="2"></textarea></label>
         <label class="wide">${questionLabel("Trust factors", "Records what makes a provider credible to this client: referral, reviews, samples, ID, shop, price, etc.")}<textarea id="survey-trust-factors" class="form-control" rows="2" placeholder="Referral, reviews, work samples, ID, shop, price, etc."></textarea></label>
         <label class="wide">${questionLabel("Notes", "Use for context, exact quotes, objections, or follow-up details that do not fit elsewhere.")}<textarea id="survey-notes" class="form-control" rows="2"></textarea></label>
@@ -1331,28 +1378,10 @@ async function openClientSurveyModal() {
       bindAddressGroup("survey-address");
       bindQuestionGuides();
       bindValidationDraft("client_survey");
+      bindDecisionSignalSuggestion("client_survey");
     },
     preConfirm: () => {
-      const responses = {
-        name: fieldValue("#survey-name"),
-        ageRange: fieldValue("#survey-age"),
-        area: addressValue("survey-address"),
-        neededProvider: fieldValue("#survey-needed"),
-        serviceNeeded: fieldValue("#survey-service"),
-        searchMethod: fieldValue("#survey-search-method"),
-        timeToFind: fieldValue("#survey-time-to-find"),
-        hardestPart: fieldValue("#survey-hardest-part"),
-        comparedPrices: fieldValue("#survey-compared-prices"),
-        priceClear: fieldValue("#survey-price-clear"),
-        trustFactors: fieldValue("#survey-trust-factors"),
-        satisfaction: fieldValue("#survey-satisfaction"),
-        wouldPostRequest: fieldValue("#survey-would-post"),
-        wouldUploadMedia: fieldValue("#survey-would-upload"),
-        wouldCompareOffers: fieldValue("#survey-would-compare"),
-        wouldRateProvider: fieldValue("#survey-would-rate"),
-        decisionSignal: fieldValue("#survey-signal"),
-        notes: fieldValue("#survey-notes"),
-      };
+      const responses = clientSurveyResponses();
       if (!responses.name || !responses.area || !responses.serviceNeeded) {
         window.Swal.showValidationMessage("Name or nickname, area, and service needed are required.");
         return false;
@@ -1397,7 +1426,7 @@ async function openProviderInterviewModal() {
         <label class="wide">${questionLabel("Rating concerns", "Surfaces fears about unfair reviews, public complaints, or client abuse before the trust system launches.")}<textarea id="interview-rating-concerns" class="form-control" rows="2"></textarea></label>
         <label class="wide">${questionLabel("What makes KAILA valuable?", "Captures provider value propositions: more jobs, better clients, visibility, trust badges, performance summary.")}<textarea id="interview-value" class="form-control" rows="2"></textarea></label>
         <label class="wide">${questionLabel("Provider referrals", "Asks whether they can recommend other reliable providers to build supply faster.")}<textarea id="interview-referrals" class="form-control" rows="2"></textarea></label>
-        <label>${questionLabel("Decision signal", "Ops judgment after the interview: does this provider strengthen, weaken, or block supply validation?")}${select("interview-signal", DECISION_SIGNAL_OPTIONS, "Neutral")}</label>
+        ${decisionSignalField("interview-signal", "provider_interview", "Ops judgment after the interview: does this provider strengthen, weaken, or block supply validation?")}
         <label class="wide">${questionLabel("Notes", "Use for exact quotes, objections, category insights, or follow-up tasks.")}<textarea id="interview-notes" class="form-control" rows="2"></textarea></label>
       </div>
     `,
@@ -1405,29 +1434,10 @@ async function openProviderInterviewModal() {
     didOpen: () => {
       bindQuestionGuides();
       bindValidationDraft("provider_interview");
+      bindDecisionSignalSuggestion("provider_interview");
     },
     preConfirm: () => {
-      const responses = {
-        providerName: fieldValue("#interview-name"),
-        servicesOffered: fieldValue("#interview-services"),
-        yearsExperience: fieldValue("#interview-experience"),
-        clientSource: fieldValue("#interview-client-source"),
-        weeklyJobs: fieldValue("#interview-weekly-jobs"),
-        wantsMoreClients: fieldValue("#interview-wants-more"),
-        coverageArea: fieldValue("#interview-coverage"),
-        profitableJobs: fieldValue("#interview-profitable"),
-        jobsAvoided: fieldValue("#interview-avoid"),
-        requestChannel: fieldValue("#interview-request-channel"),
-        comfortableSubmittingOffers: fieldValue("#interview-offers"),
-        priceEstimateMethod: fieldValue("#interview-price-estimate"),
-        difficultClientSignals: fieldValue("#interview-difficult-client"),
-        acceptableVerification: fieldValue("#interview-verification"),
-        ratingConcerns: fieldValue("#interview-rating-concerns"),
-        kailaValue: fieldValue("#interview-value"),
-        providerReferrals: fieldValue("#interview-referrals"),
-        decisionSignal: fieldValue("#interview-signal"),
-        notes: fieldValue("#interview-notes"),
-      };
+      const responses = providerInterviewResponses();
       if (!responses.providerName || !responses.servicesOffered || !responses.coverageArea) {
         window.Swal.showValidationMessage("Provider name, services offered, and coverage area are required.");
         return false;
@@ -1576,6 +1586,53 @@ function fieldValue(selector) {
   return String($(selector)?.value || "").trim();
 }
 
+function clientSurveyResponses() {
+  return {
+    name: fieldValue("#survey-name"),
+    ageRange: fieldValue("#survey-age"),
+    area: addressValue("survey-address"),
+    neededProvider: fieldValue("#survey-needed"),
+    serviceNeeded: fieldValue("#survey-service"),
+    searchMethod: fieldValue("#survey-search-method"),
+    timeToFind: fieldValue("#survey-time-to-find"),
+    hardestPart: fieldValue("#survey-hardest-part"),
+    comparedPrices: fieldValue("#survey-compared-prices"),
+    priceClear: fieldValue("#survey-price-clear"),
+    trustFactors: fieldValue("#survey-trust-factors"),
+    satisfaction: fieldValue("#survey-satisfaction"),
+    wouldPostRequest: fieldValue("#survey-would-post"),
+    wouldUploadMedia: fieldValue("#survey-would-upload"),
+    wouldCompareOffers: fieldValue("#survey-would-compare"),
+    wouldRateProvider: fieldValue("#survey-would-rate"),
+    decisionSignal: fieldValue("#survey-signal"),
+    notes: fieldValue("#survey-notes"),
+  };
+}
+
+function providerInterviewResponses() {
+  return {
+    providerName: fieldValue("#interview-name"),
+    servicesOffered: fieldValue("#interview-services"),
+    yearsExperience: fieldValue("#interview-experience"),
+    clientSource: fieldValue("#interview-client-source"),
+    weeklyJobs: fieldValue("#interview-weekly-jobs"),
+    wantsMoreClients: fieldValue("#interview-wants-more"),
+    coverageArea: fieldValue("#interview-coverage"),
+    profitableJobs: fieldValue("#interview-profitable"),
+    jobsAvoided: fieldValue("#interview-avoid"),
+    requestChannel: fieldValue("#interview-request-channel"),
+    comfortableSubmittingOffers: fieldValue("#interview-offers"),
+    priceEstimateMethod: fieldValue("#interview-price-estimate"),
+    difficultClientSignals: fieldValue("#interview-difficult-client"),
+    acceptableVerification: fieldValue("#interview-verification"),
+    ratingConcerns: fieldValue("#interview-rating-concerns"),
+    kailaValue: fieldValue("#interview-value"),
+    providerReferrals: fieldValue("#interview-referrals"),
+    decisionSignal: fieldValue("#interview-signal"),
+    notes: fieldValue("#interview-notes"),
+  };
+}
+
 function questionLabel(text, guide) {
   return `
     <span class="question-label">
@@ -1583,6 +1640,55 @@ function questionLabel(text, guide) {
       <span class="question-help" tabindex="0" role="button" aria-label="${escapeAttribute(`${text}: ${guide}`)}" data-guide="${escapeAttribute(guide)}">?</span>
     </span>
   `;
+}
+
+function decisionSignalField(id, type, guide) {
+  return `
+    <label data-decision-signal-field="${escapeAttribute(type)}">
+      ${questionLabel("Decision signal", guide)}
+      <div class="decision-signal-row">
+        ${select(id, DECISION_SIGNAL_OPTIONS, "Neutral")}
+        <button class="btn btn-outline-primary btn-sm" type="button" data-suggest-decision-signal="${escapeAttribute(type)}">
+          <i class="fa-solid fa-wand-magic-sparkles"></i>
+          <span>AI Prefill</span>
+        </button>
+      </div>
+      <small class="decision-signal-note" data-decision-signal-note></small>
+    </label>
+  `;
+}
+
+function bindDecisionSignalSuggestion(type) {
+  const popup = window.Swal?.getPopup();
+  if (!popup) return;
+  const button = $(`[data-suggest-decision-signal="${escapeCssIdentifier(type)}"]`, popup);
+  const note = $(`[data-decision-signal-field="${escapeCssIdentifier(type)}"] [data-decision-signal-note]`, popup);
+  const signalId = type === "provider_interview" ? "interview-signal" : "survey-signal";
+  const collect = type === "provider_interview" ? providerInterviewResponses : clientSurveyResponses;
+  button?.addEventListener("click", async () => {
+    const signal = $(`#${signalId}`, popup);
+    if (!signal) return;
+    button.disabled = true;
+    const previousHtml = button.innerHTML;
+    button.innerHTML = `<span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Thinking</span>`;
+    if (note) note.textContent = "Groq is reviewing the current answers.";
+    try {
+      const payload = await apiFetch("/api/validation/decision-signal", {
+        method: "POST",
+        body: JSON.stringify({ type, responses: collect() }),
+      });
+      signal.value = payload.decisionSignal || "Neutral";
+      signal.dispatchEvent(new Event("change", { bubbles: true }));
+      saveValidationDraft(type, popup);
+      if (note) note.textContent = payload.reason || "Decision signal suggested by Groq.";
+    } catch (error) {
+      if (note) note.textContent = "";
+      notify("AI prefill failed", error.message, "error");
+    } finally {
+      button.disabled = false;
+      button.innerHTML = previousHtml;
+    }
+  });
 }
 
 function validationDraftTools(type) {

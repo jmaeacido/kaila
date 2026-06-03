@@ -41,6 +41,8 @@ Important environment settings:
 - `KAILA_MESSAGE_ENCRYPTION_KEY` must be a stable private 64-character
   hexadecimal value. Changing or losing it makes stored chat transcripts
   unreadable.
+- `GROQ_API_KEY` enables server-side AI suggestions for validation Decision
+  Signal prefilling and dashboard analytics. Keep it in ignored `socket/.env`.
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME` configure MySQL.
 
 ## Runtime Data

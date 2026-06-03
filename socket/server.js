@@ -28,6 +28,8 @@ const SOCKET_TOKEN = sanitizeToken(process.env.KAILA_SOCKET_BEARER_TOKEN || "kai
 const MESSAGE_ENCRYPTION_KEY = parseMessageEncryptionKey(process.env.KAILA_MESSAGE_ENCRYPTION_KEY);
 const AUTO_CONFIRM_HOURS = Number(process.env.KAILA_AUTO_CONFIRM_HOURS || 48);
 const RATING_WINDOW_DAYS = Number(process.env.KAILA_RATING_WINDOW_DAYS || 7);
+const GROQ_API_KEY = sanitizeToken(process.env.GROQ_API_KEY || "");
+const GROQ_MODEL = sanitizeToken(process.env.GROQ_MODEL || "llama-3.1-8b-instant");
 const UPLOAD_DIR = path.resolve(__dirname, "..", "uploads");
 const PROFILE_UPLOAD_DIR = path.resolve(__dirname, "..", "profile-photos");
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -99,6 +101,125 @@ function parseIceServers() {
       credential: String(process.env.KAILA_TURN_CREDENTIAL || ""),
     },
   ];
+}
+
+function validationDecisionPrompt(type, responses) {
+  const formName = type === "provider_interview" ? "provider interview" : "client survey";
+  return [
+    {
+      role: "system",
+      content: [
+        "You classify KAILA local-services marketplace validation evidence.",
+        "Return only one JSON object with keys decisionSignal and reason.",
+        "decisionSignal must be exactly one of: Strong positive, Positive, Neutral, Concern, Blocker.",
+        "Use Strong positive for clear real demand/supply and willingness to use KAILA.",
+        "Use Positive for useful support with minor uncertainty.",
+        "Use Neutral for weak, incomplete, or mixed evidence.",
+        "Use Concern for adoption, trust, pricing, operations, or provider-fit risks.",
+        "Use Blocker for clear evidence the workflow cannot work or should not proceed for this case.",
+      ].join(" "),
+    },
+    {
+      role: "user",
+      content: JSON.stringify({ form: formName, responses }, null, 2),
+    },
+  ];
+}
+
+function analyticsPrompt(metrics, samples) {
+  return [
+    {
+      role: "system",
+      content: [
+        "You are KAILA's concise marketplace ops analyst for Gingoog City.",
+        "Return only one JSON object with keys summary, risks, actions.",
+        "summary must be one short sentence.",
+        "risks and actions must be arrays of 1 to 3 short strings each.",
+        "Base the insight only on the supplied metrics and samples.",
+      ].join(" "),
+    },
+    {
+      role: "user",
+      content: JSON.stringify({ metrics, samples }, null, 2),
+    },
+  ];
+}
+
+async function groqChatJson(messages, fallback) {
+  if (!GROQ_API_KEY) {
+    const error = new Error("Groq API key is not configured");
+    error.status = 503;
+    throw error;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages,
+        temperature: 0.1,
+        max_completion_tokens: 400,
+        response_format: { type: "json_object" },
+      }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(payload.error?.message || "Groq request failed");
+      error.status = response.status;
+      throw error;
+    }
+    const content = payload.choices?.[0]?.message?.content || "";
+    return JSON.parse(content);
+  } catch (error) {
+    if (fallback) return fallback(error);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function normalizeDecisionSignal(value) {
+  const match = ["Strong positive", "Positive", "Neutral", "Concern", "Blocker"]
+    .find((option) => option.toLowerCase() === String(value || "").trim().toLowerCase());
+  return match || "Neutral";
+}
+
+function localDecisionSignal(type, responses = {}) {
+  if (type === "provider_interview") {
+    let score = 0;
+    if (responses.wantsMoreClients === "Yes") score += 2;
+    if (responses.comfortableSubmittingOffers === "Yes") score += 2;
+    if (responses.comfortableSubmittingOffers === "No") score -= 2;
+    if (responses.wantsMoreClients === "No") score -= 2;
+    if (responses.ratingConcerns) score -= 1;
+    if (responses.jobsAvoided) score -= 1;
+    if (responses.servicesOffered && responses.coverageArea) score += 1;
+    if (score >= 4) return "Strong positive";
+    if (score >= 2) return "Positive";
+    if (score <= -3) return "Blocker";
+    if (score <= -1) return "Concern";
+    return "Neutral";
+  }
+  let score = 0;
+  if (responses.neededProvider === "Yes") score += 1;
+  if (["3-7 days", "More than a week", "Never found one"].includes(responses.timeToFind)) score += 1;
+  if (responses.wouldPostRequest === "Yes") score += 2;
+  if (responses.wouldPostRequest === "No") score -= 2;
+  if (responses.wouldCompareOffers === "Yes") score += 1;
+  if (responses.wouldUploadMedia === "No") score -= 1;
+  if (responses.wouldRateProvider === "No") score -= 1;
+  if (score >= 4) return "Strong positive";
+  if (score >= 2) return "Positive";
+  if (score <= -3) return "Blocker";
+  if (score <= -1) return "Concern";
+  return "Neutral";
 }
 
 function encryptMessage(detail, messageId) {
@@ -1575,6 +1696,78 @@ app.post("/api/activity", requireUser, async (req, res) => {
   if (!detail) return res.status(400).json({ error: "Message is required" });
   const activity = await addActivity("Team note", `${req.user.name}: ${detail}`);
   res.status(201).json({ activity, state: await getStateFor(req.user) });
+});
+
+app.post("/api/validation/decision-signal", requireUser, async (req, res) => {
+  if (!["admin", "ops"].includes(req.user.role)) return res.status(403).json({ error: "Admin or ops only" });
+  const type = String(req.body?.type || "").trim();
+  if (!["client_survey", "provider_interview"].includes(type)) return res.status(400).json({ error: "Invalid validation form type" });
+  const responses = req.body?.responses && typeof req.body.responses === "object" ? req.body.responses : {};
+  if (JSON.stringify(responses).length > 12000) return res.status(400).json({ error: "Validation entry is too long" });
+  const suggestion = await groqChatJson(validationDecisionPrompt(type, responses), () => ({
+    decisionSignal: localDecisionSignal(type, responses),
+    reason: "Suggested from local scoring because Groq was unavailable.",
+  }));
+  res.json({
+    decisionSignal: normalizeDecisionSignal(suggestion.decisionSignal),
+    reason: String(suggestion.reason || "").trim().slice(0, 240),
+  });
+});
+
+app.post("/api/analytics/insights", requireUser, async (req, res) => {
+  if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+  const state = await getStateFor(req.user);
+  const requests = state.requests || [];
+  const providers = state.providers || [];
+  const entries = state.validationEntries || [];
+  const completedStatuses = new Set(["Payment Released", "Rated / Closed", "Resolved"]);
+  const completedRequests = requests.filter((request) => completedStatuses.has(request.status));
+  const respondedRequests = requests.filter((request) => (request.offers || []).length || (request.passedProviderIds || []).length).length;
+  const ratingScores = requests.flatMap((request) => [request.clientRatingScore, request.providerRatingScore])
+    .map(Number)
+    .filter((score) => Number.isFinite(score) && score > 0);
+  const metrics = {
+    activeProviders: providers.filter((provider) => (provider.status || "Active") === "Active").length,
+    requests: requests.length,
+    responseRate: requests.length ? Math.round((respondedRequests / requests.length) * 100) : 0,
+    offersPerRequest: requests.length ? Math.round((requests.reduce((total, request) => total + (request.offers || []).length, 0) / requests.length) * 10) / 10 : 0,
+    completedJobs: completedRequests.length,
+    averageRating: ratingScores.length ? Math.round((ratingScores.reduce((sum, score) => sum + score, 0) / ratingScores.length) * 10) / 10 : 0,
+    disputes: requests.filter((request) => request.status === "Disputed" || request.disputeNote).length,
+    validationEntries: entries.length,
+    positiveSignals: entries.filter((entry) => ["Strong positive", "Positive"].includes(entry.decisionSignal)).length,
+    blockers: entries.filter((entry) => entry.decisionSignal === "Blocker").length,
+  };
+  const samples = {
+    recentRequests: requests.slice(0, 8).map((request) => ({
+      category: request.category,
+      status: request.status,
+      area: request.area,
+      offerCount: (request.offers || []).length,
+      budget: request.budget,
+    })),
+    topProviderCategories: providers.slice(0, 12).map((provider) => ({
+      category: provider.category,
+      area: provider.area,
+      rating: provider.reputation?.average || 0,
+    })),
+    recentValidation: entries.slice(0, 8).map((entry) => ({
+      type: entry.type,
+      category: entry.category,
+      signal: entry.decisionSignal,
+      notes: entry.notes,
+    })),
+  };
+  const insight = await groqChatJson(analyticsPrompt(metrics, samples), () => ({
+    summary: `${metrics.requests} requests, ${metrics.activeProviders} active providers, and ${metrics.responseRate}% response rate are currently tracked.`,
+    risks: metrics.disputes ? ["Review disputed jobs before scaling volume."] : ["Watch categories with requests but few provider replies."],
+    actions: ["Prioritize provider follow-up for low-response categories.", "Use validation entries to decide the next category push."],
+  }));
+  res.json({
+    summary: String(insight.summary || "").trim().slice(0, 280),
+    risks: Array.isArray(insight.risks) ? insight.risks.map((item) => String(item).trim()).filter(Boolean).slice(0, 3) : [],
+    actions: Array.isArray(insight.actions) ? insight.actions.map((item) => String(item).trim()).filter(Boolean).slice(0, 3) : [],
+  });
 });
 
 app.post("/api/validation", requireUser, async (req, res) => {
