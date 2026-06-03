@@ -33,6 +33,7 @@ const PROFILE_UPLOAD_DIR = path.resolve(__dirname, "..", "profile-photos");
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_STAGE = 3;
+const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
 const ALLOWED_MEDIA_TYPES = new Map([
   ["image/jpeg", ".jpg"],
   ["image/png", ".png"],
@@ -71,6 +72,33 @@ function parseMessageEncryptionKey(value) {
   const clean = sanitizeToken(value);
   if (!/^[a-f0-9]{64}$/i.test(clean)) throw new Error("KAILA_MESSAGE_ENCRYPTION_KEY must be a 64-character hexadecimal value");
   return Buffer.from(clean, "hex");
+}
+
+function parseIceServers() {
+  const rawJson = String(process.env.KAILA_RTC_ICE_SERVERS || "").trim();
+  if (rawJson) {
+    try {
+      const parsed = JSON.parse(rawJson);
+      if (Array.isArray(parsed) && parsed.every((item) => item && item.urls)) return parsed;
+    } catch (error) {
+      console.warn("Ignoring invalid KAILA_RTC_ICE_SERVERS JSON:", error.message);
+    }
+  }
+
+  const turnUrls = String(process.env.KAILA_TURN_URLS || "")
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+  if (!turnUrls.length) return DEFAULT_ICE_SERVERS;
+
+  return [
+    ...DEFAULT_ICE_SERVERS,
+    {
+      urls: turnUrls.length === 1 ? turnUrls[0] : turnUrls,
+      username: String(process.env.KAILA_TURN_USERNAME || ""),
+      credential: String(process.env.KAILA_TURN_CREDENTIAL || ""),
+    },
+  ];
 }
 
 function encryptMessage(detail, messageId) {
@@ -1022,6 +1050,10 @@ app.get("/health", async (req, res) => {
   res.json({ app: "KAILA MVP API", url: APP_URL, channel: CHANNEL, database: DB_CONFIG.database, status: "online" });
 });
 
+app.get("/api/rtc-config", (req, res) => {
+  res.json({ iceServers: parseIceServers() });
+});
+
 app.get("/media/:id", async (req, res) => {
   const [rows] = await pool.query("SELECT file_name, mime_type FROM request_attachments WHERE id = ? LIMIT 1", [req.params.id]);
   if (!rows.length) return res.status(404).end();
@@ -1595,20 +1627,31 @@ io.on("connection", (socket) => {
         activeCalls.delete(callId);
         return acknowledge({ ok: false, code: "recipient_offline", error: "The other party is offline" });
       }
-      if (type === "offer") activeCalls.set(callId, { requestId, userIds: [user.id, targetUserId], answeredBySocketId: "", declinedSocketIds: new Set() });
+      if (type === "offer") {
+        activeCalls.set(callId, {
+          requestId,
+          userIds: [user.id, targetUserId],
+          answeredBySocketId: "",
+          answeredByUserId: "",
+          declinedSocketIds: new Set(),
+        });
+      }
       const activeCall = activeCalls.get(callId);
       if (type === "answer") {
-        if (activeCall?.answeredBySocketId && activeCall.answeredBySocketId !== socket.id) {
+        if (activeCall?.answeredByUserId === user.id && activeCall.answeredBySocketId && activeCall.answeredBySocketId !== socket.id) {
           return acknowledge({ ok: false, code: "answered_elsewhere", error: "This call was answered on another device" });
         }
-        if (activeCall) activeCall.answeredBySocketId = socket.id;
-        socket.to(`user:${user.id}`).emit("kaila.call.signal", {
-          requestId,
-          callId,
-          type: "answered-elsewhere",
-          senderId: user.id,
-          senderName: user.name,
-        });
+        if (activeCall && !activeCall.answeredBySocketId) {
+          activeCall.answeredBySocketId = socket.id;
+          activeCall.answeredByUserId = user.id;
+          socket.to(`user:${user.id}`).emit("kaila.call.signal", {
+            requestId,
+            callId,
+            type: "answered-elsewhere",
+            senderId: user.id,
+            senderName: user.name,
+          });
+        }
       }
       if (type === "reject" && activeCall?.answeredBySocketId && activeCall.answeredBySocketId !== socket.id) {
         return acknowledge({ ok: true });

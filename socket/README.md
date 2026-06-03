@@ -21,7 +21,17 @@ Service requests and provider completion proofs accept optional JPG, PNG, WebP, 
 
 ## Audio Calls
 
-Active confirmed-job conversations support peer-to-peer WebRTC audio calls. Socket.IO relays authorized call signaling only between the confirmed client and provider. Serve the PWA over HTTPS outside local development and configure a TURN server before production rollout for reliable calls across restrictive mobile networks.
+Active confirmed-job conversations support peer-to-peer WebRTC audio and video calls. Socket.IO relays authorized call signaling only between the confirmed client and provider. Serve the PWA over HTTPS outside local development.
+
+The API exposes `/api/rtc-config` so browsers can load ICE servers before starting or answering a call. By default KAILA uses Google's public STUN server. Configure TURN before production rollout or phone testing across restrictive mobile networks:
+
+```env
+KAILA_TURN_URLS=turn:turn.example.com:3478?transport=udp,turn:turn.example.com:3478?transport=tcp
+KAILA_TURN_USERNAME=turn-user
+KAILA_TURN_CREDENTIAL=turn-password
+```
+
+For advanced setups, set `KAILA_RTC_ICE_SERVERS` to a JSON array of `RTCIceServer` objects.
 
 ## Events
 

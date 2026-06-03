@@ -1496,9 +1496,9 @@ function conversationPresenceText(activeUserIds = []) {
     : "Other party is not viewing this conversation.";
 }
 
-const RTC_CONFIG = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-};
+const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+let rtcConfig = { iceServers: DEFAULT_ICE_SERVERS };
+let rtcConfigPromise = null;
 let callTone = null;
 let callClockTimer = null;
 let callQualityTimer = null;
@@ -1538,6 +1538,7 @@ async function startCall(requestId, withVideo = false) {
     renderCallPanel();
     startCallTone("outgoing");
     scheduleCallTimeout(call);
+    await ensureRtcConfig();
     call.localStream = await acquireCallMedia(withVideo);
     call.localVideoEnabled = Boolean(call.localStream.getVideoTracks().length);
     call.requestedVideo = call.localVideoEnabled;
@@ -1628,8 +1629,25 @@ function createBrowserId() {
   return window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+async function ensureRtcConfig() {
+  if (!rtcConfigPromise) {
+    rtcConfigPromise = fetch(`${apiBase()}/api/rtc-config`)
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("RTC config unavailable")))
+      .then((payload) => {
+        const iceServers = Array.isArray(payload?.iceServers) && payload.iceServers.length ? payload.iceServers : DEFAULT_ICE_SERVERS;
+        rtcConfig = { iceServers };
+      })
+      .catch((error) => {
+        console.warn("KAILA RTC config unavailable; using default STUN server.", error);
+        rtcConfig = { iceServers: DEFAULT_ICE_SERVERS };
+        rtcConfigPromise = null;
+      });
+  }
+  await rtcConfigPromise;
+}
+
 function createPeerConnection(call) {
-  const peer = new RTCPeerConnection(RTC_CONFIG);
+  const peer = new RTCPeerConnection(rtcConfig);
   peer.addEventListener("icecandidate", ({ candidate }) => {
     if (candidate) emitCallSignal("candidate", { candidate });
   });
@@ -1697,31 +1715,37 @@ function ensureRemoteAudio() {
 function syncCallMedia(call = state.call) {
   if (!call) return;
   const audio = ensureRemoteAudio();
-  audio.srcObject = call.remoteStream;
+  if (audio.srcObject !== call.remoteStream) audio.srcObject = call.remoteStream;
   audio.play().catch(() => {});
   const remoteVideo = $("[data-call-remote-video]");
   if (remoteVideo) {
-    remoteVideo.srcObject = call.remoteStream;
-    remoteVideo.addEventListener("playing", () => {
-      call.remoteVideoPaused = false;
-      clearTimeout(call.remoteRecoveryTimer);
-      updateCallVideoWaiting(call);
-    });
-    remoteVideo.addEventListener("waiting", () => {
-      call.remoteVideoPaused = true;
-      scheduleRemoteVideoRecoveryRequest(call);
-      updateCallVideoWaiting(call);
-    });
-    remoteVideo.addEventListener("stalled", () => {
-      call.remoteVideoPaused = true;
-      scheduleRemoteVideoRecoveryRequest(call);
-      updateCallVideoWaiting(call);
-    });
+    if (remoteVideo.srcObject !== call.remoteStream) remoteVideo.srcObject = call.remoteStream;
+    if (remoteVideo.dataset.boundCallId !== call.callId) {
+      remoteVideo.dataset.boundCallId = call.callId;
+      remoteVideo.addEventListener("playing", () => {
+        if (state.call?.callId !== call.callId) return;
+        call.remoteVideoPaused = false;
+        clearTimeout(call.remoteRecoveryTimer);
+        updateCallVideoWaiting(call);
+      });
+      remoteVideo.addEventListener("waiting", () => {
+        if (state.call?.callId !== call.callId) return;
+        call.remoteVideoPaused = true;
+        scheduleRemoteVideoRecoveryRequest(call);
+        updateCallVideoWaiting(call);
+      });
+      remoteVideo.addEventListener("stalled", () => {
+        if (state.call?.callId !== call.callId) return;
+        call.remoteVideoPaused = true;
+        scheduleRemoteVideoRecoveryRequest(call);
+        updateCallVideoWaiting(call);
+      });
+    }
     remoteVideo.play().catch(() => {});
   }
   const localVideo = $("[data-call-local-video]");
   if (localVideo) {
-    localVideo.srcObject = call.localStream;
+    if (localVideo.srcObject !== call.localStream) localVideo.srcObject = call.localStream;
     localVideo.play().catch(() => {});
   }
   updateCallVideoWaiting(call);
@@ -1975,6 +1999,7 @@ async function acceptAudioCall() {
     stopCallTone();
     call.status = "connecting";
     renderCallPanel();
+    await ensureRtcConfig();
     call.localStream = await acquireCallMedia(call.requestedVideo);
     call.localVideoEnabled = Boolean(call.localStream.getVideoTracks().length);
     await refreshCallCameraAvailability(call);
@@ -2202,12 +2227,18 @@ function endAudioCall(notifyOther = true) {
 
 function emitCallSignal(type, extra = {}) {
   if (!state.call || !state.socket) return;
-  state.socket.emit("kaila.call.signal", {
+  state.socket.timeout(type === "candidate" ? 8000 : 5000).emit("kaila.call.signal", {
     requestId: state.call.requestId,
     callId: state.call.callId,
     type,
     ...extra,
-  }, (response = {}) => {
+  }, (error, response = {}) => {
+    if (error) {
+      if (type === "candidate" || !state.call) return;
+      endAudioCall(false);
+      notify("Audio call", "Call signaling timed out. Check the live socket connection and try again.", "error");
+      return;
+    }
     if (response.ok || !state.call) return;
     endAudioCall(false);
     notify("Audio call", response.code === "recipient_offline" ? "The other party is offline." : response.error || "Could not reach the other party.", response.code === "recipient_offline" ? "info" : "error");
@@ -2261,8 +2292,14 @@ async function handleCallSignal(signal = {}) {
     }
     renderCallPanel();
   } else if (signal.type === "candidate") {
-    if (state.call.peerConnection?.remoteDescription) await state.call.peerConnection.addIceCandidate(signal.candidate);
-    else state.call.pendingCandidates.push(signal.candidate);
+    if (!signal.candidate) return;
+    if (state.call.peerConnection?.remoteDescription) {
+      await state.call.peerConnection.addIceCandidate(signal.candidate).catch((error) => {
+        console.warn("KAILA ignored an ICE candidate that could not be applied:", error);
+      });
+    } else {
+      state.call.pendingCandidates.push(signal.candidate);
+    }
   } else if (signal.type === "video-stalled") {
     const track = state.call.localStream?.getVideoTracks()[0];
     if (track) scheduleLocalVideoRecovery(state.call, track, true);
@@ -2334,7 +2371,13 @@ function scheduleCallTimeout(call) {
 }
 
 async function flushPendingCandidates(call) {
-  while (call.pendingCandidates.length) await call.peerConnection.addIceCandidate(call.pendingCandidates.shift());
+  while (call.pendingCandidates.length) {
+    const candidate = call.pendingCandidates.shift();
+    if (!candidate) continue;
+    await call.peerConnection.addIceCandidate(candidate).catch((error) => {
+      console.warn("KAILA ignored a queued ICE candidate that could not be applied:", error);
+    });
+  }
 }
 
 function microphoneErrorText(error) {
