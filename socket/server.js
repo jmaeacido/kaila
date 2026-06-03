@@ -449,6 +449,23 @@ async function initializeDatabase() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS validation_entries (
+      id VARCHAR(64) PRIMARY KEY,
+      type ENUM('client_survey','provider_interview') NOT NULL,
+      operator_id VARCHAR(64) NOT NULL,
+      operator_name VARCHAR(160) NOT NULL,
+      subject_name VARCHAR(160) NULL,
+      area VARCHAR(190) NULL,
+      category VARCHAR(160) NULL,
+      decision_signal VARCHAR(80) NULL,
+      responses JSON NOT NULL,
+      notes TEXT NULL,
+      created_at DATETIME NOT NULL,
+      INDEX validation_entries_type_idx (type),
+      INDEX validation_entries_created_idx (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS job_messages (
       id VARCHAR(64) PRIMARY KEY,
       request_id VARCHAR(64) NOT NULL,
@@ -725,6 +742,28 @@ function mapActivity(row) {
   };
 }
 
+function mapValidationEntry(row) {
+  let responses = {};
+  try {
+    responses = typeof row.responses === "string" ? JSON.parse(row.responses) : row.responses || {};
+  } catch {
+    responses = {};
+  }
+  return {
+    id: row.id,
+    type: row.type,
+    operatorId: row.operator_id,
+    operatorName: row.operator_name,
+    subjectName: row.subject_name || "",
+    area: row.area || "",
+    category: row.category || "",
+    decisionSignal: row.decision_signal || "",
+    responses,
+    notes: row.notes || "",
+    createdAt: row.created_at,
+  };
+}
+
 function mapMessage(row, reactions = []) {
   return {
     id: row.id,
@@ -827,8 +866,20 @@ async function getState(viewer = null) {
   const [attachmentRows] = await pool.query("SELECT * FROM request_attachments ORDER BY created_at ASC");
   const [passRows] = await pool.query("SELECT * FROM request_passes ORDER BY created_at ASC");
   const [activityRows] = await pool.query("SELECT * FROM activities ORDER BY created_at DESC LIMIT 80");
+  const [validationRows] = ["admin", "ops"].includes(viewer?.role)
+    ? await pool.query("SELECT * FROM validation_entries ORDER BY created_at DESC LIMIT 200")
+    : [[]];
   const reputations = buildReputations(requestRows);
   const profiles = new Map(userRows.map((row) => [row.id, mapUser(row, reputations.get(row.id) || emptyReputation())]));
+  if (viewer?.role === "ops") {
+    return {
+      users: Array.from(profiles.values()).filter((user) => user.id === viewer.id).map(publicUser),
+      providers: [],
+      requests: [],
+      activities: [],
+      validationEntries: validationRows.map(mapValidationEntry),
+    };
+  }
 
   const offersByRequest = new Map();
   const acceptedProviderByRequest = new Map(requestRows.map((row) => [row.id, row.accepted_provider_id]));
@@ -858,6 +909,7 @@ async function getState(viewer = null) {
     providers: providerRows.map((row) => mapProvider(row, reputations.get(row.user_id) || emptyReputation(), profiles.get(row.user_id)?.photoUrl || "")),
     requests: requestRows.map((row) => mapRequest(row, offersByRequest.get(row.id) || [], passesByRequest.get(row.id) || [], attachmentsByRequest.get(row.id) || [], reputations, profiles)),
     activities: activityRows.map(mapActivity),
+    ...(["admin", "ops"].includes(viewer?.role) ? { validationEntries: validationRows.map(mapValidationEntry) } : {}),
   };
 }
 
@@ -1518,10 +1570,47 @@ app.post("/api/requests/:requestId/messages/:messageId/reactions", requireUser, 
 });
 
 app.post("/api/activity", requireUser, async (req, res) => {
+  if (req.user.role === "ops") return res.status(403).json({ error: "Ops accounts are limited to validation work" });
   const detail = String(req.body?.detail || "").trim();
   if (!detail) return res.status(400).json({ error: "Message is required" });
   const activity = await addActivity("Team note", `${req.user.name}: ${detail}`);
   res.status(201).json({ activity, state: await getStateFor(req.user) });
+});
+
+app.post("/api/validation", requireUser, async (req, res) => {
+  if (!["admin", "ops"].includes(req.user.role)) return res.status(403).json({ error: "Admin or ops only" });
+  const type = String(req.body?.type || "").trim();
+  if (!["client_survey", "provider_interview"].includes(type)) return res.status(400).json({ error: "Invalid validation form type" });
+  const responses = req.body?.responses && typeof req.body.responses === "object" ? req.body.responses : {};
+  const subjectName = String(req.body?.subjectName || responses.name || responses.providerName || "").trim();
+  const area = String(req.body?.area || responses.area || responses.coverageArea || "").trim();
+  const category = String(req.body?.category || responses.serviceNeeded || responses.servicesOffered || "").trim();
+  const decisionSignal = String(req.body?.decisionSignal || responses.decisionSignal || "").trim();
+  const notes = String(req.body?.notes || responses.notes || "").trim();
+  if (!subjectName || !area) return res.status(400).json({ error: "Name and area are required" });
+  if (JSON.stringify(responses).length > 12000) return res.status(400).json({ error: "Validation entry is too long" });
+
+  const entry = {
+    id: createId(),
+    type,
+    operatorId: req.user.id,
+    operatorName: req.user.name,
+    subjectName,
+    area,
+    category,
+    decisionSignal,
+    responses,
+    notes,
+    createdAt: nowMysql(),
+  };
+  await pool.query(
+    "INSERT INTO validation_entries (id, type, operator_id, operator_name, subject_name, area, category, decision_signal, responses, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [entry.id, entry.type, entry.operatorId, entry.operatorName, entry.subjectName, entry.area, entry.category, entry.decisionSignal, JSON.stringify(entry.responses), entry.notes, entry.createdAt]
+  );
+  await addActivity(type === "client_survey" ? "Client survey recorded" : "Provider interview recorded", `${req.user.name}: ${entry.subjectName} - ${entry.decisionSignal || "No decision signal"}`);
+  const state = await getStateFor(req.user);
+  broadcast("kaila.state.updated", await getState());
+  res.status(201).json({ entry, state });
 });
 
 app.post("/api/admin/users", requireUser, async (req, res) => {
@@ -1548,6 +1637,7 @@ app.post("/api/admin/truncate", requireUser, async (req, res) => {
   await pool.query("TRUNCATE TABLE request_passes");
   await pool.query("TRUNCATE TABLE offers");
   await pool.query("TRUNCATE TABLE requests");
+  await pool.query("TRUNCATE TABLE validation_entries");
   await pool.query("TRUNCATE TABLE providers");
   await pool.query("TRUNCATE TABLE users");
   await pool.query("SET FOREIGN_KEY_CHECKS = 1");
