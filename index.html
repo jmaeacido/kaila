@@ -177,7 +177,7 @@
               <option value="provider">Provider</option>
             </select>
             <input class="form-control" name="contactNumber" type="tel" inputmode="tel" autocomplete="tel" maxlength="32" placeholder="Contact number" required>
-            <input class="form-control" name="messengerLink" inputmode="url" autocomplete="url" maxlength="240" placeholder="Messenger / Facebook link">
+            <input class="form-control" name="messengerLink" inputmode="url" autocomplete="url" maxlength="240" placeholder="Optional Messenger profile link">
             <select class="form-select" name="preferredContactChannel" required>
               <option value="">Preferred contact channel</option>
               <option>Messenger</option>
@@ -246,6 +246,7 @@
               <label class="consent-line"><input type="checkbox" name="rulesAgreement" value="yes"> I understand and agree to provider rules.</label>
             </div>
             <label class="consent-line"><input type="checkbox" name="dataPrivacyConsent" value="yes" required> I allow KAILA to use my submitted details for pilot matching.</label>
+            <p class="small text-muted mb-0">Create a KAILA pilot account only. Do not use your Google, Facebook, banking, or email password.</p>
             <button class="btn btn-primary w-100" type="submit">Create Account</button>
           </form>
         </div>
@@ -268,7 +269,8 @@
               </button>
             </div>
             <button class="btn btn-primary w-100" type="submit">Login</button>
-            <button class="btn btn-sm btn-link justify-self-center" type="button" data-forgot-password>Forgot password?</button>
+            <p class="small text-muted text-center mb-0">Use only your KAILA pilot username and password. KAILA will never ask for your Google or Facebook password.</p>
+            <button class="btn btn-sm btn-link justify-self-center" type="button" data-forgot-password>Need account help?</button>
           </form>
         </div>
       </div>
@@ -367,6 +369,6 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260603-call-fixes"></script>
+  <script src="app.js?v=20260603-security-review"></script>
 </body>
 </html>

@@ -326,53 +326,12 @@ async function login(event) {
 }
 
 async function openForgotPasswordModal() {
-  const result = await modal({
-    title: "Reset password",
-    html: `
-      <div class="swal-form">
-        <label><span>Username</span><input id="reset-username" class="form-control" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40"></label>
-        <label><span>Full name on account</span><input id="reset-name" class="form-control" autocomplete="name" maxlength="80"></label>
-        <label>
-          <span>New password</span>
-          <div class="password-field">
-            <input id="reset-password" class="form-control" type="password" autocomplete="new-password">
-            <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
-              <i class="fa-solid fa-eye"></i>
-            </button>
-          </div>
-        </label>
-      </div>
-    `,
-    confirmButtonText: "Reset Password",
-    didOpen: () => {
-      $$("[data-password-toggle]", window.Swal.getPopup()).forEach((button) => button.addEventListener("click", togglePasswordVisibility));
-    },
-    preConfirm: async () => {
-      const payload = {
-        username: $("#reset-username").value.trim(),
-        name: $("#reset-name").value.trim(),
-        password: $("#reset-password").value,
-      };
-      if (!payload.username || !payload.name || !payload.password) {
-        window.Swal.showValidationMessage("Username, full name, and new password are required.");
-        return false;
-      }
-      if (payload.password.length < 6) {
-        window.Swal.showValidationMessage("Password must be at least 6 characters.");
-        return false;
-      }
-      try {
-        await apiFetch("/api/forgot-password", { method: "POST", body: JSON.stringify(payload) });
-        return payload;
-      } catch (error) {
-        window.Swal.showValidationMessage(error.message);
-        return false;
-      }
-    },
+  await modal({
+    title: "Account help",
+    html: `<p class="text-start mb-0">For pilot account recovery, contact a KAILA administrator. For safety, passwords cannot be reset with only public profile details.</p>`,
+    icon: "info",
+    confirmButtonText: "OK",
   });
-  if (!result.isConfirmed) return;
-  $("[data-login-form] [name='username']").value = result.value.username;
-  notify("Password reset", "You can log in with your new password.", "success");
 }
 
 async function logout() {

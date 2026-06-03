@@ -1099,21 +1099,7 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.post("/api/forgot-password", async (req, res) => {
-  const username = String(req.body?.username || "").trim().toLowerCase();
-  const name = String(req.body?.name || "").trim();
-  const password = String(req.body?.password || "");
-  if (!username || !name || !password) return res.status(400).json({ error: "Username, full name, and new password are required" });
-  if (password.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
-
-  const [rows] = await pool.query("SELECT id, name FROM users WHERE username = ? LIMIT 1", [username]);
-  const user = rows[0];
-  if (!user || user.name.trim().toLowerCase() !== name.toLowerCase()) {
-    return res.status(403).json({ error: "Account details did not match" });
-  }
-
-  await pool.query("UPDATE users SET password_hash = ? WHERE id = ?", [passwordHash(password), user.id]);
-  await addActivity("Password reset", `${user.name} reset account password`);
-  res.json({ ok: true });
+  res.status(410).json({ error: "Self-service password reset is disabled for pilot account safety" });
 });
 
 app.post("/api/profile", requireUser, async (req, res) => {
