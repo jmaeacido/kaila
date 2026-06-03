@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v64";
+const CACHE_NAME = "kaila-pwa-v65";
 const APP_PATH = new URL("./", self.location.href).pathname;
 const APP_SHELL = [
   "./",
@@ -37,7 +37,18 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const requestUrl = new URL(event.request.url);
 
-  if (requestUrl.origin !== self.location.origin || !requestUrl.pathname.startsWith(APP_PATH)) return;
+  if (requestUrl.origin !== self.location.origin) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        return response;
+      }))
+    );
+    return;
+  }
+
+  if (!requestUrl.pathname.startsWith(APP_PATH)) return;
   const isFreshAsset = ["script", "style", "manifest"].includes(event.request.destination)
     || /\.(?:js|css|webmanifest)$/i.test(requestUrl.pathname);
 
@@ -54,13 +65,13 @@ self.addEventListener("fetch", (event) => {
         const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return response;
-      }).catch(() => caches.match(event.request))
+      }).catch(() => caches.match(event.request, { ignoreSearch: true }))
     );
     return;
   }
 
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
+    caches.match(event.request, { ignoreSearch: true }).then((cached) => cached || fetch(event.request).then((response) => {
       const copy = response.clone();
       caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
       return response;

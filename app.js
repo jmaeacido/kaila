@@ -5,6 +5,9 @@ const STORAGE = {
   theme: "kaila.deploy.theme",
   clientSurveyDraft: "kaila.deploy.validationDraft.clientSurvey",
   providerInterviewDraft: "kaila.deploy.validationDraft.providerInterview",
+  stateSnapshot: "kaila.deploy.stateSnapshot",
+  validationQueue: "kaila.deploy.validationQueue",
+  offlineCredentials: "kaila.deploy.offlineCredentials",
 };
 const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
@@ -40,6 +43,7 @@ const state = {
   attentionOpen: false,
   activeOfferPromptRequestId: null,
   activeConversationId: null,
+  validationSyncing: false,
   typingTimer: null,
   typingSent: false,
   presenceTimer: null,
@@ -57,14 +61,26 @@ document.addEventListener("DOMContentLoaded", init);
 async function init() {
   registerServiceWorker();
   setupAttentionNotifications();
+  setupOfflineSync();
   initializeTheme();
   bindEvents();
   initializeSocketUrl();
   await loadGeography();
   renderRegisterAddress();
   await loadState();
+  syncQueuedValidationEntries();
   route(state.session ? "app" : "landing");
   connectSocket();
+}
+
+function setupOfflineSync() {
+  window.addEventListener("online", () => {
+    addActivity("Back online", "KAILA will sync saved offline validation entries.");
+    syncQueuedValidationEntries();
+  });
+  window.addEventListener("offline", () => {
+    addActivity("Offline mode", "You can keep saving validation entries. They will sync automatically later.");
+  });
 }
 
 function setupAttentionNotifications() {
@@ -188,10 +204,18 @@ async function apiFetch(path, options = {}) {
   };
   if (state.session?.id) headers["X-KAILA-User-Id"] = state.session.id;
 
-  const response = await fetch(`${apiBase()}${path}`, {
-    ...options,
-    headers,
-  });
+  let response;
+  try {
+    response = await fetch(`${apiBase()}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch (error) {
+    const offlineError = new Error(navigator.onLine ? "KAILA API is unavailable. Saved validation entries will sync later." : "You are offline. Saved validation entries will sync later.");
+    offlineError.offline = true;
+    offlineError.cause = error;
+    throw offlineError;
+  }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     console.error("KAILA API error", { path, status: response.status, payload });
@@ -209,23 +233,33 @@ async function loadState() {
       state.session = null;
     }
   } catch {
-    addActivity("API offline", "Start kaila/socket and make sure MySQL is running.");
+    const cached = readJson(STORAGE.stateSnapshot, null);
+    if (cached) {
+      applyServerState(cached, { fromCache: true });
+      addActivity("Offline snapshot loaded", "KAILA is using the last saved state on this device.");
+      return;
+    }
+    state.validationEntries = mergeQueuedValidationEntries([]);
+    render();
+    addActivity("Offline mode", "KAILA can open offline, but no previous state snapshot is saved on this device.");
   }
 }
 
-function applyServerState(payload = {}) {
+function applyServerState(payload = {}, options = {}) {
   state.users = payload.users || state.users || [];
   state.providers = payload.providers || [];
   state.requests = payload.requests || [];
-  if ("validationEntries" in payload) state.validationEntries = payload.validationEntries || [];
+  if ("validationEntries" in payload) state.validationEntries = mergeQueuedValidationEntries(payload.validationEntries || []);
+  else state.validationEntries = mergeQueuedValidationEntries(state.validationEntries || []);
   state.activity = payload.activities || state.activity || [];
-  if (state.session) {
+  if (state.session && !options.fromCache) {
     const freshSession = state.users.find((user) => user.id === state.session.id);
     if (freshSession) {
       state.session = { ...state.session, ...freshSession };
       localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
     }
   }
+  if (!options.fromCache) cacheStateSnapshot();
   render();
 }
 
@@ -302,6 +336,7 @@ async function register(event) {
 
   state.session = payload.user;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+  await rememberOfflineLogin(data.username, data.password, payload.user);
   syncSocketIdentity();
   safeApplyState(payload.state);
   form.reset();
@@ -319,12 +354,17 @@ async function login(event) {
       body: JSON.stringify(data),
     });
   } catch (error) {
+    if (error.offline && await tryOfflineLogin(data)) {
+      form.reset();
+      return;
+    }
     notify("Login failed", error.message, "error");
     return;
   }
 
   state.session = payload.user;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+  await rememberOfflineLogin(data.username, data.password, payload.user);
   syncSocketIdentity();
   safeApplyState(payload.state);
   form.reset();
@@ -1110,10 +1150,11 @@ function renderValidation() {
   const providerInterviews = entries.filter((entry) => entry.type === "provider_interview").length;
   const positiveSignals = entries.filter((entry) => ["Strong positive", "Positive"].includes(entry.decisionSignal)).length;
   const blockers = entries.filter((entry) => entry.decisionSignal === "Blocker").length;
+  const pendingSync = entries.filter((entry) => entry.pendingSync).length;
   const summary = `
     <article class="k-card admin-metric-panel">
       <h3>Validation Evidence</h3>
-      <p>${entries.length} entries | ${clientSurveys} client surveys | ${providerInterviews} provider interviews | ${positiveSignals} positive signals | ${blockers} blockers</p>
+      <p>${entries.length} entries | ${clientSurveys} client surveys | ${providerInterviews} provider interviews | ${positiveSignals} positive signals | ${blockers} blockers${pendingSync ? ` | ${pendingSync} pending sync` : ""}</p>
     </article>
   `;
 
@@ -1143,6 +1184,7 @@ function renderValidationEntry(entry) {
       <div class="meta">
         <span>${escapeHtml(entry.operatorName || "Ops")}</span>
         <span>${formatDateTime(entry.createdAt)}</span>
+        ${entry.pendingSync ? "<span>Pending sync</span>" : ""}
       </div>
       <div class="offer">
         ${highlights.map(([key, value]) => `<div><strong>${escapeHtml(validationLabel(key))}:</strong> ${escapeHtml(value)}</div>`).join("")}
@@ -1378,9 +1420,109 @@ async function saveValidationEntry(payload, title) {
     notify(title, "Validation evidence is now in the Ops tracker.", "success");
     return true;
   } catch (error) {
+    if (error.offline) {
+      queueValidationEntry(payload);
+      activateTab("#validation-pane");
+      notify("Saved offline", "This entry is stored on this device and will sync automatically when online.", "info");
+      return true;
+    }
     notify("Validation entry failed", error.message, "error");
     return false;
   }
+}
+
+function cacheStateSnapshot() {
+  const snapshot = {
+    users: state.users,
+    providers: state.providers,
+    requests: state.requests,
+    validationEntries: (state.validationEntries || []).filter((entry) => !entry.pendingSync),
+    activities: state.activity,
+    cachedAt: new Date().toISOString(),
+  };
+  localStorage.setItem(STORAGE.stateSnapshot, JSON.stringify(snapshot));
+}
+
+function currentValidationQueue() {
+  const queue = readJson(STORAGE.validationQueue, []);
+  if (!Array.isArray(queue)) return [];
+  return queue.filter((item) => item?.payload && item?.clientId);
+}
+
+function writeValidationQueue(queue) {
+  localStorage.setItem(STORAGE.validationQueue, JSON.stringify(queue));
+}
+
+function queueValidationEntry(payload) {
+  const item = {
+    clientId: `offline-validation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    userId: state.session?.id || null,
+    operatorName: state.session?.name || "Ops",
+    payload,
+    attempts: 0,
+    createdAt: new Date().toISOString(),
+  };
+  const queue = [...currentValidationQueue(), item];
+  writeValidationQueue(queue);
+  state.validationEntries = mergeQueuedValidationEntries((state.validationEntries || []).filter((entry) => !entry.pendingSync));
+  renderValidation();
+  renderOps();
+}
+
+function mergeQueuedValidationEntries(entries = []) {
+  const serverEntries = (entries || []).filter((entry) => !entry.pendingSync);
+  const queuedEntries = currentValidationQueue()
+    .filter((item) => !state.session?.id || item.userId === state.session.id)
+    .map(queuedValidationEntry);
+  return [...queuedEntries, ...serverEntries];
+}
+
+function queuedValidationEntry(item) {
+  const payload = item.payload || {};
+  return {
+    id: item.clientId,
+    type: payload.type,
+    operatorId: item.userId,
+    operatorName: item.operatorName || "Ops",
+    subjectName: payload.subjectName || "Unsynced entry",
+    area: payload.area || "",
+    category: payload.category || "",
+    decisionSignal: payload.decisionSignal || "",
+    responses: payload.responses || {},
+    notes: payload.notes || "",
+    createdAt: item.createdAt,
+    pendingSync: true,
+  };
+}
+
+async function syncQueuedValidationEntries() {
+  if (state.validationSyncing || !state.session?.id || !navigator.onLine) return;
+  let queue = currentValidationQueue();
+  const currentUserQueue = queue.filter((item) => item.userId === state.session.id);
+  if (!currentUserQueue.length) return;
+
+  state.validationSyncing = true;
+  let synced = 0;
+  for (const item of currentUserQueue) {
+    try {
+      const response = await apiFetch("/api/validation", { method: "POST", body: JSON.stringify(item.payload) });
+      queue = queue.filter((queued) => queued.clientId !== item.clientId);
+      writeValidationQueue(queue);
+      synced += 1;
+      safeApplyState(response.state);
+    } catch (error) {
+      item.attempts = (item.attempts || 0) + 1;
+      queue = queue.map((queued) => queued.clientId === item.clientId ? item : queued);
+      writeValidationQueue(queue);
+      if (!error.offline) notify("Sync paused", error.message, "warning");
+      break;
+    }
+  }
+  state.validationSyncing = false;
+  state.validationEntries = mergeQueuedValidationEntries((state.validationEntries || []).filter((entry) => !entry.pendingSync));
+  renderValidation();
+  renderOps();
+  if (synced) notify("Offline entries synced", `${synced} validation entr${synced === 1 ? "y" : "ies"} uploaded.`, "success");
 }
 
 function fieldValue(selector) {
@@ -3351,6 +3493,7 @@ function connectSocket(force = false) {
       $("[data-socket-dot]").classList.add("connected");
       state.socket.emit("subscribe", CHANNEL);
       syncSocketIdentity();
+      syncQueuedValidationEntries();
     });
     state.socket.on("disconnect", () => {
       state.connected = false;
@@ -4089,6 +4232,64 @@ async function successRedirect(title, text) {
     timerProgressBar: true,
   });
   route("app");
+}
+
+async function rememberOfflineLogin(username, password, user) {
+  if (!username || !password || !user || !window.crypto?.subtle) return;
+  const key = offlineUsernameKey(username);
+  const credentials = readJson(STORAGE.offlineCredentials, {});
+  const salt = cryptoRandomHex(16);
+  credentials[key] = {
+    user,
+    salt,
+    verifier: await offlinePasswordVerifier(key, password, salt),
+    updatedAt: new Date().toISOString(),
+  };
+  localStorage.setItem(STORAGE.offlineCredentials, JSON.stringify(credentials));
+}
+
+async function tryOfflineLogin(data = {}) {
+  if (!window.crypto?.subtle) return false;
+  const key = offlineUsernameKey(data.username);
+  const stored = readJson(STORAGE.offlineCredentials, {})[key];
+  if (!stored?.user || !stored.salt || !stored.verifier) {
+    notify("Offline login unavailable", "Log in once while online on this device first.", "warning");
+    return false;
+  }
+  const verifier = await offlinePasswordVerifier(key, data.password || "", stored.salt);
+  if (verifier !== stored.verifier) {
+    notify("Offline login failed", "Use the same username and password last verified online on this device.", "error");
+    return false;
+  }
+
+  state.session = stored.user;
+  localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+  syncSocketIdentity();
+  const cached = readJson(STORAGE.stateSnapshot, null);
+  if (cached) applyServerState(cached, { fromCache: true });
+  else {
+    state.validationEntries = mergeQueuedValidationEntries([]);
+    render();
+  }
+  syncQueuedValidationEntries();
+  await successRedirect("Offline login", `Welcome back, ${state.session.name}. Saved entries will sync when online.`);
+  return true;
+}
+
+function offlineUsernameKey(username) {
+  return String(username || "").trim().toLowerCase();
+}
+
+async function offlinePasswordVerifier(usernameKey, password, salt) {
+  const bytes = new TextEncoder().encode(`${usernameKey}:${salt}:${password}`);
+  const digest = await window.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function cryptoRandomHex(length = 16) {
+  const bytes = new Uint8Array(length);
+  window.crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function notify(title, text = "", icon = "info") {
