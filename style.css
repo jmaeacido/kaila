@@ -198,9 +198,15 @@ body.app-mode > .navbar {
 
 .app-title {
   min-width: 0;
+  flex: 1 1 auto;
   display: flex;
   gap: 0.55rem;
   align-items: center;
+}
+
+.app-title > div {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .app-title img {
@@ -226,13 +232,14 @@ body.app-mode > .navbar {
 }
 
 .app-title span {
-  max-width: min(14rem, 52vw);
+  max-width: min(72rem, calc(100vw - 11rem));
   overflow: hidden;
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 700;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .app-header-actions {
