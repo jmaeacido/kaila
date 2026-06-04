@@ -210,7 +210,8 @@ function applyTheme(theme = "system") {
 
 function initializeSocketUrl() {
   const input = $("[data-socket-url]");
-  input.value = normalizeSocketUrl(localStorage.getItem(STORAGE.socketUrl) || "") || defaultSocketUrl();
+  const savedUrl = localStorage.getItem(STORAGE.socketUrl) || "";
+  input.value = normalizeSocketUrl(savedUrl) || defaultSocketUrl();
   localStorage.setItem(STORAGE.socketUrl, input.value);
 }
 
@@ -5450,13 +5451,19 @@ function defaultSocketUrl() {
 }
 
 function isNativeAppOrigin() {
-  return ["capacitor:", "ionic:"].includes(window.location.protocol);
+  if (["capacitor:", "ionic:"].includes(window.location.protocol)) return true;
+  if (window.location.protocol === "https:" && ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) && /\bwv\b/i.test(navigator.userAgent || "")) return true;
+  if (!window.Capacitor) return false;
+  if (typeof window.Capacitor.isNativePlatform === "function") return window.Capacitor.isNativePlatform();
+  if (typeof window.Capacitor.getPlatform === "function") return ["android", "ios"].includes(window.Capacitor.getPlatform());
+  return true;
 }
 
 function normalizeSocketUrl(value) {
   if (!value) return "";
   try {
     const url = new URL(value);
+    if (isNativeAppOrigin() && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return "";
     const localHosts = ["localhost", "127.0.0.1", "::1"];
     const isLocalPage = localHosts.includes(window.location.hostname);
     if (localHosts.includes(url.hostname) && !isLocalPage) return "";
