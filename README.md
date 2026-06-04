@@ -53,6 +53,49 @@ python -m http.server 8000 --bind 127.0.0.1
 
 Open `http://127.0.0.1:8000`.
 
+### Native Android App
+
+KAILA can also be packaged as a native Android app with Capacitor. The native
+app bundles the existing PWA files from the repository root and uses the live
+HTTPS API/socket endpoint by default:
+
+```text
+https://kaila-app.duckdns.org/kaila-api
+```
+
+Prepare and sync the Android project:
+
+```bash
+npm install
+npm run native:sync
+```
+
+Open the project in Android Studio:
+
+```bash
+npm run native:android
+```
+
+Build a debug APK from the command line:
+
+```bash
+cd android
+./gradlew assembleDebug
+```
+
+The generated APK is written to
+`android/app/build/outputs/apk/debug/app-debug.apk`.
+
+Native packaging files:
+
+- `capacitor.config.json` - Capacitor app id, app name, and bundled web path.
+- `scripts/prepare-capacitor-web.js` - copies the root PWA shell into the
+  ignored `native-www/` bundle directory.
+- `android/` - generated Android project.
+
+Run `npm run native:sync` after changing `index.html`, `style.css`, `app.js`,
+`sw.js`, `manifest.webmanifest`, or files in `assets/`.
+
 On this server, nginx serves KAILA over HTTPS at:
 
 ```text

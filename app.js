@@ -27,6 +27,7 @@ const SUPPORT_ROLE = "customer_service";
 const SUPPORT_LABEL = "Customer Service";
 const SUPPORT_AVATAR = "assets/kaila-customer-service-avatar.png";
 const APP_TIME_ZONE = "Asia/Manila";
+const NATIVE_SOCKET_URL = "https://kaila-app.duckdns.org/kaila-api";
 const CALL_RING_TIMEOUT_MS = 60000;
 const URGENT_ATTENTION_MS = 18000;
 const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
@@ -5442,9 +5443,14 @@ function showNextAttentionModal() {
 }
 
 function defaultSocketUrl() {
+  if (isNativeAppOrigin()) return NATIVE_SOCKET_URL;
   const protocol = window.location.protocol === "https:" ? "https:" : "http:";
   const host = window.location.hostname || "localhost";
   return window.location.protocol === "https:" ? `${protocol}//${host}/kaila-api` : `${protocol}//${host}:6002`;
+}
+
+function isNativeAppOrigin() {
+  return ["capacitor:", "ionic:"].includes(window.location.protocol);
 }
 
 function normalizeSocketUrl(value) {
@@ -5454,7 +5460,7 @@ function normalizeSocketUrl(value) {
     const localHosts = ["localhost", "127.0.0.1", "::1"];
     const isLocalPage = localHosts.includes(window.location.hostname);
     if (localHosts.includes(url.hostname) && !isLocalPage) return "";
-    if (window.location.protocol === "https:" && url.protocol !== "https:") return "";
+    if ((window.location.protocol === "https:" || isNativeAppOrigin()) && url.protocol !== "https:") return "";
     return value;
   } catch {
     return "";

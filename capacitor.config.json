@@ -1,0 +1,15 @@
+{
+  "appId": "com.kaila.marketplace",
+  "appName": "KAILA",
+  "webDir": "native-www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1200,
+      "backgroundColor": "#0f3e46",
+      "showSpinner": false
+    }
+  }
+}

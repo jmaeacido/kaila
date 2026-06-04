@@ -4,7 +4,8 @@
 
 KAILA is a mobile-first local-services marketplace MVP plus a separate founder
 planning package. The runnable app is intentionally small: a static browser PWA
-at the repository root and one Node.js/MySQL service in `socket/`.
+at the repository root, a Capacitor Android wrapper generated from that PWA,
+and one Node.js/MySQL service in `socket/`.
 
 ## Runtime Application
 
@@ -16,10 +17,18 @@ at the repository root and one Node.js/MySQL service in `socket/`.
 | `sw.js` | PWA service worker. Caches the app shell and refreshes JS/CSS/manifest assets from the network when available. Bump `CACHE_NAME` after cache-sensitive shell changes. |
 | `manifest.webmanifest` | Installable PWA metadata and icon declarations. |
 | `assets/` | Brand images, PWA icons, preview artwork, and `Gingoog City PSGC.xlsx`, which `app.js` reads with SheetJS for address options. |
+| `capacitor.config.json` | Native mobile wrapper configuration. Uses `native-www/` as the bundled web output. |
+| `scripts/prepare-capacitor-web.js` | Copies the root PWA shell and assets into ignored `native-www/` for Capacitor sync/build. |
+| `android/` | Generated Capacitor Android project for building APK/AAB packages from the existing PWA. |
 
 The frontend has no build step and no framework. Prefer extending the existing
 plain JavaScript and `data-*` selector patterns unless a broader rewrite is
 explicitly requested.
+
+For native Android packaging, run `npm run native:sync` after frontend changes.
+The Android app defaults to `https://kaila-app.duckdns.org/kaila-api` when
+loaded from the Capacitor origin, while the browser PWA keeps its existing
+same-host HTTP/HTTPS defaults.
 
 ## Backend Service
 
@@ -56,6 +65,7 @@ Important environment settings:
 | `uploads/` | Ignored user-uploaded request, completion, and dispute media. |
 | `profile-photos/` | Ignored user-uploaded profile images. |
 | `kaila_mvp.sql` | Local ignored database dump when present. Do not edit it for schema changes. |
+| `native-www/` | Ignored generated Capacitor web bundle. Recreate it with `npm run native:prepare` or `npm run native:sync`. |
 
 Do not commit runtime uploads, local database dumps, secrets, or `node_modules/`.
 

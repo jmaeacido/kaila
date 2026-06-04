@@ -34,6 +34,7 @@ pnpm-debug.log*
 # Build and cache output
 dist/
 build/
+native-www/
 coverage/
 .cache/
 .parcel-cache/

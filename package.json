@@ -1,5 +1,15 @@
 {
+  "scripts": {
+    "native:prepare": "node scripts/prepare-capacitor-web.js",
+    "native:sync": "npm run native:prepare && npx cap sync",
+    "native:android": "npm run native:prepare && npx cap open android"
+  },
   "devDependencies": {
     "playwright": "^1.60.0"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.0",
+    "@capacitor/cli": "^8.4.0",
+    "@capacitor/core": "^8.4.0"
   }
 }
