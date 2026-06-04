@@ -64,6 +64,7 @@ const DB_CONFIG = {
 
 let pool;
 const conversationPresence = new Map();
+const directConversationPresence = new Map();
 const activeCalls = new Map();
 
 app.use(cors());
@@ -603,6 +604,20 @@ async function initializeDatabase() {
   `);
   await encryptExistingMessages();
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS direct_messages (
+      id VARCHAR(64) PRIMARY KEY,
+      sender_id VARCHAR(64) NOT NULL,
+      recipient_id VARCHAR(64) NOT NULL,
+      sender_name VARCHAR(160) NOT NULL,
+      detail TEXT NOT NULL,
+      created_at DATETIME NOT NULL,
+      INDEX direct_messages_pair_idx (sender_id, recipient_id, created_at),
+      CONSTRAINT direct_messages_sender_fk FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT direct_messages_recipient_fk FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await encryptExistingDirectMessages();
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS job_message_reactions (
       message_id VARCHAR(64) NOT NULL,
       user_id VARCHAR(64) NOT NULL,
@@ -654,6 +669,17 @@ async function encryptExistingMessages() {
       continue;
     }
     await pool.query("UPDATE job_messages SET detail = ? WHERE id = ?", [encryptMessage(row.detail, row.id), row.id]);
+  }
+}
+
+async function encryptExistingDirectMessages() {
+  const [rows] = await pool.query("SELECT id, detail FROM direct_messages");
+  for (const row of rows) {
+    if (String(row.detail || "").startsWith("enc:v1:")) {
+      decryptMessage(row.detail, row.id);
+      continue;
+    }
+    await pool.query("UPDATE direct_messages SET detail = ? WHERE id = ?", [encryptMessage(row.detail, row.id), row.id]);
   }
 }
 
@@ -925,6 +951,53 @@ function mapMessage(row, reactions = []) {
   };
 }
 
+function mapDirectMessage(row) {
+  return {
+    id: row.id,
+    senderId: row.sender_id,
+    recipientId: row.recipient_id,
+    senderName: row.sender_name,
+    detail: decryptMessage(row.detail, row.id),
+    createdAt: row.created_at,
+  };
+}
+
+function directConversationKey(leftUserId, rightUserId) {
+  return [leftUserId, rightUserId].sort().join(":");
+}
+
+function canInitiateDirectInteraction(user, target) {
+  if (!user || !target || user.id === target.id) return false;
+  if (user.role === "admin") return ["admin", "ops", "provider", "client"].includes(target.role);
+  return user.role === "ops" && target.role === "admin";
+}
+
+function canReadDirectConversation(user, target) {
+  if (!user || !target || user.id === target.id) return false;
+  if (canInitiateDirectInteraction(user, target) || canInitiateDirectInteraction(target, user)) return true;
+  return false;
+}
+
+async function directConversationHasMessages(leftUserId, rightUserId) {
+  const [rows] = await pool.query(
+    "SELECT id FROM direct_messages WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?) LIMIT 1",
+    [leftUserId, rightUserId, rightUserId, leftUserId]
+  );
+  return Boolean(rows.length);
+}
+
+async function canOpenDirectConversation(user, target) {
+  if (!canReadDirectConversation(user, target)) return false;
+  if (canInitiateDirectInteraction(user, target)) return true;
+  return directConversationHasMessages(user.id, target.id);
+}
+
+async function canWriteDirectConversation(user, target) {
+  if (!canReadDirectConversation(user, target)) return false;
+  if (canInitiateDirectInteraction(user, target)) return true;
+  return directConversationHasMessages(user.id, target.id);
+}
+
 function canReadConversation(request, user) {
   return Boolean(request.accepted_provider_id) && (request.client_id === user.id || request.accepted_provider_id === user.id);
 }
@@ -941,6 +1014,18 @@ function otherConversationUserId(request, userId) {
   return "";
 }
 
+function activeDirectConversationUserIds(leftUserId, rightUserId) {
+  const cutoff = Date.now() - 45000;
+  const key = directConversationKey(leftUserId, rightUserId);
+  const room = directConversationPresence.get(key);
+  if (!room) return [];
+  for (const [userId, seenAt] of room) {
+    if (seenAt < cutoff) room.delete(userId);
+  }
+  if (!room.size) directConversationPresence.delete(key);
+  return Array.from(room.keys());
+}
+
 async function userSocketCount(userId) {
   const socketGroups = await Promise.all(socketServers.map((socketServer) => socketServer.in(`user:${userId}`).fetchSockets()));
   return socketGroups.reduce((count, sockets) => count + sockets.length, 0);
@@ -949,6 +1034,12 @@ async function userSocketCount(userId) {
 function relayCallSignal(targetUserId, signal) {
   socketServers.forEach((socketServer) => {
     socketServer.to(`user:${targetUserId}`).emit("kaila.call.signal", signal);
+  });
+}
+
+function relayDirectEvent(userIds, event, payload) {
+  socketServers.forEach((socketServer) => {
+    userIds.forEach((userId) => socketServer.to(`user:${userId}`).emit(event, payload));
   });
 }
 
@@ -1026,7 +1117,7 @@ async function getState(viewer = null) {
   const profiles = new Map(userRows.map((row) => [row.id, mapUser(row, reputations.get(row.id) || emptyReputation())]));
   if (viewer?.role === "ops") {
     return {
-      users: Array.from(profiles.values()).filter((user) => user.id === viewer.id).map(publicUser),
+      users: Array.from(profiles.values()).filter((user) => user.id === viewer.id || user.role === "admin").map(publicUser),
       providers: [],
       requests: [],
       activities: [],
@@ -1724,6 +1815,59 @@ app.post("/api/requests/:requestId/messages/:messageId/reactions", requireUser, 
   res.json({ reacted: !rows.length });
 });
 
+app.get("/api/direct-conversations/:userId/messages", requireUser, async (req, res) => {
+  const target = await getUser(req.params.userId);
+  if (!target) return res.status(404).json({ error: "User not found" });
+  if (!await canOpenDirectConversation(req.user, target)) return res.status(403).json({ error: "Only Admin can start direct chats, except Ops can start chats with Admin" });
+  const [messageRows] = await pool.query(
+    "SELECT * FROM direct_messages WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?) ORDER BY created_at ASC",
+    [req.user.id, target.id, target.id, req.user.id]
+  );
+  res.json({
+    target: publicUser(target),
+    messages: messageRows.map(mapDirectMessage),
+    writable: await canWriteDirectConversation(req.user, target),
+    activeUserIds: activeDirectConversationUserIds(req.user.id, target.id),
+  });
+});
+
+app.post("/api/direct-conversations/:userId/messages", requireUser, async (req, res) => {
+  const target = await getUser(req.params.userId);
+  if (!target) return res.status(404).json({ error: "User not found" });
+  if (!await canWriteDirectConversation(req.user, target)) return res.status(403).json({ error: "Only Admin can start direct chats, except Ops can start chats with Admin" });
+  const detail = String(req.body?.detail || "").trim();
+  if (!detail) return res.status(400).json({ error: "Message is required" });
+  if (detail.length > 2000) return res.status(400).json({ error: "Message must be 2000 characters or fewer" });
+  const message = {
+    id: createId(),
+    senderId: req.user.id,
+    recipientId: target.id,
+    senderName: req.user.name,
+    detail,
+    createdAt: nowMysql(),
+  };
+  await pool.query(
+    "INSERT INTO direct_messages (id, sender_id, recipient_id, sender_name, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [message.id, message.senderId, message.recipientId, message.senderName, encryptMessage(message.detail, message.id), message.createdAt]
+  );
+  relayDirectEvent([req.user.id, target.id], "kaila.direct-message.saved", { userIds: [req.user.id, target.id], message });
+  res.status(201).json({ message });
+});
+
+app.post("/api/direct-conversations/:userId/presence", requireUser, async (req, res) => {
+  const target = await getUser(req.params.userId);
+  if (!target) return res.status(404).json({ error: "User not found" });
+  if (!await canOpenDirectConversation(req.user, target)) return res.status(403).json({ error: "Only Admin can start direct chats, except Ops can start chats with Admin" });
+  const key = directConversationKey(req.user.id, target.id);
+  const room = directConversationPresence.get(key) || new Map();
+  if (req.body?.active) room.set(req.user.id, Date.now());
+  else room.delete(req.user.id);
+  if (room.size) directConversationPresence.set(key, room);
+  else directConversationPresence.delete(key);
+  relayDirectEvent([req.user.id, target.id], "kaila.direct-presence.changed", { userIds: [req.user.id, target.id] });
+  res.json({ activeUserIds: activeDirectConversationUserIds(req.user.id, target.id) });
+});
+
 app.post("/api/activity", requireUser, async (req, res) => {
   if (req.user.role === "ops") return res.status(403).json({ error: "Ops accounts are limited to validation work" });
   const detail = String(req.body?.detail || "").trim();
@@ -1925,6 +2069,14 @@ socketServer.on("connection", (socket) => {
     try {
       const user = await getUser(socket.data.userId);
       if (!user) throw new Error("Sign in before starting a call");
+      const directUserId = String(payload.directUserId || "");
+      if (directUserId) {
+        const target = await getUser(directUserId);
+        if (!target || !canInitiateDirectInteraction(user, target)) {
+          throw new Error("Only Admin can start direct calls, except Ops can start calls with Admin");
+        }
+        return acknowledge({ ok: Boolean(await userSocketCount(target.id)) });
+      }
       const requestId = String(payload.requestId || "");
       const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
       if (!requestRows.length || !canWriteConversation(requestRows[0], user)) {
@@ -1942,16 +2094,32 @@ socketServer.on("connection", (socket) => {
       const user = await getUser(socket.data.userId);
       if (!user) throw new Error("Sign in before starting a call");
       const requestId = String(payload.requestId || "");
+      const directUserId = String(payload.directUserId || "");
       const callId = String(payload.callId || "");
       const type = String(payload.type || "");
-      if (!requestId || !callId || !["offer", "answer", "candidate", "renegotiate", "video-stalled", "hangup", "reject", "busy"].includes(type)) {
+      if ((!requestId && !directUserId) || !callId || !["offer", "answer", "candidate", "renegotiate", "video-stalled", "hangup", "reject", "busy"].includes(type)) {
         throw new Error("Invalid call signal");
       }
-      const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
-      if (!requestRows.length || !canWriteConversation(requestRows[0], user)) {
-        throw new Error("Audio calls are only available while the confirmed job conversation is active");
+      let targetUserId = "";
+      if (directUserId) {
+        const target = await getUser(directUserId);
+        if (!target) throw new Error("Call recipient not found");
+        const activeCall = activeCalls.get(callId);
+        if (type === "offer") {
+          if (!canInitiateDirectInteraction(user, target)) {
+            throw new Error("Only Admin can start direct calls, except Ops can start calls with Admin");
+          }
+        } else if (!activeCall?.userIds.includes(user.id) || !activeCall.userIds.includes(target.id)) {
+          throw new Error("Direct call is no longer active");
+        }
+        targetUserId = target.id;
+      } else {
+        const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
+        if (!requestRows.length || !canWriteConversation(requestRows[0], user)) {
+          throw new Error("Audio calls are only available while the confirmed job conversation is active");
+        }
+        targetUserId = otherConversationUserId(requestRows[0], user.id);
       }
-      const targetUserId = otherConversationUserId(requestRows[0], user.id);
       if (!targetUserId) throw new Error("Call recipient not found");
       if (!await userSocketCount(targetUserId)) {
         activeCalls.delete(callId);
@@ -1960,6 +2128,7 @@ socketServer.on("connection", (socket) => {
       if (type === "offer") {
         activeCalls.set(callId, {
           requestId,
+          directUserIds: directUserId ? [user.id, targetUserId] : [],
           userIds: [user.id, targetUserId],
           answeredBySocketId: "",
           answeredByUserId: "",
@@ -1995,6 +2164,7 @@ socketServer.on("connection", (socket) => {
       if (["hangup", "reject", "busy"].includes(type)) activeCalls.delete(callId);
       relayCallSignal(targetUserId, {
         requestId,
+        directUserId: directUserId ? user.id : "",
         callId,
         type,
         senderId: user.id,

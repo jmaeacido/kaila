@@ -44,6 +44,9 @@ const state = {
   attentionOpen: false,
   activeOfferPromptRequestId: null,
   activeConversationId: null,
+  activeDirectConversationUserId: null,
+  conversationDraftVersion: 0,
+  directConversationDraftVersion: 0,
   validationSyncing: false,
   typingTimer: null,
   typingSent: false,
@@ -434,6 +437,7 @@ function render() {
   renderSettings();
   renderStats();
   renderConnectivity();
+  bindDirectContactActions();
   bindDashboardAnalytics();
 }
 
@@ -546,6 +550,10 @@ function renderActions() {
   if (["admin", "ops"].includes(state.session.role)) {
     actions.push(`<button class="btn btn-outline-primary" type="button" data-client-survey><i class="fa-solid fa-square-poll-vertical"></i><span>Client Survey</span></button>`);
     actions.push(`<button class="btn btn-outline-primary" type="button" data-provider-interview><i class="fa-solid fa-comments"></i><span>Provider Interview</span></button>`);
+  }
+  if (state.session.role === "ops") {
+    const admin = state.users.find((user) => user.role === "admin");
+    if (admin) actions.push(`<button class="btn btn-outline-primary" type="button" data-direct-chat="${admin.id}"><i class="fa-solid fa-headset"></i><span>Admin Support</span></button>`);
   }
   if (state.session.role !== "ops") {
     actions.push(`<button class="btn btn-outline-secondary" type="button" data-team-note title="Post a short note to the shared Activity feed."><i class="fa-solid fa-note-sticky"></i><span>Team Note</span></button>`);
@@ -986,6 +994,36 @@ function userProfile(userId) {
   return state.users.find((user) => user.id === userId) || {};
 }
 
+function canDirectContact(target = {}) {
+  if (!state.session || !target.id || target.id === state.session.id) return false;
+  if (state.session.role === "admin") return ["admin", "ops", "provider", "client"].includes(target.role);
+  return state.session.role === "ops" && target.role === "admin";
+}
+
+function canViewDirectContact(target = {}) {
+  if (canDirectContact(target)) return true;
+  if (!state.session || !target.id || target.id === state.session.id) return false;
+  return target.role === "admin" && ["admin", "ops", "provider", "client"].includes(state.session.role);
+}
+
+function directContactButtons(userId) {
+  const target = userProfile(userId);
+  if (!canDirectContact(target)) return "";
+  return `
+    <div class="card-actions">
+      <button class="btn btn-sm btn-outline-primary" type="button" data-direct-chat="${target.id}"><i class="fa-solid fa-message"></i> Message</button>
+      <button class="btn btn-sm btn-outline-primary" type="button" data-direct-audio-call="${target.id}"><i class="fa-solid fa-phone"></i> Audio</button>
+      <button class="btn btn-sm btn-outline-primary" type="button" data-direct-video-call="${target.id}"><i class="fa-solid fa-video"></i> Video</button>
+    </div>
+  `;
+}
+
+function bindDirectContactActions() {
+  $$("[data-direct-chat]").forEach((button) => button.addEventListener("click", () => openDirectConversation(button.dataset.directChat)));
+  $$("[data-direct-audio-call]").forEach((button) => button.addEventListener("click", () => startDirectAudioCall(button.dataset.directAudioCall)));
+  $$("[data-direct-video-call]").forEach((button) => button.addEventListener("click", () => startDirectVideoCall(button.dataset.directVideoCall)));
+}
+
 function renderProviders() {
   const host = $("[data-provider-list]");
   if (!host) return;
@@ -1024,6 +1062,7 @@ function renderProviders() {
         </div>
       ` : ""}
       ${renderAdminProviderMetricDetail(provider)}
+      ${directContactButtons(provider.userId)}
     </article>
   `).join("")}`;
 }
@@ -1131,6 +1170,7 @@ function renderClients() {
           ${client.bestContactTime ? `<span>${escapeHtml(client.bestContactTime)}</span>` : ""}
           <span>${activeCount} active</span>
         </div>
+        ${directContactButtons(client.id)}
       </article>
     `;
   }).join("");
@@ -1145,6 +1185,30 @@ function renderOps() {
   }
 
   const opsUsers = state.users.filter((user) => user.role === "ops");
+  const adminUsers = state.users.filter((user) => user.role === "admin" && user.id !== state.session.id);
+  const adminSection = adminUsers.length ? `
+    <article class="k-card admin-metric-panel">
+      <h3>Admin Team</h3>
+      <p>${adminUsers.length} other admin account${adminUsers.length === 1 ? "" : "s"} available for direct coordination.</p>
+    </article>
+    ${adminUsers.map((user) => `
+      <article class="k-card">
+        <div class="d-flex justify-content-between gap-2">
+          <div>
+            ${renderIdentity(user.name, user.photoUrl, "Admin account", user.reputation)}
+            <p>${escapeHtml(user.username || "No username")} ${user.contactNumber ? `- ${escapeHtml(user.contactNumber)}` : ""}</p>
+          </div>
+          <span class="badge text-bg-light align-self-start">Admin</span>
+        </div>
+        <div class="meta">
+          <span>${escapeHtml(user.area || "Operations")}</span>
+          ${user.preferredContactChannel ? `<span>${escapeHtml(user.preferredContactChannel)}</span>` : ""}
+          ${user.bestContactTime ? `<span>${escapeHtml(user.bestContactTime)}</span>` : ""}
+        </div>
+        ${directContactButtons(user.id)}
+      </article>
+    `).join("")}
+  ` : "";
   const summary = `
     <article class="k-card admin-metric-panel">
       <h3>Ops Team</h3>
@@ -1152,11 +1216,11 @@ function renderOps() {
     </article>
   `;
   if (!opsUsers.length) {
-    host.innerHTML = `${summary}${emptyCard("No ops accounts yet", "Use Create Account and choose the Ops role.")}`;
+    host.innerHTML = `${adminSection}${summary}${emptyCard("No ops accounts yet", "Use Create Account and choose the Ops role.")}`;
     return;
   }
 
-  host.innerHTML = `${summary}${opsUsers.map((user) => {
+  host.innerHTML = `${adminSection}${summary}${opsUsers.map((user) => {
     const entries = state.validationEntries.filter((entry) => entry.operatorId === user.id);
     const clientSurveys = entries.filter((entry) => entry.type === "client_survey").length;
     const providerInterviews = entries.filter((entry) => entry.type === "provider_interview").length;
@@ -1178,6 +1242,7 @@ function renderOps() {
           <span>${providerInterviews} interviews</span>
         </div>
         ${latestEntry ? `<div class="offer"><strong>Latest validation</strong><div>${escapeHtml(latestEntry.subjectName)} - ${escapeHtml(latestEntry.decisionSignal || "No signal")} - ${formatDateTime(latestEntry.createdAt)}</div></div>` : ""}
+        ${directContactButtons(user.id)}
       </article>
     `;
   }).join("")}`;
@@ -2238,6 +2303,7 @@ async function sendConversationMessage(requestId) {
   const input = $("[data-chat-input]");
   const detail = input?.value.trim();
   if (!detail) return;
+  state.conversationDraftVersion += 1;
   input.value = "";
   stopConversationTyping(requestId);
   try {
@@ -2250,6 +2316,7 @@ async function sendConversationMessage(requestId) {
 
 async function refreshConversation(requestId) {
   if (state.activeConversationId !== requestId || !window.Swal.isVisible()) return;
+  const draftVersion = state.conversationDraftVersion;
   const input = $("[data-chat-input]");
   const draft = input?.value || "";
   const selectionStart = input?.selectionStart || 0;
@@ -2263,8 +2330,9 @@ async function refreshConversation(requestId) {
   bindConversationInput(requestId, payload.writable);
   const nextInput = $("[data-chat-input]");
   if (nextInput) {
-    nextInput.value = draft;
-    nextInput.setSelectionRange(selectionStart, selectionEnd);
+    const shouldRestoreDraft = draftVersion === state.conversationDraftVersion;
+    nextInput.value = shouldRestoreDraft ? draft : "";
+    if (shouldRestoreDraft) nextInput.setSelectionRange(selectionStart, selectionEnd);
     if (restoreFocus) nextInput.focus();
   }
 }
@@ -2339,6 +2407,156 @@ function conversationPresenceText(activeUserIds = []) {
     : "Other party is not viewing this conversation.";
 }
 
+async function openDirectConversation(userId) {
+  const target = userProfile(userId);
+  if (!canViewDirectContact(target)) return;
+  state.activeDirectConversationUserId = userId;
+  await setDirectConversationPresence(userId, true);
+  const payload = await fetchDirectConversation(userId);
+  if (!payload) {
+    setDirectConversationPresence(userId, false);
+    return;
+  }
+
+  await window.Swal.fire({
+    customClass: { popup: "kaila-popup chat-popup" },
+    title: `${target.name || "Direct"} messages`,
+    html: directConversationHtml(payload.messages, payload.writable, payload.activeUserIds, payload.target || target),
+    showConfirmButton: false,
+    showCloseButton: true,
+    didOpen: () => bindDirectConversationInput(userId, payload.writable),
+    willClose: () => closeDirectConversationRoom(userId),
+  });
+  state.activeDirectConversationUserId = null;
+}
+
+async function fetchDirectConversation(userId) {
+  try {
+    return await apiFetch(`/api/direct-conversations/${userId}/messages`, { method: "GET" });
+  } catch (error) {
+    notify("Messages failed", error.message, "error");
+    state.activeDirectConversationUserId = null;
+    return null;
+  }
+}
+
+function directConversationHtml(messages, writable, activeUserIds = [], target = {}) {
+  const transcript = messages.length
+    ? messages.map((message) => `
+      <div class="chat-message ${message.senderId === state.session.id ? "mine" : ""}">
+        <strong>${escapeHtml(message.senderName)}</strong>
+        <span>${escapeHtml(formatDateTime(message.createdAt))}</span>
+        <p>${escapeHtml(message.detail)}</p>
+      </div>
+    `).join("")
+    : `<p class="chat-empty">No messages yet.</p>`;
+
+  return `
+    <div class="chat-shell">
+      <div class="chat-reputation">${renderIdentity(target.name || "Direct contact", target.photoUrl, `${capitalize(target.role || "user")} account`, target.reputation, "compact")}</div>
+      <div class="chat-call-row">
+        <span>${escapeHtml(capitalize(target.role || "contact"))} direct line</span>
+        <div class="chat-call-actions">
+          ${canDirectContact(target) ? `
+            <button class="btn btn-sm btn-outline-primary" type="button" data-direct-audio-call="${target.id || ""}">
+              <i class="fa-solid fa-phone"></i> Audio Call
+            </button>
+            <button class="btn btn-sm btn-outline-primary" type="button" data-direct-video-call="${target.id || ""}">
+              <i class="fa-solid fa-video"></i> Video Call
+            </button>
+          ` : ""}
+        </div>
+      </div>
+      <div class="chat-presence" data-direct-chat-presence>${conversationPresenceText(activeUserIds)}</div>
+      <div class="chat-transcript" data-chat-transcript>${transcript}</div>
+      ${writable ? `
+        <div class="chat-compose">
+          <textarea class="form-control" rows="2" maxlength="2000" placeholder="Write a message" data-direct-chat-input></textarea>
+          <button class="btn btn-primary" type="button" data-direct-chat-send>Send</button>
+        </div>
+      ` : `<div class="chat-archived">Only Admin can start direct chats, except Ops can start chats with Admin.</div>`}
+    </div>
+  `;
+}
+
+function bindDirectConversationInput(userId, writable) {
+  scrollConversationToBottom();
+  startDirectConversationPolling(userId);
+  const popup = window.Swal.getPopup?.() || document;
+  $("[data-direct-audio-call]", popup)?.addEventListener("click", () => startDirectAudioCall(userId));
+  $("[data-direct-video-call]", popup)?.addEventListener("click", () => startDirectVideoCall(userId));
+  if (!writable) return;
+  const input = $("[data-direct-chat-input]");
+  $("[data-direct-chat-send]")?.addEventListener("click", () => sendDirectConversationMessage(userId));
+  input?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    sendDirectConversationMessage(userId);
+  });
+}
+
+async function sendDirectConversationMessage(userId) {
+  const input = $("[data-direct-chat-input]");
+  const detail = input?.value.trim();
+  if (!detail) return;
+  state.directConversationDraftVersion += 1;
+  input.value = "";
+  try {
+    await apiFetch(`/api/direct-conversations/${userId}/messages`, { method: "POST", body: JSON.stringify({ detail }) });
+    await refreshDirectConversation(userId);
+  } catch (error) {
+    notify("Message failed", error.message, "error");
+  }
+}
+
+async function refreshDirectConversation(userId) {
+  if (state.activeDirectConversationUserId !== userId || !window.Swal.isVisible()) return;
+  const draftVersion = state.directConversationDraftVersion;
+  const input = $("[data-direct-chat-input]");
+  const draft = input?.value || "";
+  const restoreFocus = document.activeElement === input;
+  const payload = await fetchDirectConversation(userId);
+  const shell = $(".chat-shell");
+  if (!payload || !shell) return;
+  shell.outerHTML = directConversationHtml(payload.messages, payload.writable, payload.activeUserIds, payload.target || userProfile(userId));
+  bindDirectConversationInput(userId, payload.writable);
+  const nextInput = $("[data-direct-chat-input]");
+  if (nextInput) {
+    nextInput.value = draftVersion === state.directConversationDraftVersion ? draft : "";
+    if (restoreFocus) nextInput.focus();
+  }
+}
+
+async function setDirectConversationPresence(userId, active) {
+  clearInterval(state.presenceTimer);
+  try {
+    await apiFetch(`/api/direct-conversations/${userId}/presence`, { method: "POST", body: JSON.stringify({ active }) });
+    if (active) {
+      state.presenceTimer = setInterval(() => {
+        apiFetch(`/api/direct-conversations/${userId}/presence`, { method: "POST", body: JSON.stringify({ active: true }) }).catch(() => {});
+      }, 20000);
+    }
+  } catch {}
+}
+
+function closeDirectConversationRoom(userId) {
+  stopConversationPolling();
+  setDirectConversationPresence(userId, false);
+}
+
+function startDirectConversationPolling(userId) {
+  stopConversationPolling();
+  state.conversationPollTimer = setInterval(() => refreshDirectConversation(userId), state.connected ? 5000 : 2500);
+}
+
+async function updateDirectConversationPresence(userIds = []) {
+  const otherUserId = userIds.find((userId) => userId !== state.session?.id);
+  if (!otherUserId || state.activeDirectConversationUserId !== otherUserId || !window.Swal.isVisible()) return;
+  const payload = await fetchDirectConversation(otherUserId);
+  const host = $("[data-direct-chat-presence]");
+  if (payload && host) host.textContent = conversationPresenceText(payload.activeUserIds);
+}
+
 const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
 let rtcConfig = { iceServers: DEFAULT_ICE_SERVERS };
 let rtcConfigPromise = null;
@@ -2364,6 +2582,14 @@ async function startAudioCall(requestId) {
 
 async function startVideoCall(requestId) {
   return startCall(requestId, true);
+}
+
+async function startDirectAudioCall(userId) {
+  return startDirectCall(userId, false);
+}
+
+async function startDirectVideoCall(userId) {
+  return startDirectCall(userId, true);
 }
 
 async function startCall(requestId, withVideo = false) {
@@ -2408,15 +2634,64 @@ async function startCall(requestId, withVideo = false) {
   }
 }
 
+async function startDirectCall(userId, withVideo = false) {
+  const target = userProfile(userId);
+  if (!canDirectContact(target)) return;
+  if (!callSupported()) return notify("Audio call unavailable", audioCallUnavailableMessage(), "warning");
+  if (!state.connected || !state.socket) {
+    notify("Live socket", "Reconnecting before the call...", "info");
+    await ensureSocketConnected();
+  }
+  if (!state.connected || !state.socket) return notify("Audio call unavailable", "Live socket is still offline. Reload the page and try again.", "warning");
+  if (state.call) return notify("Call already active", "End the current call before starting another.", "warning");
+  try {
+    if (!await directCallRecipientIsOnline(userId)) {
+      return notify("Audio call", "The other party is offline.", "info");
+    }
+    const call = createCallState("", createBrowserId(), "outgoing", target.name, target.photoUrl, withVideo, { directUserId: userId });
+    state.call = call;
+    renderCallPanel();
+    startCallTone("outgoing");
+    scheduleCallTimeout(call);
+    await ensureRtcConfig();
+    call.localStream = await acquireCallMedia(withVideo);
+    call.localVideoEnabled = Boolean(call.localStream.getVideoTracks().length);
+    call.requestedVideo = call.localVideoEnabled;
+    await refreshCallCameraAvailability(call);
+    renderCallPanel();
+    call.peerConnection = createPeerConnection(call);
+    call.localStream.getTracks().forEach((track) => {
+      const sender = call.peerConnection.addTrack(track, call.localStream);
+      if (track.kind === "video") {
+        call.videoSender = sender;
+        monitorLocalVideoTrack(call, track);
+      }
+    });
+    const offer = await call.peerConnection.createOffer();
+    await call.peerConnection.setLocalDescription(offer);
+    emitCallSignal("offer", { description: call.peerConnection.localDescription, withVideo: call.localVideoEnabled });
+  } catch (error) {
+    endAudioCall(false);
+    notify("Call failed", microphoneErrorText(error), "error");
+  }
+}
+
 function callRecipientIsOnline(requestId) {
   return new Promise((resolve) => {
     state.socket.timeout(4000).emit("kaila.call.check", { requestId }, (error, response = {}) => resolve(!error && response.ok));
   });
 }
 
-function createCallState(requestId, callId, direction, otherName, otherPhotoUrl = "", withVideo = false) {
+function directCallRecipientIsOnline(userId) {
+  return new Promise((resolve) => {
+    state.socket.timeout(4000).emit("kaila.call.check", { directUserId: userId }, (error, response = {}) => resolve(!error && response.ok));
+  });
+}
+
+function createCallState(requestId, callId, direction, otherName, otherPhotoUrl = "", withVideo = false, extra = {}) {
   return {
     requestId,
+    directUserId: extra.directUserId || "",
     callId,
     direction,
     otherName: otherName || "Job contact",
@@ -3076,6 +3351,7 @@ function emitCallSignal(type, extra = {}) {
   if (!state.call || !state.socket) return;
   state.socket.timeout(type === "candidate" ? 8000 : 5000).emit("kaila.call.signal", {
     requestId: state.call.requestId,
+    directUserId: state.call.directUserId,
     callId: state.call.callId,
     type,
     ...extra,
@@ -3104,16 +3380,16 @@ async function handleCallSignal(signal = {}) {
   if (signal.senderId === state.session.id) return;
   if (signal.type === "offer") {
     if (!callSupported()) {
-      state.socket?.emit("kaila.call.signal", { requestId: signal.requestId, callId: signal.callId, type: "reject" });
+      state.socket?.emit("kaila.call.signal", { requestId: signal.requestId, directUserId: signal.directUserId || signal.senderId, callId: signal.callId, type: "reject" });
       notify("Audio call unavailable", audioCallUnavailableMessage(), "warning");
       return;
     }
     if (state.call) {
-      state.socket?.emit("kaila.call.signal", { requestId: signal.requestId, callId: signal.callId, type: "busy" });
+      state.socket?.emit("kaila.call.signal", { requestId: signal.requestId, directUserId: signal.directUserId || signal.senderId, callId: signal.callId, type: "busy" });
       return;
     }
-    const request = state.requests.find((item) => item.id === signal.requestId);
-    state.call = createCallState(signal.requestId, signal.callId, "incoming", signal.senderName, userProfile(signal.senderId).photoUrl || conversationOtherPartyPhoto(request), Boolean(signal.withVideo));
+    const request = signal.requestId ? state.requests.find((item) => item.id === signal.requestId) : null;
+    state.call = createCallState(signal.requestId || "", signal.callId, "incoming", signal.senderName, userProfile(signal.senderId).photoUrl || conversationOtherPartyPhoto(request), Boolean(signal.withVideo), { directUserId: signal.directUserId || signal.senderId || "" });
     state.call.remoteDescription = signal.description;
     scheduleCallTimeout(state.call);
     renderCallPanel();
@@ -3792,9 +4068,11 @@ function connectSocket(force = false) {
       if (["admin", "ops"].includes(state.session?.role)) loadState({ silent: true }).catch(() => {});
     });
     state.socket.on("kaila.message.saved", handleMessageSaved);
+    state.socket.on("kaila.direct-message.saved", handleDirectMessageSaved);
     state.socket.on("kaila.typing.changed", handleTypingChanged);
     state.socket.on("kaila.message.reaction", ({ requestId }) => refreshConversation(requestId));
     state.socket.on("kaila.presence.changed", ({ requestId }) => updateConversationPresence(requestId));
+    state.socket.on("kaila.direct-presence.changed", ({ userIds }) => updateDirectConversationPresence(userIds));
     state.socket.on("kaila.call.signal", (signal) => handleCallSignal(signal).catch((error) => {
       endAudioCall(false);
       notify("Call failed", error.message || "Audio call signaling failed.", "error");
@@ -4070,6 +4348,30 @@ function handleMessageSaved({ requestId, message } = {}) {
     html: `
       <div class="text-start">
         <strong>${escapeHtml(message.senderName)}</strong>
+        <p class="mb-0">${escapeHtml(message.detail)}</p>
+      </div>
+    `,
+  });
+}
+
+function handleDirectMessageSaved({ userIds = [], message } = {}) {
+  if (!message || !state.session || message.senderId === state.session.id || !userIds.includes(state.session.id)) return;
+  const otherUserId = message.senderId;
+  const sender = userProfile(otherUserId);
+  if (state.activeDirectConversationUserId === otherUserId) {
+    refreshDirectConversation(otherUserId);
+    return;
+  }
+  announceAttentionEvent("New direct message", `${message.senderName}: ${message.detail}`, "message");
+
+  queueAttentionModal({
+    icon: "info",
+    title: "New direct message",
+    confirmButtonText: "Open messages",
+    onConfirm: () => openDirectConversation(otherUserId),
+    html: `
+      <div class="text-start">
+        ${renderIdentity(sender.name || message.senderName, sender.photoUrl, `${capitalize(sender.role || "user")} account`, sender.reputation, "compact")}
         <p class="mb-0">${escapeHtml(message.detail)}</p>
       </div>
     `,
