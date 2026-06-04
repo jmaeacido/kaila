@@ -628,6 +628,22 @@ async function initializeDatabase() {
       CONSTRAINT job_message_reactions_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS missed_calls (
+      id VARCHAR(64) PRIMARY KEY,
+      caller_id VARCHAR(64) NOT NULL,
+      caller_name VARCHAR(160) NOT NULL,
+      recipient_id VARCHAR(64) NOT NULL,
+      request_id VARCHAR(64) NULL,
+      direct_user_id VARCHAR(64) NULL,
+      call_type VARCHAR(20) NOT NULL,
+      context_title VARCHAR(180) NULL,
+      created_at DATETIME NOT NULL,
+      INDEX missed_calls_recipient_idx (recipient_id, created_at),
+      CONSTRAINT missed_calls_caller_fk FOREIGN KEY (caller_id) REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT missed_calls_recipient_fk FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
 }
 
 async function ensureColumn(table, column, definition) {
@@ -962,6 +978,20 @@ function mapDirectMessage(row) {
   };
 }
 
+function mapMissedCall(row) {
+  return {
+    id: row.id,
+    callerId: row.caller_id,
+    callerName: row.caller_name,
+    recipientId: row.recipient_id,
+    requestId: row.request_id || "",
+    directUserId: row.direct_user_id || "",
+    callType: row.call_type || "audio",
+    contextTitle: row.context_title || "",
+    createdAt: row.created_at,
+  };
+}
+
 function directConversationKey(leftUserId, rightUserId) {
   return [leftUserId, rightUserId].sort().join(":");
 }
@@ -1159,6 +1189,88 @@ async function getState(viewer = null) {
 
 function getStateFor(user) {
   return getState(user || null);
+}
+
+async function messageSummaryFor(user) {
+  if (!user) return { jobMessages: [], directMessages: [] };
+  const [jobRows] = await pool.query(
+    `
+      SELECT message.*, request.category
+      FROM job_messages AS message
+      JOIN requests AS request ON request.id = message.request_id
+      JOIN (
+        SELECT request_id, MAX(created_at) AS latest_at
+        FROM job_messages
+        WHERE sender_id <> ?
+        GROUP BY request_id
+      ) AS latest ON latest.request_id = message.request_id AND latest.latest_at = message.created_at
+      WHERE message.sender_id <> ?
+        AND request.accepted_provider_id IS NOT NULL
+        AND (request.client_id = ? OR request.accepted_provider_id = ?)
+      ORDER BY message.created_at DESC
+      LIMIT 50
+    `,
+    [user.id, user.id, user.id, user.id]
+  );
+  const [directRows] = await pool.query(
+    `
+      SELECT message.*
+      FROM direct_messages AS message
+      JOIN (
+        SELECT sender_id, MAX(created_at) AS latest_at
+        FROM direct_messages
+        WHERE recipient_id = ?
+        GROUP BY sender_id
+      ) AS latest ON latest.sender_id = message.sender_id AND latest.latest_at = message.created_at
+      WHERE message.recipient_id = ?
+      ORDER BY message.created_at DESC
+      LIMIT 50
+    `,
+    [user.id, user.id]
+  );
+  return {
+    jobMessages: jobRows.map((row) => ({ requestId: row.request_id, title: row.category, message: mapMessage(row) })),
+    directMessages: directRows.map((row) => ({ userId: row.sender_id, title: row.sender_name, message: mapDirectMessage(row) })),
+  };
+}
+
+async function notificationSummaryFor(user) {
+  if (!user || user.role === "ops") return { activities: [], missedCalls: [] };
+  const [activityRows] = await pool.query("SELECT * FROM activities ORDER BY created_at DESC LIMIT 80");
+  const [missedCallRows] = await pool.query("SELECT * FROM missed_calls WHERE recipient_id = ? ORDER BY created_at DESC LIMIT 30", [user.id]);
+  return {
+    activities: activityRows.map(mapActivity),
+    missedCalls: missedCallRows.map(mapMissedCall),
+  };
+}
+
+async function recordMissedCall({ caller, recipientId, requestId = "", directUserId = "", callType = "audio", contextTitle = "" } = {}) {
+  if (!caller?.id || !recipientId) return null;
+  const missedCall = {
+    id: createId(),
+    callerId: caller.id,
+    callerName: caller.name,
+    recipientId,
+    requestId,
+    directUserId,
+    callType,
+    contextTitle,
+    createdAt: nowMysql(),
+  };
+  await pool.query(
+    "INSERT INTO missed_calls (id, caller_id, caller_name, recipient_id, request_id, direct_user_id, call_type, context_title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [missedCall.id, missedCall.callerId, missedCall.callerName, missedCall.recipientId, missedCall.requestId || null, missedCall.directUserId || null, missedCall.callType, missedCall.contextTitle, missedCall.createdAt]
+  );
+  socketServers.forEach((socketServer) => {
+    socketServer.to(`user:${recipientId}`).emit("kaila.missed-call.saved", missedCall);
+  });
+  return missedCall;
+}
+
+async function recordMissedCallForBoth({ caller, targetUserId, requestId = "", directUserId = "", callType = "audio", contextTitle = "" } = {}) {
+  if (!caller?.id || !targetUserId) return;
+  await recordMissedCall({ caller, recipientId: targetUserId, requestId, directUserId, callType, contextTitle });
+  await recordMissedCall({ caller, recipientId: caller.id, requestId, directUserId, callType, contextTitle });
 }
 
 async function closeExpiredRatingWindows() {
@@ -1372,6 +1484,14 @@ app.get("/api/state", async (req, res) => {
   const userId = req.get("X-KAILA-User-Id");
   const [rows] = userId ? await pool.query("SELECT * FROM users WHERE id = ? LIMIT 1", [userId]) : [[]];
   res.json(await getState(rows.length ? mapUser(rows[0]) : null));
+});
+
+app.get("/api/message-summary", requireUser, async (req, res) => {
+  res.json(await messageSummaryFor(req.user));
+});
+
+app.get("/api/notification-summary", requireUser, async (req, res) => {
+  res.json(await notificationSummaryFor(req.user));
 });
 
 app.post("/api/register", async (req, res) => {
@@ -2029,6 +2149,7 @@ app.post("/api/admin/truncate", requireUser, async (req, res) => {
   await pool.query("SET FOREIGN_KEY_CHECKS = 0");
   await pool.query("TRUNCATE TABLE activities");
   await pool.query("TRUNCATE TABLE job_message_reactions");
+  await pool.query("TRUNCATE TABLE missed_calls");
   await pool.query("TRUNCATE TABLE job_messages");
   await pool.query("TRUNCATE TABLE request_attachments");
   await pool.query("TRUNCATE TABLE request_passes");
@@ -2075,7 +2196,17 @@ socketServer.on("connection", (socket) => {
         if (!target || !canInitiateDirectInteraction(user, target)) {
           throw new Error("Only Admin can start direct calls, except Ops can start calls with Admin");
         }
-        return acknowledge({ ok: Boolean(await userSocketCount(target.id)) });
+        const online = Boolean(await userSocketCount(target.id));
+        if (!online) {
+          await recordMissedCallForBoth({
+            caller: user,
+            targetUserId: target.id,
+            directUserId: target.id,
+            callType: payload.withVideo ? "video" : "audio",
+            contextTitle: target.name,
+          });
+        }
+        return acknowledge({ ok: online });
       }
       const requestId = String(payload.requestId || "");
       const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
@@ -2083,7 +2214,17 @@ socketServer.on("connection", (socket) => {
         throw new Error("Audio calls are only available while the confirmed job conversation is active");
       }
       const targetUserId = otherConversationUserId(requestRows[0], user.id);
-      acknowledge({ ok: Boolean(targetUserId && await userSocketCount(targetUserId)) });
+      const online = Boolean(targetUserId && await userSocketCount(targetUserId));
+      if (!online && targetUserId) {
+        await recordMissedCallForBoth({
+          caller: user,
+          targetUserId,
+          requestId,
+          callType: payload.withVideo ? "video" : "audio",
+          contextTitle: requestRows[0].category,
+        });
+      }
+      acknowledge({ ok: online });
     } catch (error) {
       acknowledge({ ok: false, error: error.message || "Could not check call availability" });
     }
@@ -2101,9 +2242,11 @@ socketServer.on("connection", (socket) => {
         throw new Error("Invalid call signal");
       }
       let targetUserId = "";
+      let contextTitle = "";
       if (directUserId) {
         const target = await getUser(directUserId);
         if (!target) throw new Error("Call recipient not found");
+        contextTitle = target.name;
         const activeCall = activeCalls.get(callId);
         if (type === "offer") {
           if (!canInitiateDirectInteraction(user, target)) {
@@ -2118,6 +2261,7 @@ socketServer.on("connection", (socket) => {
         if (!requestRows.length || !canWriteConversation(requestRows[0], user)) {
           throw new Error("Audio calls are only available while the confirmed job conversation is active");
         }
+        contextTitle = requestRows[0].category;
         targetUserId = otherConversationUserId(requestRows[0], user.id);
       }
       if (!targetUserId) throw new Error("Call recipient not found");
@@ -2129,6 +2273,10 @@ socketServer.on("connection", (socket) => {
         activeCalls.set(callId, {
           requestId,
           directUserIds: directUserId ? [user.id, targetUserId] : [],
+          callerId: user.id,
+          targetUserId,
+          callType: payload.withVideo ? "video" : "audio",
+          contextTitle,
           userIds: [user.id, targetUserId],
           answeredBySocketId: "",
           answeredByUserId: "",
@@ -2136,6 +2284,17 @@ socketServer.on("connection", (socket) => {
         });
       }
       const activeCall = activeCalls.get(callId);
+      if (type === "hangup" && activeCall && !activeCall.answeredByUserId) {
+        const caller = user.id === activeCall.callerId ? user : await getUser(activeCall.callerId);
+        await recordMissedCallForBoth({
+          caller,
+          targetUserId: activeCall.targetUserId || targetUserId,
+          requestId: activeCall.requestId || requestId,
+          directUserId: directUserId || "",
+          callType: activeCall.callType || "audio",
+          contextTitle: activeCall.contextTitle || "",
+        });
+      }
       if (type === "answer") {
         if (activeCall?.answeredByUserId === user.id && activeCall.answeredBySocketId && activeCall.answeredBySocketId !== socket.id) {
           return acknowledge({ ok: false, code: "answered_elsewhere", error: "This call was answered on another device" });

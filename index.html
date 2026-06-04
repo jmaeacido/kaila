@@ -36,7 +36,7 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
-  <link rel="stylesheet" href="style.css?v=20260604-composer-clear">
+  <link rel="stylesheet" href="style.css?v=20260604-missed-call-both">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -291,6 +291,14 @@
           </div>
           <div class="app-header-actions">
             <span class="queue-badge" data-queue-status role="status"></span>
+            <button class="btn btn-sm btn-outline-secondary icon-btn bell-btn d-none" type="button" data-notification-bell title="Notifications" aria-label="Notifications">
+              <i class="fa-solid fa-bell"></i>
+              <span class="bell-count" data-notification-count hidden>0</span>
+            </button>
+            <button class="btn btn-sm btn-outline-secondary icon-btn bell-btn d-none" type="button" data-message-bell title="Messages" aria-label="Messages">
+              <i class="fa-solid fa-message"></i>
+              <span class="bell-count" data-message-count hidden>0</span>
+            </button>
             <span data-role-pill class="badge role-badge"></span>
             <button class="btn btn-sm btn-outline-danger icon-btn" type="button" data-logout title="Logout" aria-label="Logout">
               <i class="fa-solid fa-right-from-bracket"></i>
@@ -385,6 +393,6 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260604-composer-clear"></script>
+  <script src="app.js?v=20260604-missed-call-both"></script>
 </body>
 </html>

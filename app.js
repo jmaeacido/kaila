@@ -8,6 +8,9 @@ const STORAGE = {
   stateSnapshot: "kaila.deploy.stateSnapshot",
   validationQueue: "kaila.deploy.validationQueue",
   offlineCredentials: "kaila.deploy.offlineCredentials",
+  attentionBadges: "kaila.deploy.attentionBadges",
+  messageReads: "kaila.deploy.messageReads",
+  notificationReads: "kaila.deploy.notificationReads",
 };
 const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Cellphone repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
@@ -36,17 +39,24 @@ const state = {
   providers: [],
   validationEntries: [],
   activity: [],
+  missedCalls: [],
   socket: null,
   connected: false,
   userInteracted: false,
   attentionQueue: [],
+  unreadNotifications: 0,
+  unreadNotificationItems: [],
+  unreadMessages: [],
   attentionTimer: null,
   attentionOpen: false,
   activeOfferPromptRequestId: null,
+  lastDashboardTabTarget: "#requests-pane",
   activeConversationId: null,
   activeDirectConversationUserId: null,
   conversationDraftVersion: 0,
   directConversationDraftVersion: 0,
+  messageSummarySyncing: false,
+  notificationSummarySyncing: false,
   validationSyncing: false,
   typingTimer: null,
   typingSent: false,
@@ -65,6 +75,7 @@ const $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(sel
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
+  loadAttentionBadgesForSession();
   registerServiceWorker();
   setupAttentionNotifications();
   setupOfflineSync();
@@ -131,8 +142,16 @@ function bindEvents() {
   $("[data-open-live]").addEventListener("click", () => $("[data-live-panel]").hidden = false);
   $("[data-close-live]").addEventListener("click", () => $("[data-live-panel]").hidden = true);
   $("[data-reconnect]").addEventListener("click", () => connectSocket(true));
+  $("[data-notification-bell]")?.addEventListener("click", openNotificationBell);
+  $("[data-message-bell]")?.addEventListener("click", openMessageBell);
   $("[data-settings-tab]")?.addEventListener("shown.bs.tab", renderSettings);
   $("[data-settings-tab]")?.addEventListener("click", renderSettings);
+  $("[data-activity-tab]")?.addEventListener("shown.bs.tab", clearUnreadNotifications);
+  $("[data-activity-tab]")?.addEventListener("click", clearUnreadNotifications);
+  $$(".app-tabs .nav-link").forEach((tab) => {
+    tab.addEventListener("shown.bs.tab", () => rememberDashboardTab(tab.dataset.bsTarget));
+    tab.addEventListener("click", () => rememberDashboardTab(tab.dataset.bsTarget));
+  });
 }
 
 function togglePasswordVisibility(event) {
@@ -238,8 +257,11 @@ async function apiFetch(path, options = {}) {
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    console.error("KAILA API error", { path, status: response.status, payload });
-    throw new Error(payload.error || response.statusText || "Request failed");
+    if (!options.silentError) console.error("KAILA API error", { path, status: response.status, payload });
+    const apiError = new Error(payload.error || response.statusText || "Request failed");
+    apiError.status = response.status;
+    apiError.payload = payload;
+    throw apiError;
   }
   return payload;
 }
@@ -251,7 +273,10 @@ async function loadState(options = {}) {
     if (state.session && !state.users.some((user) => user.id === state.session.id)) {
       localStorage.removeItem(STORAGE.session);
       state.session = null;
+      return;
     }
+    await syncUnreadNotificationSummaries();
+    await syncUnreadMessageSummaries();
   } catch {
     const cached = readJson(STORAGE.stateSnapshot, null);
     if (cached) {
@@ -356,9 +381,12 @@ async function register(event) {
 
   state.session = payload.user;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+  loadAttentionBadgesForSession();
   await rememberOfflineLogin(data.username, data.password, payload.user);
   syncSocketIdentity();
   safeApplyState(payload.state);
+  await syncUnreadNotificationSummaries();
+  await syncUnreadMessageSummaries();
   form.reset();
   await successRedirect("Account created", "Welcome to KAILA.");
 }
@@ -384,9 +412,12 @@ async function login(event) {
 
   state.session = payload.user;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+  loadAttentionBadgesForSession();
   await rememberOfflineLogin(data.username, data.password, payload.user);
   syncSocketIdentity();
   safeApplyState(payload.state);
+  await syncUnreadNotificationSummaries();
+  await syncUnreadMessageSummaries();
   form.reset();
   await successRedirect("Logged in", `Welcome back, ${state.session.name}.`);
 }
@@ -412,6 +443,7 @@ async function logout() {
   endAudioCall(false);
   localStorage.removeItem(STORAGE.session);
   state.session = null;
+  loadAttentionBadgesForSession();
   syncSocketIdentity();
   await window.Swal.fire({
     customClass: { popup: "kaila-popup" },
@@ -445,6 +477,7 @@ function renderNav() {
   const signedIn = Boolean(state.session);
   $("[data-current-user]").classList.toggle("d-none", !signedIn);
   $("[data-app-link]").classList.toggle("d-none", !signedIn);
+  $$("[data-notification-bell], [data-message-bell]").forEach((button) => button.classList.toggle("d-none", !signedIn));
   if (signedIn) $("[data-current-user]").textContent = `${state.session.name} (${state.session.role})`;
   const summary = $("[data-current-user-summary]");
   if (summary && signedIn) summary.textContent = `${state.session.name} - ${state.session.area || state.session.role}`;
@@ -453,6 +486,7 @@ function renderNav() {
     userPhoto.src = signedIn ? resolveMediaUrl(state.session.photoUrl) : "assets/android-chrome-192x192.png";
     userPhoto.alt = signedIn ? `${state.session.name} photo` : "";
   }
+  renderAttentionBadges();
 }
 
 function renderConnectivity() {
@@ -514,6 +548,20 @@ function activateTab(target) {
     pane.classList.toggle("active", active);
     pane.classList.toggle("show", active);
   });
+  rememberDashboardTab(target);
+  if (target === "#activity-pane") clearUnreadNotifications();
+}
+
+function rememberDashboardTab(target) {
+  if (!target || target === "#activity-pane") return;
+  state.lastDashboardTabTarget = target;
+}
+
+function fallbackDashboardTab() {
+  const lastTab = $(`.app-tabs .nav-link[data-bs-target="${escapeAttribute(state.lastDashboardTabTarget)}"]`);
+  if (lastTab && !lastTab.hidden) return state.lastDashboardTabTarget;
+  const tab = $$(".app-tabs .nav-link").find((item) => !item.hidden && !["#activity-pane", "#settings-pane"].includes(item.dataset.bsTarget));
+  return tab?.dataset.bsTarget || "#requests-pane";
 }
 
 function focusRequestCard(requestId, offerId = "") {
@@ -1442,11 +1490,28 @@ function renderActivity() {
     $("[data-live-feed]").innerHTML = "";
     return;
   }
-  const html = state.activity.length
-    ? state.activity.map((item) => `<article class="k-card"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.detail)}</p></article>`).join("")
+  const missedCallCards = state.missedCalls.map(renderMissedCallActivity).join("");
+  const activityCards = state.activity.map((item) => `<article class="k-card"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.detail)}</p></article>`).join("");
+  const html = missedCallCards || activityCards
+    ? `${missedCallCards}${activityCards}`
     : emptyCard("No activity yet", "Real-time events will appear here.");
   $("[data-activity-feed]").innerHTML = html;
   $("[data-live-feed]").innerHTML = html;
+}
+
+function renderMissedCallActivity(call = {}) {
+  const callLabel = call.callType === "video" ? "video call" : "audio call";
+  const context = call.contextTitle ? ` for ${call.contextTitle}` : "";
+  const detail = call.callerId === state.session?.id
+    ? `You called${context}, but the call was not answered.`
+    : `${call.callerName || "A KAILA user"} tried to call${context}.`;
+  return `
+    <article class="k-card missed-call-card">
+      <h3>Missed ${callLabel}</h3>
+      <p>${escapeHtml(detail)}</p>
+      <small>${escapeHtml(formatDateTime(call.createdAt))}</small>
+    </article>
+  `;
 }
 
 async function openClientSurveyModal(entry = null) {
@@ -2201,6 +2266,7 @@ async function confirmRequest(requestId, offerId) {
 async function openConversation(requestId) {
   const request = state.requests.find((item) => item.id === requestId);
   if (!request) return;
+  clearUnreadMessage("job", requestId);
   state.activeConversationId = requestId;
   await setConversationPresence(requestId, true);
   const payload = await fetchConversation(requestId);
@@ -2208,6 +2274,7 @@ async function openConversation(requestId) {
     setConversationPresence(requestId, false);
     return;
   }
+  markConversationRead("job", requestId, payload.messages);
 
   await window.Swal.fire({
     customClass: { popup: "kaila-popup chat-popup" },
@@ -2325,6 +2392,7 @@ async function refreshConversation(requestId) {
   const payload = await fetchConversation(requestId);
   const shell = $(".chat-shell");
   if (!payload || !shell) return;
+  markConversationRead("job", requestId, payload.messages);
   const request = state.requests.find((item) => item.id === requestId);
   shell.outerHTML = conversationHtml(payload.messages, payload.writable, payload.activeUserIds, request);
   bindConversationInput(requestId, payload.writable);
@@ -2410,6 +2478,7 @@ function conversationPresenceText(activeUserIds = []) {
 async function openDirectConversation(userId) {
   const target = userProfile(userId);
   if (!canViewDirectContact(target)) return;
+  clearUnreadMessage("direct", userId);
   state.activeDirectConversationUserId = userId;
   await setDirectConversationPresence(userId, true);
   const payload = await fetchDirectConversation(userId);
@@ -2417,6 +2486,7 @@ async function openDirectConversation(userId) {
     setDirectConversationPresence(userId, false);
     return;
   }
+  markConversationRead("direct", userId, payload.messages);
 
   await window.Swal.fire({
     customClass: { popup: "kaila-popup chat-popup" },
@@ -2518,6 +2588,7 @@ async function refreshDirectConversation(userId) {
   const payload = await fetchDirectConversation(userId);
   const shell = $(".chat-shell");
   if (!payload || !shell) return;
+  markConversationRead("direct", userId, payload.messages);
   shell.outerHTML = directConversationHtml(payload.messages, payload.writable, payload.activeUserIds, payload.target || userProfile(userId));
   bindDirectConversationInput(userId, payload.writable);
   const nextInput = $("[data-direct-chat-input]");
@@ -2603,7 +2674,7 @@ async function startCall(requestId, withVideo = false) {
   const request = state.requests.find((item) => item.id === requestId);
   if (!request || !canViewConversation(request)) return;
   try {
-    if (!await callRecipientIsOnline(requestId)) {
+    if (!await callRecipientIsOnline(requestId, withVideo)) {
       return notify("Audio call", "The other party is offline.", "info");
     }
     const call = createCallState(requestId, createBrowserId(), "outgoing", conversationOtherPartyName(request), conversationOtherPartyPhoto(request), withVideo);
@@ -2645,7 +2716,7 @@ async function startDirectCall(userId, withVideo = false) {
   if (!state.connected || !state.socket) return notify("Audio call unavailable", "Live socket is still offline. Reload the page and try again.", "warning");
   if (state.call) return notify("Call already active", "End the current call before starting another.", "warning");
   try {
-    if (!await directCallRecipientIsOnline(userId)) {
+    if (!await directCallRecipientIsOnline(userId, withVideo)) {
       return notify("Audio call", "The other party is offline.", "info");
     }
     const call = createCallState("", createBrowserId(), "outgoing", target.name, target.photoUrl, withVideo, { directUserId: userId });
@@ -2676,15 +2747,15 @@ async function startDirectCall(userId, withVideo = false) {
   }
 }
 
-function callRecipientIsOnline(requestId) {
+function callRecipientIsOnline(requestId, withVideo = false) {
   return new Promise((resolve) => {
-    state.socket.timeout(4000).emit("kaila.call.check", { requestId }, (error, response = {}) => resolve(!error && response.ok));
+    state.socket.timeout(4000).emit("kaila.call.check", { requestId, withVideo }, (error, response = {}) => resolve(!error && response.ok));
   });
 }
 
-function directCallRecipientIsOnline(userId) {
+function directCallRecipientIsOnline(userId, withVideo = false) {
   return new Promise((resolve) => {
-    state.socket.timeout(4000).emit("kaila.call.check", { directUserId: userId }, (error, response = {}) => resolve(!error && response.ok));
+    state.socket.timeout(4000).emit("kaila.call.check", { directUserId: userId, withVideo }, (error, response = {}) => resolve(!error && response.ok));
   });
 }
 
@@ -4079,6 +4150,13 @@ function connectSocket(force = false) {
     }));
     state.socket.on("kaila.activity", (activity) => {
       if (!state.activity.some((item) => item.id === activity.id)) state.activity.unshift(activity);
+      if (state.session?.role !== "ops") addUnreadNotification(notificationItemFromActivity(activity));
+      renderActivity();
+    });
+    state.socket.on("kaila.missed-call.saved", (missedCall) => {
+      if (!missedCall || missedCall.recipientId !== state.session?.id) return;
+      state.missedCalls = [missedCall, ...state.missedCalls.filter((item) => item.id !== missedCall.id)].slice(0, 30);
+      addUnreadNotification(notificationItemFromMissedCall(missedCall));
       renderActivity();
     });
   }).catch(() => {
@@ -4338,6 +4416,14 @@ function handleMessageSaved({ requestId, message } = {}) {
     refreshConversation(requestId);
     return;
   }
+  addUnreadMessage({
+    type: "job",
+    id: requestId,
+    title: request.category,
+    sender: message.senderName,
+    detail: message.detail,
+    createdAt: message.createdAt,
+  });
   announceAttentionEvent("New job message", `${message.senderName}: ${message.detail}`, "message");
 
   queueAttentionModal({
@@ -4362,6 +4448,14 @@ function handleDirectMessageSaved({ userIds = [], message } = {}) {
     refreshDirectConversation(otherUserId);
     return;
   }
+  addUnreadMessage({
+    type: "direct",
+    id: otherUserId,
+    title: sender.name || message.senderName || "Direct message",
+    sender: message.senderName,
+    detail: message.detail,
+    createdAt: message.createdAt,
+  });
   announceAttentionEvent("New direct message", `${message.senderName}: ${message.detail}`, "message");
 
   queueAttentionModal({
@@ -4420,6 +4514,7 @@ function handleTypingChanged({ requestId, senderId, senderName, typing } = {}) {
 }
 
 function announceAttentionEvent(title, detail = "", kind = "update") {
+  if (kind !== "message") addUnreadNotification();
   playAttentionTone(kind);
   vibrateAfterInteraction(kind === "urgent" ? [500, 100, 500, 100, 700] : [280, 90, 280, 90, 420]);
   if (document.hidden && window.Notification?.permission === "granted") {
@@ -4429,6 +4524,324 @@ function announceAttentionEvent(title, detail = "", kind = "update") {
       tag: `kaila-${kind}`,
     });
   }
+}
+
+function loadAttentionBadgesForSession() {
+  state.unreadNotifications = 0;
+  state.unreadNotificationItems = [];
+  state.unreadMessages = [];
+  const saved = readJson(STORAGE.attentionBadges, {});
+  const sessionId = state.session?.id;
+  if (!sessionId) return;
+  const userBadges = saved[sessionId] || {};
+  state.unreadNotifications = Number(userBadges.notifications || 0);
+  state.unreadNotificationItems = Array.isArray(userBadges.notificationItems) ? userBadges.notificationItems : [];
+  state.unreadMessages = Array.isArray(userBadges.messages) ? userBadges.messages : [];
+}
+
+function persistAttentionBadges() {
+  const saved = readJson(STORAGE.attentionBadges, {});
+  if (state.session?.id) {
+    saved[state.session.id] = {
+      notifications: unreadNotificationCount(),
+      notificationItems: state.unreadNotificationItems,
+      messages: state.unreadMessages,
+    };
+  }
+  localStorage.setItem(STORAGE.attentionBadges, JSON.stringify(saved));
+}
+
+function renderAttentionBadges() {
+  const notificationButton = $("[data-notification-bell]");
+  const messageButton = $("[data-message-bell]");
+  const notificationCount = $("[data-notification-count]");
+  const messageCount = $("[data-message-count]");
+  const signedIn = Boolean(state.session);
+  const notifications = signedIn ? unreadNotificationCount() : 0;
+  const messages = signedIn ? state.unreadMessages.length : 0;
+  if (notificationButton) {
+    notificationButton.classList.toggle("has-unread", notifications > 0);
+    notificationButton.setAttribute("aria-label", notifications ? `${notifications} unread notification${notifications === 1 ? "" : "s"}` : "Notifications");
+  }
+  if (messageButton) {
+    messageButton.classList.toggle("has-unread", messages > 0);
+    messageButton.setAttribute("aria-label", messages ? `${messages} unread message${messages === 1 ? "" : "s"}` : "Messages");
+  }
+  setBellCount(notificationCount, notifications);
+  setBellCount(messageCount, messages);
+}
+
+function setBellCount(element, count) {
+  if (!element) return;
+  element.hidden = count <= 0;
+  element.textContent = count > 99 ? "99+" : String(count);
+}
+
+function unreadNotificationCount() {
+  return state.unreadNotificationItems.length || Number(state.unreadNotifications || 0);
+}
+
+function addUnreadNotification(item = null) {
+  if (!state.session) return;
+  if ($("#activity-pane")?.classList.contains("active")) {
+    if (item?.type && item.createdAt) markNotificationTypeReadAt(item.type, item.createdAt);
+    return;
+  }
+  if (item?.key) {
+    state.unreadNotificationItems = [
+      item,
+      ...state.unreadNotificationItems.filter((existing) => existing.key !== item.key),
+    ].slice(0, 80);
+    state.unreadNotifications = state.unreadNotificationItems.length;
+  } else {
+    state.unreadNotifications = Math.min(99, unreadNotificationCount() + 1);
+  }
+  persistAttentionBadges();
+  renderAttentionBadges();
+}
+
+function clearUnreadNotifications() {
+  if (!unreadNotificationCount()) return;
+  markNotificationsRead();
+  state.unreadNotifications = 0;
+  state.unreadNotificationItems = [];
+  persistAttentionBadges();
+  renderAttentionBadges();
+}
+
+function addUnreadMessage(message) {
+  if (!state.session || !message?.type || !message?.id) return;
+  const key = `${message.type}:${message.id}`;
+  state.unreadMessages = [
+    { ...message, key },
+    ...state.unreadMessages.filter((item) => item.key !== key),
+  ].slice(0, 20);
+  persistAttentionBadges();
+  renderAttentionBadges();
+}
+
+function clearUnreadMessage(type, id) {
+  const key = `${type}:${id}`;
+  const nextMessages = state.unreadMessages.filter((item) => item.key !== key);
+  if (nextMessages.length === state.unreadMessages.length) return;
+  state.unreadMessages = nextMessages;
+  persistAttentionBadges();
+  renderAttentionBadges();
+}
+
+function clearUnreadMessages() {
+  if (!state.unreadMessages.length) return;
+  state.unreadMessages.forEach((message) => markConversationReadAt(message.type, message.id, message.createdAt));
+  state.unreadMessages = [];
+  persistAttentionBadges();
+  renderAttentionBadges();
+}
+
+async function syncUnreadNotificationSummaries() {
+  if (!state.session || state.session.role === "ops" || state.notificationSummarySyncing) return;
+  state.notificationSummarySyncing = true;
+  try {
+    const summary = await apiFetch("/api/notification-summary", { method: "GET", silentError: true });
+    state.missedCalls = Array.isArray(summary.missedCalls) ? summary.missedCalls : [];
+    (summary.activities || []).forEach((activity) => {
+      if (!isUnreadNotification("activity", activity.createdAt)) return;
+      addUnreadNotification(notificationItemFromActivity(activity));
+    });
+    state.missedCalls.forEach((missedCall) => {
+      if (!isUnreadNotification("missedCall", missedCall.createdAt)) return;
+      addUnreadNotification(notificationItemFromMissedCall(missedCall));
+    });
+    renderActivity();
+  } catch (error) {
+    if (error.status === 404) return;
+    if (!error.offline) console.warn("KAILA notification summary sync failed:", error);
+  } finally {
+    state.notificationSummarySyncing = false;
+  }
+}
+
+function notificationItemFromActivity(activity = {}) {
+  if (!activity.id) return null;
+  return {
+    type: "activity",
+    id: activity.id,
+    key: `activity:${activity.id}`,
+    title: activity.title || "Activity",
+    detail: activity.detail || "",
+    createdAt: activity.createdAt,
+  };
+}
+
+function notificationItemFromMissedCall(call = {}) {
+  if (!call.id) return null;
+  const callLabel = call.callType === "video" ? "video call" : "audio call";
+  const detail = call.callerId === state.session?.id
+    ? `You called${call.contextTitle ? ` about ${call.contextTitle}` : ""}, but the call was not answered.`
+    : `${call.callerName || "A KAILA user"} tried to call${call.contextTitle ? ` about ${call.contextTitle}` : ""}.`;
+  return {
+    type: "missedCall",
+    id: call.id,
+    key: `missedCall:${call.id}`,
+    title: `Missed ${callLabel}`,
+    detail,
+    createdAt: call.createdAt,
+  };
+}
+
+function isUnreadNotification(type, createdAt) {
+  if (!createdAt) return false;
+  const readAt = notificationReadAt(type);
+  if (!readAt) return true;
+  return new Date(createdAt).getTime() > new Date(readAt).getTime();
+}
+
+function markNotificationsRead() {
+  markNotificationTypeReadAt("activity", latestMessageCreatedAt(state.activity));
+  markNotificationTypeReadAt("missedCall", latestMessageCreatedAt(state.missedCalls));
+}
+
+function markNotificationTypeReadAt(type, readAt) {
+  if (!state.session || !type || !readAt) return;
+  const reads = readJson(STORAGE.notificationReads, {});
+  const userReads = reads[state.session.id] || {};
+  userReads[type] = readAt;
+  reads[state.session.id] = userReads;
+  localStorage.setItem(STORAGE.notificationReads, JSON.stringify(reads));
+}
+
+function notificationReadAt(type) {
+  if (!state.session) return "";
+  return readJson(STORAGE.notificationReads, {})[state.session.id]?.[type] || "";
+}
+
+async function syncUnreadMessageSummaries() {
+  if (!state.session || state.messageSummarySyncing) return;
+  state.messageSummarySyncing = true;
+  try {
+    const summary = await apiFetch("/api/message-summary", { method: "GET", silentError: true });
+    (summary.jobMessages || []).forEach((item) => {
+      const message = item.message || {};
+      if (!message.id || message.senderId === state.session.id || !isUnreadConversationMessage("job", item.requestId, message)) return;
+      addUnreadMessage({
+        type: "job",
+        id: item.requestId,
+        title: item.title || "Job message",
+        sender: message.senderName,
+        detail: message.detail,
+        createdAt: message.createdAt,
+      });
+    });
+    (summary.directMessages || []).forEach((item) => {
+      const message = item.message || {};
+      if (!message.id || message.senderId === state.session.id || !isUnreadConversationMessage("direct", item.userId, message)) return;
+      addUnreadMessage({
+        type: "direct",
+        id: item.userId,
+        title: item.title || message.senderName || "Direct message",
+        sender: message.senderName,
+        detail: message.detail,
+        createdAt: message.createdAt,
+      });
+    });
+  } catch (error) {
+    if (error.status === 404) return;
+    if (!error.offline) console.warn("KAILA message summary sync failed:", error);
+  } finally {
+    state.messageSummarySyncing = false;
+  }
+}
+
+function isUnreadConversationMessage(type, id, message = {}) {
+  if (!type || !id || !message.createdAt) return false;
+  const readAt = conversationReadAt(type, id);
+  if (!readAt) return true;
+  return new Date(message.createdAt).getTime() > new Date(readAt).getTime();
+}
+
+function markConversationRead(type, id, messages = []) {
+  if (!state.session || !type || !id) return;
+  const latest = latestMessageCreatedAt(messages);
+  if (!latest) return;
+  markConversationReadAt(type, id, latest);
+}
+
+function markConversationReadAt(type, id, readAt) {
+  if (!state.session || !type || !id || !readAt) return;
+  const reads = readJson(STORAGE.messageReads, {});
+  const userReads = reads[state.session.id] || {};
+  userReads[`${type}:${id}`] = readAt;
+  reads[state.session.id] = userReads;
+  localStorage.setItem(STORAGE.messageReads, JSON.stringify(reads));
+}
+
+function conversationReadAt(type, id) {
+  if (!state.session) return "";
+  return readJson(STORAGE.messageReads, {})[state.session.id]?.[`${type}:${id}`] || "";
+}
+
+function latestMessageCreatedAt(messages = []) {
+  return messages
+    .map((message) => message.createdAt)
+    .filter(Boolean)
+    .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] || "";
+}
+
+function openNotificationBell() {
+  if (!state.session) return;
+  route("app");
+  const activityOpen = $("#activity-pane")?.classList.contains("active");
+  activateTab(activityOpen ? fallbackDashboardTab() : "#activity-pane");
+  clearUnreadNotifications();
+}
+
+async function openMessageBell() {
+  if (!state.session) return;
+  const unreadMessages = [...state.unreadMessages];
+  const hasUnreadMessages = unreadMessages.length > 0;
+  const result = await modal({
+    title: hasUnreadMessages ? "Unread messages" : "Messages",
+    confirmButtonText: hasUnreadMessages ? "Mark all read" : "View requests",
+    showCancelButton: true,
+    cancelButtonText: "Close",
+    html: `
+      <div class="bell-message-list">
+        ${hasUnreadMessages ? unreadMessages.map((message) => `
+          <button class="bell-message-item" type="button" data-open-unread-message="${escapeAttribute(message.key)}">
+            <strong>${escapeHtml(message.title || "Message")}</strong>
+            <span>${escapeHtml(message.sender || "KAILA")}${message.createdAt ? ` - ${escapeHtml(formatDateTime(message.createdAt))}` : ""}</span>
+            <p>${escapeHtml(message.detail || "")}</p>
+          </button>
+        `).join("") : `
+          <div class="bell-message-empty">
+            <i class="fa-solid fa-message"></i>
+            <strong>No unread messages</strong>
+            <p>New job and direct messages will appear here.</p>
+          </div>
+        `}
+      </div>
+    `,
+    didOpen: (popup) => {
+      tuneFormDensity(popup);
+      $$("[data-open-unread-message]", popup).forEach((button) => {
+        button.addEventListener("click", () => {
+          const message = unreadMessages.find((item) => item.key === button.dataset.openUnreadMessage);
+          window.Swal.close();
+          if (!message) return;
+          setTimeout(() => {
+            if (message.type === "direct") openDirectConversation(message.id);
+            else openConversation(message.id);
+          }, 120);
+        });
+      });
+    },
+  });
+  if (!result.isConfirmed) return;
+  if (hasUnreadMessages) {
+    clearUnreadMessages();
+    return;
+  }
+  route("app");
+  activateTab("#requests-pane");
 }
 
 function playAttentionTone(kind = "update") {
@@ -4944,6 +5357,7 @@ async function tryOfflineLogin(data = {}) {
 
   state.session = stored.user;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+  loadAttentionBadgesForSession();
   syncSocketIdentity();
   const cached = readJson(STORAGE.stateSnapshot, null);
   if (cached) applyServerState(cached, { fromCache: true });
