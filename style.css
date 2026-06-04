@@ -164,20 +164,25 @@ body.app-mode > .navbar {
 }
 
 .adminlte-app {
+  --app-header-height: 4.25rem;
   min-height: 100svh;
   display: grid;
   grid-template-rows: auto 1fr;
+  padding-top: var(--app-header-height);
   overflow-x: hidden;
 }
 
 .app-header {
-  position: sticky;
+  position: fixed;
   top: 0;
+  right: 0;
+  left: 0;
   z-index: 1040;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.85rem;
   align-items: center;
+  min-height: var(--app-header-height);
   padding: 0.65rem 0.75rem;
   border-bottom: 1px solid rgba(207, 226, 223, 0.92);
   background: var(--surface-soft);
@@ -2834,6 +2839,33 @@ body.call-overlay-open {
 
 :root[data-theme="dark"] .chat-message.mine {
   background: #244f55;
+}
+
+.chat-call-log {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+  border: 1px solid rgba(25, 135, 84, 0.18);
+}
+
+.chat-call-log i {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(25, 135, 84, 0.12);
+  color: #198754;
+}
+
+.chat-call-log.missed {
+  border-color: rgba(220, 53, 69, 0.18);
+}
+
+.chat-call-log.missed i {
+  background: rgba(220, 53, 69, 0.12);
+  color: #dc3545;
 }
 
 .chat-message strong,

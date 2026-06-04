@@ -597,11 +597,15 @@ async function initializeDatabase() {
       sender_id VARCHAR(64) NOT NULL,
       sender_name VARCHAR(160) NOT NULL,
       detail TEXT NOT NULL,
+      kind VARCHAR(24) NOT NULL DEFAULT 'text',
+      call_metadata TEXT NULL,
       created_at DATETIME NOT NULL,
       CONSTRAINT job_messages_request_fk FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
       CONSTRAINT job_messages_sender_fk FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  await ensureColumn("job_messages", "kind", "VARCHAR(24) NOT NULL DEFAULT 'text'");
+  await ensureColumn("job_messages", "call_metadata", "TEXT NULL");
   await encryptExistingMessages();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS direct_messages (
@@ -610,12 +614,16 @@ async function initializeDatabase() {
       recipient_id VARCHAR(64) NOT NULL,
       sender_name VARCHAR(160) NOT NULL,
       detail TEXT NOT NULL,
+      kind VARCHAR(24) NOT NULL DEFAULT 'text',
+      call_metadata TEXT NULL,
       created_at DATETIME NOT NULL,
       INDEX direct_messages_pair_idx (sender_id, recipient_id, created_at),
       CONSTRAINT direct_messages_sender_fk FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
       CONSTRAINT direct_messages_recipient_fk FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  await ensureColumn("direct_messages", "kind", "VARCHAR(24) NOT NULL DEFAULT 'text'");
+  await ensureColumn("direct_messages", "call_metadata", "TEXT NULL");
   await encryptExistingDirectMessages();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS job_message_reactions (
@@ -963,6 +971,8 @@ function mapMessage(row, reactions = []) {
     senderName: row.sender_name,
     detail: decryptMessage(row.detail, row.id),
     createdAt: row.created_at,
+    kind: row.kind || "text",
+    call: parseCallMetadata(row.call_metadata, row.id),
     reactions,
   };
 }
@@ -975,7 +985,19 @@ function mapDirectMessage(row) {
     senderName: row.sender_name,
     detail: decryptMessage(row.detail, row.id),
     createdAt: row.created_at,
+    kind: row.kind || "text",
+    call: parseCallMetadata(row.call_metadata, row.id),
   };
+}
+
+function parseCallMetadata(value, messageId) {
+  if (!value) return null;
+  try {
+    const detail = String(value || "").startsWith("enc:v1:") ? decryptMessage(value, `${messageId}:call`) : value;
+    return JSON.parse(detail);
+  } catch {
+    return null;
+  }
 }
 
 function mapMissedCall(row) {
@@ -1078,6 +1100,21 @@ async function endDisconnectedUserCalls(userId) {
   for (const [callId, call] of activeCalls) {
     if (!call.userIds.includes(userId)) continue;
     const targetUserId = call.userIds.find((id) => id !== userId);
+    if (call.answeredByUserId) {
+      await recordEndedCall(call);
+    } else if (call.callerId && call.targetUserId) {
+      const caller = await getUser(call.callerId);
+      if (caller) {
+        await recordMissedCallForBoth({
+          caller,
+          targetUserId: call.targetUserId,
+          requestId: call.requestId || "",
+          directUserId: call.directUserIds?.find((id) => id !== call.callerId) || "",
+          callType: call.callType || "audio",
+          contextTitle: call.contextTitle || "",
+        });
+      }
+    }
     if (targetUserId) relayCallSignal(targetUserId, {
       requestId: call.requestId,
       callId,
@@ -1236,7 +1273,7 @@ async function messageSummaryFor(user) {
 
 async function notificationSummaryFor(user) {
   if (!user || user.role === "ops") return { activities: [], missedCalls: [] };
-  const [activityRows] = await pool.query("SELECT * FROM activities ORDER BY created_at DESC LIMIT 80");
+  const [activityRows] = user.role === "admin" ? await pool.query("SELECT * FROM activities ORDER BY created_at DESC LIMIT 80") : [[]];
   const [missedCallRows] = await pool.query("SELECT * FROM missed_calls WHERE recipient_id = ? ORDER BY created_at DESC LIMIT 30", [user.id]);
   return {
     activities: activityRows.map(mapActivity),
@@ -1271,6 +1308,115 @@ async function recordMissedCallForBoth({ caller, targetUserId, requestId = "", d
   if (!caller?.id || !targetUserId) return;
   await recordMissedCall({ caller, recipientId: targetUserId, requestId, directUserId, callType, contextTitle });
   await recordMissedCall({ caller, recipientId: caller.id, requestId, directUserId, callType, contextTitle });
+  await recordCallLogMessage({
+    caller,
+    targetUserId,
+    requestId,
+    directUserId: directUserId || targetUserId,
+    callType,
+    status: "missed",
+    durationSeconds: 0,
+    contextTitle,
+  });
+}
+
+function formatCallLogDuration(durationSeconds = 0) {
+  const seconds = Math.max(0, Number(durationSeconds) || 0);
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const leftoverMinutes = minutes % 60;
+    return `${hours}h ${leftoverMinutes}m`;
+  }
+  return `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
+function callLogDetail({ status = "completed", callType = "audio", durationSeconds = 0 } = {}) {
+  const label = callType === "video" ? "video call" : "audio call";
+  if (status === "missed") return `Missed ${label}`;
+  if (status === "declined") return `Declined ${label}`;
+  return `${callType === "video" ? "Video" : "Audio"} call ended - ${formatCallLogDuration(durationSeconds)}`;
+}
+
+async function recordCallLogMessage({ caller, targetUserId, requestId = "", directUserId = "", callType = "audio", status = "completed", durationSeconds = 0, startedAt = "", answeredAt = "", endedAt = "", contextTitle = "" } = {}) {
+  if (!caller?.id || !targetUserId) return null;
+  const id = createId();
+  const createdAt = endedAt || nowMysql();
+  const metadata = {
+    callType,
+    status,
+    callerId: caller.id,
+    recipientId: targetUserId,
+    durationSeconds: Math.max(0, Number(durationSeconds) || 0),
+    startedAt,
+    answeredAt,
+    endedAt: createdAt,
+  };
+  const detail = callLogDetail(metadata);
+  const activityTitle = status === "completed" ? "Call completed" : "Missed call";
+  const activityDetail = `${caller.name} ${status === "completed" ? "completed" : "missed"} a ${callType === "video" ? "video" : "audio"} call${contextTitle ? ` for ${contextTitle}` : ""}${status === "completed" ? ` (${formatCallLogDuration(metadata.durationSeconds)})` : ""}`;
+  if (requestId) {
+    const message = {
+      id,
+      requestId,
+      senderId: caller.id,
+      senderName: caller.name,
+      detail,
+      kind: "call",
+      call: metadata,
+      createdAt,
+      reactions: [],
+    };
+    await pool.query(
+      "INSERT INTO job_messages (id, request_id, sender_id, sender_name, detail, kind, call_metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [message.id, message.requestId, message.senderId, message.senderName, encryptMessage(message.detail, message.id), message.kind, encryptMessage(JSON.stringify(metadata), `${message.id}:call`), message.createdAt]
+    );
+    await addActivity(activityTitle, activityDetail);
+    broadcast("kaila.message.saved", { requestId, message });
+    return message;
+  }
+  if (directUserId) {
+    const message = {
+      id,
+      senderId: caller.id,
+      recipientId: targetUserId,
+      senderName: caller.name,
+      detail,
+      kind: "call",
+      call: metadata,
+      createdAt,
+    };
+    await pool.query(
+      "INSERT INTO direct_messages (id, sender_id, recipient_id, sender_name, detail, kind, call_metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [message.id, message.senderId, message.recipientId, message.senderName, encryptMessage(message.detail, message.id), message.kind, encryptMessage(JSON.stringify(metadata), `${message.id}:call`), message.createdAt]
+    );
+    await addActivity(activityTitle, activityDetail);
+    relayDirectEvent([caller.id, targetUserId], "kaila.direct-message.saved", { userIds: [caller.id, targetUserId], message });
+    return message;
+  }
+  return null;
+}
+
+async function recordEndedCall(activeCall) {
+  if (!activeCall?.callerId || !activeCall.targetUserId || !activeCall.answeredAt) return null;
+  const caller = await getUser(activeCall.callerId);
+  if (!caller) return null;
+  const endedAt = nowMysql();
+  const durationSeconds = Math.max(1, Math.round((Date.now() - activeCall.answeredAt) / 1000));
+  return recordCallLogMessage({
+    caller,
+    targetUserId: activeCall.targetUserId,
+    requestId: activeCall.requestId || "",
+    directUserId: activeCall.directUserIds?.find((userId) => userId !== activeCall.callerId) || "",
+    callType: activeCall.callType || "audio",
+    status: "completed",
+    durationSeconds,
+    startedAt: activeCall.startedAt || "",
+    answeredAt: activeCall.answeredAtMysql || "",
+    endedAt,
+    contextTitle: activeCall.contextTitle || "",
+  });
 }
 
 async function closeExpiredRatingWindows() {
@@ -2278,6 +2424,9 @@ socketServer.on("connection", (socket) => {
           callType: payload.withVideo ? "video" : "audio",
           contextTitle,
           userIds: [user.id, targetUserId],
+          startedAt: nowMysql(),
+          answeredAt: 0,
+          answeredAtMysql: "",
           answeredBySocketId: "",
           answeredByUserId: "",
           declinedSocketIds: new Set(),
@@ -2295,6 +2444,9 @@ socketServer.on("connection", (socket) => {
           contextTitle: activeCall.contextTitle || "",
         });
       }
+      if (type === "hangup" && activeCall?.answeredByUserId) {
+        await recordEndedCall(activeCall);
+      }
       if (type === "answer") {
         if (activeCall?.answeredByUserId === user.id && activeCall.answeredBySocketId && activeCall.answeredBySocketId !== socket.id) {
           return acknowledge({ ok: false, code: "answered_elsewhere", error: "This call was answered on another device" });
@@ -2302,6 +2454,8 @@ socketServer.on("connection", (socket) => {
         if (activeCall && !activeCall.answeredBySocketId) {
           activeCall.answeredBySocketId = socket.id;
           activeCall.answeredByUserId = user.id;
+          activeCall.answeredAt = Date.now();
+          activeCall.answeredAtMysql = nowMysql();
           socket.to(`user:${user.id}`).emit("kaila.call.signal", {
             requestId,
             callId,
@@ -2319,6 +2473,15 @@ socketServer.on("connection", (socket) => {
         const userSocketGroups = await Promise.all(socketServers.map((serverItem) => serverItem.in(`user:${user.id}`).fetchSockets()));
         const userSockets = userSocketGroups.flat();
         if (userSockets.some((item) => !activeCall.declinedSocketIds.has(item.id))) return acknowledge({ ok: true });
+        const caller = user.id === activeCall.callerId ? user : await getUser(activeCall.callerId);
+        await recordMissedCallForBoth({
+          caller,
+          targetUserId: activeCall.targetUserId || targetUserId,
+          requestId: activeCall.requestId || requestId,
+          directUserId: activeCall.directUserIds?.find((item) => item !== activeCall.callerId) || directUserId || "",
+          callType: activeCall.callType || "audio",
+          contextTitle: activeCall.contextTitle || "",
+        });
       }
       if (["hangup", "reject", "busy"].includes(type)) activeCalls.delete(callId);
       relayCallSignal(targetUserId, {

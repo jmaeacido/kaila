@@ -2300,14 +2300,7 @@ async function fetchConversation(requestId) {
 
 function conversationHtml(messages, writable, activeUserIds = [], request = null) {
   const transcript = messages.length
-    ? messages.map((message) => `
-      <div class="chat-message ${message.senderId === state.session.id ? "mine" : ""}">
-        <strong>${escapeHtml(message.senderName)}</strong>
-        <span>${escapeHtml(formatDateTime(message.createdAt))}</span>
-        <p>${escapeHtml(message.detail)}</p>
-        ${writable ? `<button class="chat-reaction" type="button" data-chat-react="${message.id}">Like${message.reactions.length ? ` ${message.reactions.length}` : ""}</button>` : message.reactions.length ? `<span class="chat-reaction-count">Liked ${message.reactions.length}</span>` : ""}
-      </div>
-    `).join("")
+    ? messages.map((message) => renderChatMessage(message, { writable, reactions: true })).join("")
     : `<p class="chat-empty">No messages yet.</p>`;
 
   return `
@@ -2337,6 +2330,48 @@ function conversationHtml(messages, writable, activeUserIds = [], request = null
       ` : `<div class="chat-archived">Conversation archived after job completion.</div>`}
     </div>
   `;
+}
+
+function renderChatMessage(message = {}, { writable = false, reactions = false } = {}) {
+  if (message.kind === "call") return renderCallLogMessage(message);
+  const reactionCount = Array.isArray(message.reactions) ? message.reactions.length : 0;
+  return `
+    <div class="chat-message ${message.senderId === state.session.id ? "mine" : ""}">
+      <strong>${escapeHtml(message.senderName)}</strong>
+      <span>${escapeHtml(formatDateTime(message.createdAt))}</span>
+      <p>${escapeHtml(message.detail)}</p>
+      ${reactions ? (writable ? `<button class="chat-reaction" type="button" data-chat-react="${message.id}">Like${reactionCount ? ` ${reactionCount}` : ""}</button>` : reactionCount ? `<span class="chat-reaction-count">Liked ${reactionCount}</span>` : "") : ""}
+    </div>
+  `;
+}
+
+function renderCallLogMessage(message = {}) {
+  const call = message.call || {};
+  const outgoing = call.callerId === state.session?.id || (!call.callerId && message.senderId === state.session?.id);
+  const missed = call.status === "missed" || call.status === "declined";
+  const callType = call.callType === "video" ? "video" : "audio";
+  const direction = outgoing ? "Outgoing" : "Incoming";
+  const title = missed ? `${outgoing ? "Outgoing" : "Missed incoming"} ${callType} call` : `${direction} ${callType} call`;
+  const duration = missed ? "No answer" : `Duration ${formatDurationSeconds(call.durationSeconds || 0)}`;
+  const icon = callType === "video" ? "fa-video" : missed ? "fa-phone-slash" : "fa-phone";
+  return `
+    <div class="chat-message chat-call-log ${outgoing ? "mine" : ""} ${missed ? "missed" : ""}">
+      <i class="fa-solid ${icon}"></i>
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(formatDateTime(message.createdAt))} - ${escapeHtml(duration)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function formatDurationSeconds(value = 0) {
+  const seconds = Math.max(0, Number(value) || 0);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  if (hours) return `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+  return `${minutes}:${String(remainder).padStart(2, "0")}`;
 }
 
 function conversationIdentityHtml(request) {
@@ -2512,13 +2547,7 @@ async function fetchDirectConversation(userId) {
 
 function directConversationHtml(messages, writable, activeUserIds = [], target = {}) {
   const transcript = messages.length
-    ? messages.map((message) => `
-      <div class="chat-message ${message.senderId === state.session.id ? "mine" : ""}">
-        <strong>${escapeHtml(message.senderName)}</strong>
-        <span>${escapeHtml(formatDateTime(message.createdAt))}</span>
-        <p>${escapeHtml(message.detail)}</p>
-      </div>
-    `).join("")
+    ? messages.map((message) => renderChatMessage(message)).join("")
     : `<p class="chat-empty">No messages yet.</p>`;
 
   return `
@@ -2886,7 +2915,8 @@ function createPeerConnection(call) {
       startCallQualityMonitor(call);
       renderCallPanel();
     }
-    if (["failed", "closed"].includes(peer.connectionState)) endAudioCall(false);
+    if (peer.connectionState === "failed") endAudioCall(Boolean(call.connectedAt));
+    if (peer.connectionState === "closed" && !call.ending) endAudioCall(false);
     if (peer.connectionState === "disconnected") {
       call.status = "reconnecting";
       renderCallPanel();
@@ -3404,6 +3434,7 @@ async function renegotiateCall() {
 
 function endAudioCall(notifyOther = true) {
   if (!state.call) return;
+  state.call.ending = true;
   if (notifyOther) emitCallSignal("hangup");
   clearTimeout(state.call.ringingTimer);
   clearTimeout(state.call.cameraRecoveryTimer);
@@ -4150,7 +4181,7 @@ function connectSocket(force = false) {
     }));
     state.socket.on("kaila.activity", (activity) => {
       if (!state.activity.some((item) => item.id === activity.id)) state.activity.unshift(activity);
-      if (state.session?.role !== "ops") addUnreadNotification(notificationItemFromActivity(activity));
+      if (shouldBadgeActivityNotifications()) addUnreadNotification(notificationItemFromActivity(activity));
       renderActivity();
     });
     state.socket.on("kaila.missed-call.saved", (missedCall) => {
@@ -4410,12 +4441,13 @@ async function openOfferDetailModal(requestId, offerId) {
 
 function handleMessageSaved({ requestId, message } = {}) {
   const request = state.requests.find((item) => item.id === requestId);
-  if (!request || !message || !state.session || message.senderId === state.session.id) return;
+  if (!request || !message || !state.session) return;
   if (!canViewConversation(request)) return;
   if (state.activeConversationId === requestId) {
     refreshConversation(requestId);
     return;
   }
+  if (message.senderId === state.session.id) return;
   addUnreadMessage({
     type: "job",
     id: requestId,
@@ -4441,13 +4473,15 @@ function handleMessageSaved({ requestId, message } = {}) {
 }
 
 function handleDirectMessageSaved({ userIds = [], message } = {}) {
-  if (!message || !state.session || message.senderId === state.session.id || !userIds.includes(state.session.id)) return;
+  if (!message || !state.session || !userIds.includes(state.session.id)) return;
   const otherUserId = message.senderId;
+  const activeOtherUserId = userIds.find((userId) => userId !== state.session.id) || otherUserId;
   const sender = userProfile(otherUserId);
-  if (state.activeDirectConversationUserId === otherUserId) {
-    refreshDirectConversation(otherUserId);
+  if (state.activeDirectConversationUserId === activeOtherUserId) {
+    refreshDirectConversation(activeOtherUserId);
     return;
   }
+  if (message.senderId === state.session.id) return;
   addUnreadMessage({
     type: "direct",
     id: otherUserId,
@@ -4536,7 +4570,15 @@ function loadAttentionBadgesForSession() {
   const userBadges = saved[sessionId] || {};
   state.unreadNotifications = Number(userBadges.notifications || 0);
   state.unreadNotificationItems = Array.isArray(userBadges.notificationItems) ? userBadges.notificationItems : [];
+  let badgesChanged = false;
+  if (!shouldBadgeActivityNotifications()) {
+    const beforeCount = state.unreadNotificationItems.length;
+    state.unreadNotificationItems = state.unreadNotificationItems.filter((item) => item.type !== "activity");
+    state.unreadNotifications = state.unreadNotificationItems.length;
+    badgesChanged = beforeCount !== state.unreadNotificationItems.length;
+  }
   state.unreadMessages = Array.isArray(userBadges.messages) ? userBadges.messages : [];
+  if (badgesChanged) persistAttentionBadges();
 }
 
 function persistAttentionBadges() {
@@ -4643,10 +4685,12 @@ async function syncUnreadNotificationSummaries() {
   try {
     const summary = await apiFetch("/api/notification-summary", { method: "GET", silentError: true });
     state.missedCalls = Array.isArray(summary.missedCalls) ? summary.missedCalls : [];
-    (summary.activities || []).forEach((activity) => {
-      if (!isUnreadNotification("activity", activity.createdAt)) return;
-      addUnreadNotification(notificationItemFromActivity(activity));
-    });
+    if (shouldBadgeActivityNotifications()) {
+      (summary.activities || []).forEach((activity) => {
+        if (!isUnreadNotification("activity", activity.createdAt)) return;
+        addUnreadNotification(notificationItemFromActivity(activity));
+      });
+    }
     state.missedCalls.forEach((missedCall) => {
       if (!isUnreadNotification("missedCall", missedCall.createdAt)) return;
       addUnreadNotification(notificationItemFromMissedCall(missedCall));
@@ -4658,6 +4702,10 @@ async function syncUnreadNotificationSummaries() {
   } finally {
     state.notificationSummarySyncing = false;
   }
+}
+
+function shouldBadgeActivityNotifications() {
+  return state.session?.role === "admin";
 }
 
 function notificationItemFromActivity(activity = {}) {
