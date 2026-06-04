@@ -23,6 +23,9 @@ const AVAILABLE_DAY_OPTIONS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Fr
 const AVAILABLE_TIME_OPTIONS = ["Any time", "Morning", "Afternoon", "Evening", "Business hours", "After hours", "By appointment"];
 const YES_NO_MAYBE_OPTIONS = ["Yes", "No", "Maybe"];
 const DECISION_SIGNAL_OPTIONS = ["Strong positive", "Positive", "Neutral", "Concern", "Blocker"];
+const SUPPORT_ROLE = "customer_service";
+const SUPPORT_LABEL = "Customer Service";
+const SUPPORT_AVATAR = "assets/kaila-customer-service-avatar.png";
 const APP_TIME_ZONE = "Asia/Manila";
 const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
 const GEOGRAPHY_SOURCE = "assets/Gingoog City PSGC.xlsx";
@@ -53,6 +56,7 @@ const state = {
   lastDashboardTabTarget: "#requests-pane",
   activeConversationId: null,
   activeDirectConversationUserId: null,
+  activeDirectConversationRequestId: "",
   conversationDraftVersion: 0,
   directConversationDraftVersion: 0,
   messageSummarySyncing: false,
@@ -463,6 +467,7 @@ function render() {
   renderRequests();
   renderProviders();
   renderClients();
+  renderCustomerService();
   renderOps();
   renderValidation();
   renderActivity();
@@ -520,25 +525,30 @@ function renderTabs() {
   const requestsTab = $("[data-requests-tab]");
   const providersTab = $("[data-providers-tab]");
   const clientsTab = $("[data-clients-tab]");
+  const customerServiceTab = $("[data-customer-service-tab]");
   const opsTab = $("[data-ops-tab]");
   const activityTab = $("[data-activity-tab]");
   const validationTab = $("[data-validation-tab]");
   if (!providersTab) return;
   const isOps = state.session?.role === "ops";
+  const isSupport = state.session?.role === SUPPORT_ROLE;
   const hideProviders = state.session?.role === "provider" || isOps;
   if (requestsTab) requestsTab.hidden = isOps;
   providersTab.hidden = hideProviders;
-  if (clientsTab) clientsTab.hidden = state.session?.role !== "admin";
+  if (clientsTab) clientsTab.hidden = !["admin", SUPPORT_ROLE].includes(state.session?.role);
+  if (customerServiceTab) customerServiceTab.hidden = !["admin", "client", "provider", SUPPORT_ROLE].includes(state.session?.role);
   if (opsTab) opsTab.hidden = state.session?.role !== "admin";
   if (activityTab) activityTab.hidden = isOps;
   if (validationTab) validationTab.hidden = !["admin", "ops"].includes(state.session?.role);
   if (hideProviders && providersTab.querySelector(".nav-link")?.classList.contains("active")) {
     activateTab("#requests-pane");
   }
-  if (state.session?.role !== "admin" && clientsTab?.classList.contains("active")) activateTab("#requests-pane");
+  if (!["admin", SUPPORT_ROLE].includes(state.session?.role) && clientsTab?.classList.contains("active")) activateTab("#requests-pane");
+  if (!["admin", "client", "provider", SUPPORT_ROLE].includes(state.session?.role) && customerServiceTab?.classList.contains("active")) activateTab("#requests-pane");
   if (state.session?.role !== "admin" && opsTab?.classList.contains("active")) activateTab("#requests-pane");
   if (!["admin", "ops"].includes(state.session?.role) && validationTab?.classList.contains("active")) activateTab("#requests-pane");
   if (isOps && !validationTab?.classList.contains("active")) activateTab("#validation-pane");
+  if (isSupport && !["#requests-pane", "#clients-pane", "#providers-pane", "#customer-service-pane", "#activity-pane", "#settings-pane"].includes(state.lastDashboardTabTarget)) activateTab("#customer-service-pane");
 }
 
 function activateTab(target) {
@@ -584,6 +594,7 @@ function focusRequestCard(requestId, offerId = "") {
 function renderActions() {
   const row = $("[data-action-row]");
   if (!row || !state.session) return;
+  row.dataset.actionLayout = ["client", "provider"].includes(state.session.role) ? "single-row" : "default";
 
   const actions = [];
   if (state.session.role === "client") {
@@ -592,8 +603,14 @@ function renderActions() {
   if (state.session.role === "provider") {
     actions.push(`<button class="btn btn-outline-primary" type="button" data-provider-profile><i class="fa-solid fa-id-card"></i><span>${state.session.role === "provider" ? "Provider Profile" : "Add Provider"}</span></button>`);
   }
+  if (["client", "provider"].includes(state.session.role)) {
+    actions.push(`<button class="btn btn-outline-primary" type="button" data-open-support><i class="fa-solid fa-headset"></i><span>Customer Service</span></button>`);
+  }
   if (state.session.role === "admin") {
     actions.push(`<button class="btn btn-primary" type="button" data-admin-create-account><i class="fa-solid fa-user-plus"></i><span>Create Account</span></button>`);
+  }
+  if (state.session.role === SUPPORT_ROLE) {
+    actions.push(`<button class="btn btn-primary" type="button" data-open-support><i class="fa-solid fa-headset"></i><span>Support Desk</span></button>`);
   }
   if (["admin", "ops"].includes(state.session.role)) {
     actions.push(`<button class="btn btn-outline-primary" type="button" data-client-survey><i class="fa-solid fa-square-poll-vertical"></i><span>Client Survey</span></button>`);
@@ -613,9 +630,10 @@ function renderActions() {
   $("[data-admin-create-account]")?.addEventListener("click", openAdminCreateAccountModal);
   $("[data-client-survey]")?.addEventListener("click", openClientSurveyModal);
   $("[data-provider-interview]")?.addEventListener("click", openProviderInterviewModal);
+  $("[data-open-support]")?.addEventListener("click", openCustomerServicePlatform);
   $("[data-team-note]")?.addEventListener("click", openMessageModal);
-  $("[data-dashboard-title]").textContent = `${capitalize(state.session.role)} Dashboard`;
-  $("[data-role-pill]").textContent = state.session.role;
+  $("[data-dashboard-title]").textContent = `${roleLabel(state.session.role)} Dashboard`;
+  $("[data-role-pill]").textContent = roleLabel(state.session.role);
 }
 
 function renderStats() {
@@ -633,6 +651,14 @@ function renderStats() {
   $$("[data-admin-metric]").forEach((button) => {
     button.classList.toggle("active", button.dataset.adminMetric === state.adminMetric);
     button.onclick = () => openAdminMetric(button.dataset.adminMetric);
+  });
+}
+
+function openCustomerServicePlatform() {
+  route("app");
+  activateTab(state.session?.role === SUPPORT_ROLE ? "#customer-service-pane" : "#customer-service-pane");
+  requestAnimationFrame(() => {
+    $("[data-customer-service-list]")?.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 }
 
@@ -765,7 +791,7 @@ function renderRequestCard(request) {
         ${request.preferredSchedule ? `<span>${escapeHtml(request.preferredSchedule)}</span>` : ""}
         <span>${escapeHtml(formatCurrency(request.budget))}</span>
       </div>
-      ${state.session?.role === "admin" || state.session?.role === "ops" ? `
+      ${["admin", "ops", SUPPORT_ROLE].includes(state.session?.role) ? `
         <div class="offer">
           <strong>Ops intake</strong>
           <div>${escapeHtml(request.contactMethod || "No contact method")} ${request.exactLocationNotes ? `- ${escapeHtml(request.exactLocationNotes)}` : ""}</div>
@@ -1035,6 +1061,7 @@ function renderReputationBadge(label, reputation = {}, className = "") {
 function resolveMediaUrl(url) {
   if (!url) return "assets/android-chrome-192x192.png";
   if (/^https?:\/\//i.test(url)) return url;
+  if (/^(?:\.\/)?assets\//i.test(url)) return url.replace(/^\.\//, "");
   return `${apiBase()}${url}`;
 }
 
@@ -1044,14 +1071,51 @@ function userProfile(userId) {
 
 function canDirectContact(target = {}) {
   if (!state.session || !target.id || target.id === state.session.id) return false;
-  if (state.session.role === "admin") return ["admin", "ops", "provider", "client"].includes(target.role);
+  if (state.session.role === "admin") return ["admin", "ops", SUPPORT_ROLE, "provider", "client"].includes(target.role);
+  if (state.session.role === SUPPORT_ROLE) return ["admin", SUPPORT_ROLE, "provider", "client"].includes(target.role);
+  if (target.role === SUPPORT_ROLE) return ["provider", "client"].includes(state.session.role);
   return state.session.role === "ops" && target.role === "admin";
 }
 
 function canViewDirectContact(target = {}) {
   if (canDirectContact(target)) return true;
   if (!state.session || !target.id || target.id === state.session.id) return false;
-  return target.role === "admin" && ["admin", "ops", "provider", "client"].includes(state.session.role);
+  return ["admin", SUPPORT_ROLE].includes(target.role) && ["admin", "ops", SUPPORT_ROLE, "provider", "client"].includes(state.session.role);
+}
+
+function canDirectCall(target = {}) {
+  if (!state.session || !target.id || target.id === state.session.id) return false;
+  if (state.session.role === SUPPORT_ROLE) return ["client", "provider"].includes(target.role);
+  if (state.session.role === "ops") return target.role === "admin";
+  return state.session.role === "admin" && ["admin", "ops", SUPPORT_ROLE].includes(target.role);
+}
+
+function directConversationDisplayTarget(target = {}) {
+  if (target.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session?.role)) {
+    return { ...target, name: "KAILA Customer Service", photoUrl: SUPPORT_AVATAR };
+  }
+  return target;
+}
+
+function directConversationTitle(target = {}, requestContext = null) {
+  const name = directConversationDisplayTarget(target).name || "Direct";
+  return requestContext ? `${name} - ${requestContext.category}` : `${name} messages`;
+}
+
+function directConversationMessageKey(userId, requestId = "") {
+  return requestId ? `${userId}:${requestId}` : userId;
+}
+
+function directConversationTopicHtml(request = {}) {
+  return `
+    <div class="chat-topic-card">
+      <div>
+        <strong>${escapeHtml(request.category || "Job request")}</strong>
+        <span>${escapeHtml(request.status || "Request")} · ${escapeHtml(request.area || "No area")} · ${escapeHtml(formatCurrency(request.budget || "Open"))}</span>
+      </div>
+      ${request.details ? `<p>${escapeHtml(request.details)}</p>` : ""}
+    </div>
+  `;
 }
 
 function directContactButtons(userId) {
@@ -1060,14 +1124,16 @@ function directContactButtons(userId) {
   return `
     <div class="card-actions">
       <button class="btn btn-sm btn-outline-primary" type="button" data-direct-chat="${target.id}"><i class="fa-solid fa-message"></i> Message</button>
-      <button class="btn btn-sm btn-outline-primary" type="button" data-direct-audio-call="${target.id}"><i class="fa-solid fa-phone"></i> Audio</button>
-      <button class="btn btn-sm btn-outline-primary" type="button" data-direct-video-call="${target.id}"><i class="fa-solid fa-video"></i> Video</button>
+      ${canDirectCall(target) ? `
+        <button class="btn btn-sm btn-outline-primary" type="button" data-direct-audio-call="${target.id}"><i class="fa-solid fa-phone"></i> Audio</button>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-direct-video-call="${target.id}"><i class="fa-solid fa-video"></i> Video</button>
+      ` : ""}
     </div>
   `;
 }
 
 function bindDirectContactActions() {
-  $$("[data-direct-chat]").forEach((button) => button.addEventListener("click", () => openDirectConversation(button.dataset.directChat)));
+  $$("[data-direct-chat]").forEach((button) => button.addEventListener("click", () => openDirectConversation(button.dataset.directChat, button.dataset.directRequestId || "")));
   $$("[data-direct-audio-call]").forEach((button) => button.addEventListener("click", () => startDirectAudioCall(button.dataset.directAudioCall)));
   $$("[data-direct-video-call]").forEach((button) => button.addEventListener("click", () => startDirectVideoCall(button.dataset.directVideoCall)));
 }
@@ -1189,7 +1255,7 @@ function acceptedProviderReputation(request = {}) {
 function renderClients() {
   const host = $("[data-client-list]");
   if (!host) return;
-  if (state.session?.role !== "admin") {
+  if (!["admin", SUPPORT_ROLE].includes(state.session?.role)) {
     host.innerHTML = "";
     return;
   }
@@ -1222,6 +1288,89 @@ function renderClients() {
       </article>
     `;
   }).join("");
+}
+
+function renderCustomerService() {
+  const host = $("[data-customer-service-list]");
+  if (!host) return;
+  if (!["admin", "client", "provider", SUPPORT_ROLE].includes(state.session?.role)) {
+    host.innerHTML = "";
+    return;
+  }
+
+  const supportUsers = state.users.filter((user) => user.role === SUPPORT_ROLE);
+  const activeRequests = state.requests.filter((request) => !["Cancelled", "Rated / Closed", "Resolved"].includes(request.status));
+  const disputedRequests = state.requests.filter((request) => request.status === "Disputed" || request.disputeNote);
+
+  if (state.session.role === SUPPORT_ROLE) {
+    const waitingRequests = activeRequests.filter((request) => ["Posted", "Offers Received", "Countered", "Provider Marked Done", "Revision Requested", "Disputed"].includes(request.status));
+    host.innerHTML = `
+      <article class="k-card admin-metric-panel">
+        <h3>Customer Service Desk</h3>
+        <p>${activeRequests.length} active requests | ${disputedRequests.length} disputes | ${state.users.filter((user) => user.role === "client").length} clients | ${state.providers.length} providers</p>
+      </article>
+      ${waitingRequests.length ? waitingRequests.slice(0, 8).map(renderSupportRequestSummary).join("") : emptyCard("No support queue", "Active jobs that need attention will appear here.")}
+    `;
+    bindCustomerServiceActions(host);
+    return;
+  }
+
+  if (!supportUsers.length) {
+    host.innerHTML = emptyCard("Customer service not assigned", "An admin can create a Customer Service account for direct support.");
+    return;
+  }
+
+  const primarySupport = supportUsers[0];
+  const supportContact = { ...primarySupport, name: "KAILA Customer Service", role: SUPPORT_ROLE, photoUrl: SUPPORT_AVATAR };
+  host.innerHTML = `
+    <article class="k-card admin-metric-panel">
+      <h3>Customer Service</h3>
+      <p>Message support for account help, request questions, provider coordination, or dispute guidance.</p>
+    </article>
+    <article class="k-card">
+      <div class="d-flex justify-content-between gap-2">
+        <div>
+          ${renderIdentity(supportContact.name, supportContact.photoUrl, "Support channel", supportContact.reputation)}
+          <p>Official KAILA support channel for clients and providers.</p>
+        </div>
+        <span class="badge text-bg-light align-self-start">${SUPPORT_LABEL}</span>
+      </div>
+      <div class="card-actions">
+        <button class="btn btn-sm btn-outline-primary" type="button" data-direct-chat="${escapeAttribute(primarySupport.id)}"><i class="fa-solid fa-message"></i> Message Support</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderSupportRequestSummary(request) {
+  return `
+    <article class="k-card">
+      <div class="d-flex justify-content-between gap-2">
+        <div>
+          <h3>${escapeHtml(request.category)}</h3>
+          <p>${escapeHtml(request.details || "No details")}</p>
+        </div>
+        <span class="badge text-bg-${statusColor(request.status)} align-self-start">${escapeHtml(request.status)}</span>
+      </div>
+      <div class="meta">
+        <span>${escapeHtml(request.clientName || "Client")}</span>
+        <span>${escapeHtml(request.area || "No area")}</span>
+        <span>${visibleOffers(request).length} offer${visibleOffers(request).length === 1 ? "" : "s"}</span>
+        ${request.acceptedProviderId ? "<span>Provider selected</span>" : ""}
+      </div>
+      <div class="card-actions">
+        <button class="btn btn-sm btn-outline-primary" type="button" data-support-focus-request="${escapeAttribute(request.id)}"><i class="fa-solid fa-clipboard-list"></i> View Request</button>
+        ${request.clientId ? `<button class="btn btn-sm btn-outline-primary" type="button" data-direct-chat="${escapeAttribute(request.clientId)}" data-direct-request-id="${escapeAttribute(request.id)}"><i class="fa-solid fa-message"></i> Client</button>` : ""}
+        ${request.acceptedProviderId ? `<button class="btn btn-sm btn-outline-primary" type="button" data-direct-chat="${escapeAttribute(request.acceptedProviderId)}" data-direct-request-id="${escapeAttribute(request.id)}"><i class="fa-solid fa-message"></i> Provider</button>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function bindCustomerServiceActions(host = document) {
+  $$("[data-support-focus-request]", host).forEach((button) => {
+    button.addEventListener("click", () => focusRequestCard(button.dataset.supportFocusRequest));
+  });
 }
 
 function renderOps() {
@@ -2306,7 +2455,7 @@ function conversationHtml(messages, writable, activeUserIds = [], request = null
   return `
     <div class="chat-shell">
       ${conversationIdentityHtml(request)}
-      ${writable ? `
+      ${writable && state.session?.role !== SUPPORT_ROLE ? `
         <div class="chat-call-row">
           <span>Need to clarify the job?</span>
           <div class="chat-call-actions">
@@ -2323,10 +2472,15 @@ function conversationHtml(messages, writable, activeUserIds = [], request = null
       <div class="chat-transcript" data-chat-transcript>${transcript}</div>
       <div class="chat-typing" data-chat-typing></div>
       ${writable ? `
-        <div class="chat-compose">
+        <div class="chat-compose direct-chat-compose">
           <textarea class="form-control" rows="2" maxlength="2000" placeholder="Write a message" data-chat-input></textarea>
+          <label class="btn btn-outline-secondary direct-media-button" title="Attach photos or videos">
+            <i class="fa-solid fa-paperclip"></i>
+            <input type="file" data-chat-attachments accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple hidden>
+          </label>
           <button class="btn btn-primary" type="button" data-chat-send>Send</button>
         </div>
+        <div class="upload-preview direct-upload-preview" data-chat-attachment-preview></div>
       ` : `<div class="chat-archived">Conversation archived after job completion.</div>`}
     </div>
   `;
@@ -2337,10 +2491,36 @@ function renderChatMessage(message = {}, { writable = false, reactions = false }
   const reactionCount = Array.isArray(message.reactions) ? message.reactions.length : 0;
   return `
     <div class="chat-message ${message.senderId === state.session.id ? "mine" : ""}">
-      <strong>${escapeHtml(message.senderName)}</strong>
+      <strong>${escapeHtml(chatMessageSenderName(message))}</strong>
       <span>${escapeHtml(formatDateTime(message.createdAt))}</span>
-      <p>${escapeHtml(message.detail)}</p>
+      ${message.detail ? `<p>${escapeHtml(message.detail)}</p>` : ""}
+      ${renderDirectMessageAttachments(message.attachments)}
       ${reactions ? (writable ? `<button class="chat-reaction" type="button" data-chat-react="${message.id}">Like${reactionCount ? ` ${reactionCount}` : ""}</button>` : reactionCount ? `<span class="chat-reaction-count">Liked ${reactionCount}</span>` : "") : ""}
+    </div>
+  `;
+}
+
+function chatMessageSenderName(message = {}) {
+  const sender = userProfile(message.senderId);
+  if (sender.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session?.role)) return "KAILA Customer Service";
+  return message.senderName || sender.name || "KAILA user";
+}
+
+function renderDirectMessageAttachments(attachments = []) {
+  if (!attachments?.length) return "";
+  return `
+    <div class="media-grid direct-message-media">
+      ${attachments.map((attachment, index) => {
+        const url = `${apiBase()}${attachment.url}`;
+        const isVideo = attachment.mimeType?.startsWith("video/");
+        return `
+          <button class="media-tile" type="button" data-direct-media-open="${index}" data-direct-media-items="${escapeAttribute(JSON.stringify(attachments))}">
+            ${isVideo
+              ? `<video muted preload="metadata" src="${escapeAttribute(url)}"></video><span class="media-type">Video</span>`
+              : `<img src="${escapeAttribute(url)}" alt="${escapeAttribute(attachment.originalName)}"><span class="media-type">Photo</span>`}
+          </button>
+        `;
+      }).join("")}
     </div>
   `;
 }
@@ -2387,11 +2567,19 @@ function conversationIdentityHtml(request) {
 function bindConversationInput(requestId, writable) {
   scrollConversationToBottom();
   startConversationPolling(requestId);
+  const popup = window.Swal.getPopup?.() || document;
+  $$("[data-direct-media-open]", popup).forEach((button) => {
+    button.addEventListener("click", () => {
+      const attachments = readJsonFromString(button.dataset.directMediaItems, []);
+      openDirectMediaViewer(attachments, Number(button.dataset.directMediaOpen || 0));
+    });
+  });
   $("[data-audio-call]")?.addEventListener("click", () => startAudioCall(requestId));
   $("[data-video-call]")?.addEventListener("click", () => startVideoCall(requestId));
   if (!writable) return;
   const input = $("[data-chat-input]");
   $("[data-chat-send]")?.addEventListener("click", () => sendConversationMessage(requestId));
+  bindAttachmentPreview("[data-chat-attachments]", "[data-chat-attachment-preview]", 3);
   $$("[data-chat-react]").forEach((button) => button.addEventListener("click", () => toggleMessageReaction(requestId, button.dataset.chatReact)));
   input?.addEventListener("input", () => handleConversationKeystroke(requestId));
   input?.addEventListener("keydown", (event) => {
@@ -2403,24 +2591,29 @@ function bindConversationInput(requestId, writable) {
 
 async function sendConversationMessage(requestId) {
   const input = $("[data-chat-input]");
+  const attachmentInput = $("[data-chat-attachments]");
   const detail = input?.value.trim();
-  if (!detail) return;
+  const attachments = await readMediaAttachments("[data-chat-attachments]");
+  if (!attachments) return;
+  if (!detail && !attachments.length) return;
   state.conversationDraftVersion += 1;
   input.value = "";
+  if (attachmentInput) attachmentInput.value = "";
   stopConversationTyping(requestId);
   try {
-    await apiFetch(`/api/requests/${requestId}/messages`, { method: "POST", body: JSON.stringify({ detail }) });
-    await refreshConversation(requestId);
+    await apiFetch(`/api/requests/${requestId}/messages`, { method: "POST", body: JSON.stringify({ detail, attachments }) });
+    await refreshConversation(requestId, { force: true });
   } catch (error) {
     notify("Message failed", error.message, "error");
   }
 }
 
-async function refreshConversation(requestId) {
+async function refreshConversation(requestId, options = {}) {
   if (state.activeConversationId !== requestId || !window.Swal.isVisible()) return;
   const draftVersion = state.conversationDraftVersion;
   const input = $("[data-chat-input]");
   const draft = input?.value || "";
+  if (!options.force && hasComposerDraft("[data-chat-input]", "[data-chat-attachments]")) return;
   const selectionStart = input?.selectionStart || 0;
   const selectionEnd = input?.selectionEnd || 0;
   const restoreFocus = document.activeElement === input;
@@ -2463,7 +2656,7 @@ function sendTypingStatus(requestId, typing) {
 async function toggleMessageReaction(requestId, messageId) {
   try {
     await apiFetch(`/api/requests/${requestId}/messages/${messageId}/reactions`, { method: "POST", body: "{}" });
-    await refreshConversation(requestId);
+    await refreshConversation(requestId, { force: true });
   } catch (error) {
     notify("Reaction failed", error.message, "error");
   }
@@ -2510,121 +2703,186 @@ function conversationPresenceText(activeUserIds = []) {
     : "Other party is not viewing this conversation.";
 }
 
-async function openDirectConversation(userId) {
+async function openDirectConversation(userId, requestId = "") {
   const target = userProfile(userId);
   if (!canViewDirectContact(target)) return;
-  clearUnreadMessage("direct", userId);
+  clearUnreadMessage("direct", directConversationMessageKey(userId, requestId));
   state.activeDirectConversationUserId = userId;
+  state.activeDirectConversationRequestId = requestId || "";
   await setDirectConversationPresence(userId, true);
-  const payload = await fetchDirectConversation(userId);
+  const payload = await fetchDirectConversation(userId, requestId);
   if (!payload) {
     setDirectConversationPresence(userId, false);
     return;
   }
-  markConversationRead("direct", userId, payload.messages);
+  markConversationRead("direct", directConversationMessageKey(userId, requestId), payload.messages);
 
   await window.Swal.fire({
     customClass: { popup: "kaila-popup chat-popup" },
-    title: `${target.name || "Direct"} messages`,
-    html: directConversationHtml(payload.messages, payload.writable, payload.activeUserIds, payload.target || target),
+    title: directConversationTitle(target, payload.requestContext),
+    html: directConversationHtml(payload.messages, payload.writable, payload.activeUserIds, payload.target || target, payload.requestContext),
     showConfirmButton: false,
     showCloseButton: true,
-    didOpen: () => bindDirectConversationInput(userId, payload.writable),
+    didOpen: () => bindDirectConversationInput(userId, payload.writable, requestId),
     willClose: () => closeDirectConversationRoom(userId),
   });
   state.activeDirectConversationUserId = null;
+  state.activeDirectConversationRequestId = "";
 }
 
-async function fetchDirectConversation(userId) {
+async function fetchDirectConversation(userId, requestId = "") {
   try {
-    return await apiFetch(`/api/direct-conversations/${userId}/messages`, { method: "GET" });
+    const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
+    return await apiFetch(`/api/direct-conversations/${userId}/messages${query}`, { method: "GET" });
   } catch (error) {
     notify("Messages failed", error.message, "error");
     state.activeDirectConversationUserId = null;
+    state.activeDirectConversationRequestId = "";
     return null;
   }
 }
 
-function directConversationHtml(messages, writable, activeUserIds = [], target = {}) {
+function directConversationHtml(messages, writable, activeUserIds = [], target = {}, requestContext = null) {
   const transcript = messages.length
     ? messages.map((message) => renderChatMessage(message)).join("")
     : `<p class="chat-empty">No messages yet.</p>`;
+  const displayTarget = directConversationDisplayTarget(target);
 
   return `
     <div class="chat-shell">
-      <div class="chat-reputation">${renderIdentity(target.name || "Direct contact", target.photoUrl, `${capitalize(target.role || "user")} account`, target.reputation, "compact")}</div>
-      <div class="chat-call-row">
-        <span>${escapeHtml(capitalize(target.role || "contact"))} direct line</span>
-        <div class="chat-call-actions">
-          ${canDirectContact(target) ? `
+      <div class="chat-reputation">${renderIdentity(displayTarget.name || "Direct contact", displayTarget.photoUrl, `${roleLabel(displayTarget.role || "user")} account`, displayTarget.reputation, "compact")}</div>
+      ${requestContext ? directConversationTopicHtml(requestContext) : ""}
+      ${canDirectCall(target) ? `
+        <div class="chat-call-row">
+          <span>${escapeHtml(roleLabel(displayTarget.role || "contact"))} direct line</span>
+          <div class="chat-call-actions">
             <button class="btn btn-sm btn-outline-primary" type="button" data-direct-audio-call="${target.id || ""}">
               <i class="fa-solid fa-phone"></i> Audio Call
             </button>
             <button class="btn btn-sm btn-outline-primary" type="button" data-direct-video-call="${target.id || ""}">
               <i class="fa-solid fa-video"></i> Video Call
             </button>
-          ` : ""}
+          </div>
         </div>
-      </div>
+      ` : ""}
       <div class="chat-presence" data-direct-chat-presence>${conversationPresenceText(activeUserIds)}</div>
       <div class="chat-transcript" data-chat-transcript>${transcript}</div>
       ${writable ? `
-        <div class="chat-compose">
+        <div class="chat-compose direct-chat-compose">
           <textarea class="form-control" rows="2" maxlength="2000" placeholder="Write a message" data-direct-chat-input></textarea>
+          <label class="btn btn-outline-secondary direct-media-button" title="Attach photos or videos">
+            <i class="fa-solid fa-paperclip"></i>
+            <input type="file" data-direct-chat-attachments accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple hidden>
+          </label>
           <button class="btn btn-primary" type="button" data-direct-chat-send>Send</button>
         </div>
-      ` : `<div class="chat-archived">Only Admin can start direct chats, except Ops can start chats with Admin.</div>`}
+        <div class="upload-preview direct-upload-preview" data-direct-chat-attachment-preview></div>
+      ` : `<div class="chat-archived">This direct conversation is read-only.</div>`}
     </div>
   `;
 }
 
-function bindDirectConversationInput(userId, writable) {
+function bindDirectConversationInput(userId, writable, requestId = "") {
   scrollConversationToBottom();
   startDirectConversationPolling(userId);
   const popup = window.Swal.getPopup?.() || document;
+  $$("[data-direct-media-open]", popup).forEach((button) => {
+    button.addEventListener("click", () => {
+      const attachments = readJsonFromString(button.dataset.directMediaItems, []);
+      openDirectMediaViewer(attachments, Number(button.dataset.directMediaOpen || 0));
+    });
+  });
   $("[data-direct-audio-call]", popup)?.addEventListener("click", () => startDirectAudioCall(userId));
   $("[data-direct-video-call]", popup)?.addEventListener("click", () => startDirectVideoCall(userId));
   if (!writable) return;
   const input = $("[data-direct-chat-input]");
-  $("[data-direct-chat-send]")?.addEventListener("click", () => sendDirectConversationMessage(userId));
+  $("[data-direct-chat-send]")?.addEventListener("click", () => sendDirectConversationMessage(userId, requestId));
+  bindAttachmentPreview("[data-direct-chat-attachments]", "[data-direct-chat-attachment-preview]", 3);
   input?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey) return;
     event.preventDefault();
-    sendDirectConversationMessage(userId);
+    sendDirectConversationMessage(userId, requestId);
   });
 }
 
-async function sendDirectConversationMessage(userId) {
+async function openDirectMediaViewer(attachments = [], startIndex = 0) {
+  if (!attachments?.length) return;
+  let index = Math.max(0, Math.min(startIndex, attachments.length - 1));
+  while (index >= 0 && index < attachments.length) {
+    const attachment = attachments[index];
+    const url = `${apiBase()}${attachment.url}`;
+    const isVideo = attachment.mimeType?.startsWith("video/");
+    const result = await window.Swal.fire({
+      customClass: { popup: "kaila-popup media-popup" },
+      title: "Message media",
+      html: `
+        <div class="media-viewer">
+          ${isVideo
+            ? `<video controls autoplay preload="metadata" src="${escapeAttribute(url)}"></video>`
+            : `<img src="${escapeAttribute(url)}" alt="${escapeAttribute(attachment.originalName)}">`}
+          <div class="media-viewer-meta">
+            <strong>${isVideo ? "Video" : "Photo"}</strong>
+            <span>${index + 1} of ${attachments.length}</span>
+          </div>
+        </div>
+      `,
+      showCloseButton: true,
+      showCancelButton: index > 0,
+      cancelButtonText: "Previous",
+      showConfirmButton: index < attachments.length - 1,
+      confirmButtonText: "Next",
+      reverseButtons: false,
+    });
+    if (result.isConfirmed) index += 1;
+    else if (result.dismiss === window.Swal.DismissReason.cancel) index -= 1;
+    else break;
+  }
+}
+
+async function sendDirectConversationMessage(userId, requestId = "") {
   const input = $("[data-direct-chat-input]");
+  const attachmentInput = $("[data-direct-chat-attachments]");
   const detail = input?.value.trim();
-  if (!detail) return;
+  const attachments = await readMediaAttachments("[data-direct-chat-attachments]");
+  if (!attachments) return;
+  if (!detail && !attachments.length) return;
   state.directConversationDraftVersion += 1;
   input.value = "";
+  if (attachmentInput) attachmentInput.value = "";
   try {
-    await apiFetch(`/api/direct-conversations/${userId}/messages`, { method: "POST", body: JSON.stringify({ detail }) });
-    await refreshDirectConversation(userId);
+    const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
+    await apiFetch(`/api/direct-conversations/${userId}/messages${query}`, { method: "POST", body: JSON.stringify({ detail, attachments }) });
+    await refreshDirectConversation(userId, { force: true, requestId });
   } catch (error) {
     notify("Message failed", error.message, "error");
   }
 }
 
-async function refreshDirectConversation(userId) {
-  if (state.activeDirectConversationUserId !== userId || !window.Swal.isVisible()) return;
+async function refreshDirectConversation(userId, options = {}) {
+  const requestId = options.requestId ?? state.activeDirectConversationRequestId ?? "";
+  if (state.activeDirectConversationUserId !== userId || state.activeDirectConversationRequestId !== requestId || !window.Swal.isVisible()) return;
   const draftVersion = state.directConversationDraftVersion;
   const input = $("[data-direct-chat-input]");
   const draft = input?.value || "";
+  if (!options.force && hasComposerDraft("[data-direct-chat-input]", "[data-direct-chat-attachments]")) return;
   const restoreFocus = document.activeElement === input;
-  const payload = await fetchDirectConversation(userId);
+  const payload = await fetchDirectConversation(userId, requestId);
   const shell = $(".chat-shell");
   if (!payload || !shell) return;
-  markConversationRead("direct", userId, payload.messages);
-  shell.outerHTML = directConversationHtml(payload.messages, payload.writable, payload.activeUserIds, payload.target || userProfile(userId));
-  bindDirectConversationInput(userId, payload.writable);
+  markConversationRead("direct", directConversationMessageKey(userId, requestId), payload.messages);
+  shell.outerHTML = directConversationHtml(payload.messages, payload.writable, payload.activeUserIds, payload.target || userProfile(userId), payload.requestContext);
+  bindDirectConversationInput(userId, payload.writable, requestId);
   const nextInput = $("[data-direct-chat-input]");
   if (nextInput) {
     nextInput.value = draftVersion === state.directConversationDraftVersion ? draft : "";
     if (restoreFocus) nextInput.focus();
   }
+}
+
+function hasComposerDraft(inputSelector, attachmentSelector) {
+  const input = $(inputSelector);
+  const attachmentInput = $(attachmentSelector);
+  return Boolean(input?.value.trim() || attachmentInput?.files?.length);
 }
 
 async function setDirectConversationPresence(userId, active) {
@@ -2646,13 +2904,14 @@ function closeDirectConversationRoom(userId) {
 
 function startDirectConversationPolling(userId) {
   stopConversationPolling();
-  state.conversationPollTimer = setInterval(() => refreshDirectConversation(userId), state.connected ? 5000 : 2500);
+  const requestId = state.activeDirectConversationRequestId || "";
+  state.conversationPollTimer = setInterval(() => refreshDirectConversation(userId, { requestId }), state.connected ? 5000 : 2500);
 }
 
 async function updateDirectConversationPresence(userIds = []) {
   const otherUserId = userIds.find((userId) => userId !== state.session?.id);
   if (!otherUserId || state.activeDirectConversationUserId !== otherUserId || !window.Swal.isVisible()) return;
-  const payload = await fetchDirectConversation(otherUserId);
+  const payload = await fetchDirectConversation(otherUserId, state.activeDirectConversationRequestId || "");
   const host = $("[data-direct-chat-presence]");
   if (payload && host) host.textContent = conversationPresenceText(payload.activeUserIds);
 }
@@ -3996,7 +4255,7 @@ async function openAdminCreateAccountModal() {
     title: "Create account",
     html: `
       <div class="swal-form two">
-        <label><span>Role</span>${select("admin-account-role", ["client", "provider", "ops"], "client")}</label>
+        <label><span>Role</span>${select("admin-account-role", ["client", "provider", SUPPORT_LABEL, "ops"], "client")}</label>
         <label><span>Full name</span><input id="admin-account-name" class="form-control" autocomplete="name" maxlength="80"></label>
         <label><span>Username</span><input id="admin-account-username" class="form-control" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40"></label>
         <label><span>Contact number</span><input id="admin-account-contact" class="form-control" type="tel" inputmode="tel" autocomplete="tel" maxlength="32"></label>
@@ -4047,7 +4306,7 @@ async function openAdminCreateAccountModal() {
       syncAdminAccountFields();
     },
     preConfirm: () => {
-      const role = $("#admin-account-role").value;
+      const role = accountRoleValue($("#admin-account-role").value);
       const payload = {
         role,
         name: $("#admin-account-name").value.trim(),
@@ -4058,7 +4317,7 @@ async function openAdminCreateAccountModal() {
         preferredContactChannel: $("#admin-account-channel").value,
         bestContactTime: $("#admin-account-best-time").value.trim(),
         dataPrivacyConsent: $("#admin-account-privacy").checked,
-        area: role === "ops" ? "Operations" : addressValue("admin-account-address"),
+        area: ["ops", SUPPORT_ROLE].includes(role) ? (role === SUPPORT_ROLE ? "Customer Service" : "Operations") : addressValue("admin-account-address"),
         category: role === "provider" ? selectedCategoryChips("admin-account-category") : [],
         displayName: $("#admin-provider-display")?.value.trim() || "",
         providerType: $("#admin-provider-type")?.value || "",
@@ -4086,7 +4345,7 @@ async function openAdminCreateAccountModal() {
         window.Swal.showValidationMessage("Password must be at least 6 characters.");
         return false;
       }
-      if (role !== "ops" && !payload.area) {
+      if (!["ops", SUPPORT_ROLE].includes(role) && !payload.area) {
         window.Swal.showValidationMessage("Address is required.");
         return false;
       }
@@ -4108,10 +4367,10 @@ async function openAdminCreateAccountModal() {
 }
 
 function syncAdminAccountFields() {
-  const role = $("#admin-account-role")?.value || "client";
+  const role = accountRoleValue($("#admin-account-role")?.value || "client");
   const address = $("[data-admin-account-address]");
   const providerFields = $("[data-admin-provider-fields]");
-  if (address) address.hidden = role === "ops";
+  if (address) address.hidden = ["ops", SUPPORT_ROLE].includes(role);
   if (providerFields) providerFields.hidden = role !== "provider";
 }
 
@@ -4477,30 +4736,34 @@ function handleDirectMessageSaved({ userIds = [], message } = {}) {
   const otherUserId = message.senderId;
   const activeOtherUserId = userIds.find((userId) => userId !== state.session.id) || otherUserId;
   const sender = userProfile(otherUserId);
-  if (state.activeDirectConversationUserId === activeOtherUserId) {
-    refreshDirectConversation(activeOtherUserId);
+  const requestId = message.requestId || "";
+  if (state.activeDirectConversationUserId === activeOtherUserId && state.activeDirectConversationRequestId === requestId) {
+    refreshDirectConversation(activeOtherUserId, { requestId });
     return;
   }
   if (message.senderId === state.session.id) return;
+  const senderName = chatMessageSenderName(message);
   addUnreadMessage({
     type: "direct",
-    id: otherUserId,
-    title: sender.name || message.senderName || "Direct message",
-    sender: message.senderName,
+    id: directConversationMessageKey(otherUserId, requestId),
+    userId: otherUserId,
+    requestId,
+    title: sender.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session.role) ? "KAILA Customer Service" : sender.name || message.senderName || "Direct message",
+    sender: senderName,
     detail: message.detail,
     createdAt: message.createdAt,
   });
-  announceAttentionEvent("New direct message", `${message.senderName}: ${message.detail}`, "message");
+  announceAttentionEvent("New direct message", `${senderName}: ${message.detail || "Sent media"}`, "message");
 
   queueAttentionModal({
     icon: "info",
     title: "New direct message",
     confirmButtonText: "Open messages",
-    onConfirm: () => openDirectConversation(otherUserId),
+    onConfirm: () => openDirectConversation(otherUserId, requestId),
     html: `
       <div class="text-start">
-        ${renderIdentity(sender.name || message.senderName, sender.photoUrl, `${capitalize(sender.role || "user")} account`, sender.reputation, "compact")}
-        <p class="mb-0">${escapeHtml(message.detail)}</p>
+        ${renderIdentity(sender.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session.role) ? "KAILA Customer Service" : sender.name || message.senderName, sender.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session.role) ? SUPPORT_AVATAR : sender.photoUrl, `${roleLabel(sender.role || "user")} account`, sender.reputation, "compact")}
+        <p class="mb-0">${escapeHtml(message.detail || "Sent media")}</p>
       </div>
     `,
   });
@@ -4876,7 +5139,7 @@ async function openMessageBell() {
           window.Swal.close();
           if (!message) return;
           setTimeout(() => {
-            if (message.type === "direct") openDirectConversation(message.id);
+            if (message.type === "direct") openDirectConversation(message.userId || message.id, message.requestId || "");
             else openConversation(message.id);
           }, 120);
         });
@@ -5074,6 +5337,7 @@ function visibleOffers(request) {
 
 function canViewConversation(request) {
   if (!state.session || !request.acceptedProviderId) return false;
+  if (state.session.role === SUPPORT_ROLE) return true;
   return request.clientId === state.session.id || request.acceptedProviderId === state.session.id;
 }
 
@@ -5473,8 +5737,23 @@ function readJson(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
 }
 
+function readJsonFromString(value, fallback) {
+  try { return JSON.parse(value) ?? fallback; } catch { return fallback; }
+}
+
 function capitalize(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function roleLabel(role) {
+  if (role === SUPPORT_ROLE) return SUPPORT_LABEL;
+  return capitalize(String(role || "user"));
+}
+
+function accountRoleValue(role) {
+  const clean = String(role || "").trim().toLowerCase();
+  if (["customer service", "customer-service", "support", SUPPORT_ROLE].includes(clean)) return SUPPORT_ROLE;
+  return clean;
 }
 
 function escapeHtml(value) {

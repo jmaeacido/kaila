@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v95";
+const CACHE_NAME = "kaila-pwa-v102";
 const APP_PATH = new URL("./", self.location.href).pathname;
 const APP_SHELL = [
   "./",
@@ -14,6 +14,7 @@ const APP_SHELL = [
   "./assets/apple-touch-icon.png",
   "./assets/kaila-icon.svg",
   "./assets/kaila-logo.svg",
+  "./assets/kaila-customer-service-avatar.png",
   "./assets/kaila-preview.png"
 ];
 

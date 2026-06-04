@@ -34,6 +34,10 @@ The Node service creates the `kaila_mvp` database and required tables on
 startup. The active schema is defined in `socket/server.js`; treat any local SQL
 dump as a snapshot, not as the source of truth.
 
+Public registration is limited to `client` and `provider`. Admin-created staff
+roles include `ops` for validation work and `customer_service` for support desk
+triage and direct client/provider assistance.
+
 Important environment settings:
 
 - `PORT` defaults to `6002`.

@@ -15,6 +15,10 @@ Default URL: `http://localhost:6002`
 
 Job-message content is encrypted at rest with AES-256-GCM. Set `KAILA_MESSAGE_ENCRYPTION_KEY` in `.env` to a private 64-character hexadecimal value and keep it stable across restarts. Losing or changing this key makes existing transcripts unreadable.
 
+## Roles
+
+Public registration creates only Client and Provider accounts. Admin can also create Ops and Customer Service accounts. Customer Service accounts can view support context, message clients/providers directly, and join accepted job conversations for assistance without receiving client/provider job-action permissions.
+
 ## Media Uploads
 
 Service requests and provider completion proofs accept optional JPG, PNG, WebP, MP4, or WebM attachments. The server stores up to 3 files per stage with a 10 MB limit per file in `socket/uploads` and serves them through opaque `/media/:id` URLs.

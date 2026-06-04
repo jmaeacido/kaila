@@ -19,6 +19,7 @@ Current MVP screens:
 - Username-based registration for Client and Provider roles
 - Login page
 - Authenticated compact dashboard
+- Admin-created Customer Service role with a support desk, client/provider direct messaging, and request triage visibility
 
 Real-time MVP events:
 
@@ -42,6 +43,7 @@ Real-time MVP events:
 - Admin resolved dispute
 - Provider profile saved
 - Team activity note
+- Customer Service direct support for clients and providers
 
 Run the web app locally:
 

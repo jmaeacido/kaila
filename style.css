@@ -1241,6 +1241,33 @@ select[multiple].form-select {
   white-space: nowrap;
 }
 
+.action-row[data-action-layout="single-row"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.action-row[data-action-layout="single-row"] .btn {
+  gap: 0.32rem;
+  padding-inline: 0.35rem;
+  font-size: 0.78rem;
+}
+
+.action-row[data-action-layout="single-row"] .btn i {
+  flex: 0 0 auto;
+  font-size: 0.86rem;
+}
+
+@media (max-width: 520px) {
+  .action-row[data-action-layout="single-row"] {
+    gap: 0.25rem;
+  }
+
+  .action-row[data-action-layout="single-row"] .btn {
+    gap: 0.2rem;
+    padding-inline: 0.2rem;
+    font-size: 0.7rem;
+  }
+}
+
 .compact-tabs {
   height: 3rem;
   padding: 0.24rem;
@@ -2380,6 +2407,32 @@ select[multiple].form-select {
   margin-top: 0;
 }
 
+.chat-topic-card {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.chat-topic-card strong,
+.chat-topic-card span {
+  display: block;
+}
+
+.chat-topic-card span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.chat-topic-card p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
 .chat-call-row {
   display: flex;
   align-items: center;
@@ -2917,6 +2970,28 @@ body.call-overlay-open {
   grid-template-columns: 1fr auto;
   gap: 0.4rem;
   align-items: end;
+}
+
+.direct-chat-compose {
+  grid-template-columns: 1fr auto auto;
+}
+
+.direct-media-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.45rem;
+  min-height: 2.45rem;
+  margin: 0;
+}
+
+.direct-upload-preview {
+  margin-top: -0.15rem;
+}
+
+.direct-message-media {
+  grid-template-columns: repeat(auto-fill, minmax(4.25rem, 5.25rem));
+  margin-top: 0.4rem;
 }
 
 .chat-archived {

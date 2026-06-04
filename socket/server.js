@@ -290,6 +290,7 @@ function hasCategory(categories, category) {
 
 function normalizeAccountRole(role) {
   const cleanRole = String(role || "").trim().toLowerCase();
+  if (["customer_service", "customer-service", "customer service", "support"].includes(cleanRole)) return "customer_service";
   return cleanRole === "ops" ? "ops" : cleanRole;
 }
 
@@ -373,7 +374,7 @@ async function initializeDatabase() {
       username VARCHAR(80) NOT NULL UNIQUE,
       email VARCHAR(190) NULL UNIQUE,
       password_hash VARCHAR(255) NOT NULL,
-      role ENUM('client','provider','admin','ops') NOT NULL,
+      role ENUM('client','provider','admin','ops','customer_service') NOT NULL,
       area VARCHAR(190) NOT NULL,
       category VARCHAR(160) NULL,
       contact_number VARCHAR(80) NULL,
@@ -392,7 +393,7 @@ async function initializeDatabase() {
   await ensureColumn("users", "preferred_contact_channel", "VARCHAR(80) NULL");
   await ensureColumn("users", "best_contact_time", "VARCHAR(120) NULL");
   await ensureColumn("users", "data_privacy_consent", "TINYINT(1) NOT NULL DEFAULT 0");
-  await pool.query("ALTER TABLE users MODIFY COLUMN role ENUM('client','provider','admin','ops') NOT NULL");
+  await pool.query("ALTER TABLE users MODIFY COLUMN role ENUM('client','provider','admin','ops','customer_service') NOT NULL");
   await pool.query("ALTER TABLE users MODIFY COLUMN category VARCHAR(255) NULL");
   await backfillUsernames();
   await ensureIndex("users", "users_username_unique", "username", true);
@@ -541,7 +542,6 @@ async function initializeDatabase() {
   `);
   await pool.query("ALTER TABLE request_attachments MODIFY COLUMN stage ENUM('request','completion','dispute') NOT NULL");
   await sanitizeStoredAttachmentNames();
-  await cleanupOrphanUploads();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS request_passes (
       request_id VARCHAR(64) NOT NULL,
@@ -606,6 +606,18 @@ async function initializeDatabase() {
   `);
   await ensureColumn("job_messages", "kind", "VARCHAR(24) NOT NULL DEFAULT 'text'");
   await ensureColumn("job_messages", "call_metadata", "TEXT NULL");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_message_attachments (
+      id VARCHAR(64) PRIMARY KEY,
+      message_id VARCHAR(64) NOT NULL,
+      file_name VARCHAR(255) NOT NULL,
+      original_name VARCHAR(255) NOT NULL,
+      mime_type VARCHAR(120) NOT NULL,
+      size_bytes INT NOT NULL,
+      created_at DATETIME NOT NULL,
+      CONSTRAINT job_message_attachments_message_fk FOREIGN KEY (message_id) REFERENCES job_messages(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
   await encryptExistingMessages();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS direct_messages (
@@ -624,7 +636,21 @@ async function initializeDatabase() {
   `);
   await ensureColumn("direct_messages", "kind", "VARCHAR(24) NOT NULL DEFAULT 'text'");
   await ensureColumn("direct_messages", "call_metadata", "TEXT NULL");
+  await ensureColumn("direct_messages", "request_id", "VARCHAR(64) NULL");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS direct_message_attachments (
+      id VARCHAR(64) PRIMARY KEY,
+      message_id VARCHAR(64) NOT NULL,
+      file_name VARCHAR(255) NOT NULL,
+      original_name VARCHAR(255) NOT NULL,
+      mime_type VARCHAR(120) NOT NULL,
+      size_bytes INT NOT NULL,
+      created_at DATETIME NOT NULL,
+      CONSTRAINT direct_message_attachments_message_fk FOREIGN KEY (message_id) REFERENCES direct_messages(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
   await encryptExistingDirectMessages();
+  await cleanupOrphanUploads();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS job_message_reactions (
       message_id VARCHAR(64) NOT NULL,
@@ -796,6 +822,28 @@ function mapAttachment(row) {
   };
 }
 
+function mapDirectAttachment(row) {
+  return {
+    id: row.id,
+    originalName: row.original_name,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    url: `/direct-media/${encodeURIComponent(row.id)}`,
+    createdAt: row.created_at,
+  };
+}
+
+function mapJobMessageAttachment(row) {
+  return {
+    id: row.id,
+    originalName: row.original_name,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    url: `/message-media/${encodeURIComponent(row.id)}`,
+    createdAt: row.created_at,
+  };
+}
+
 async function sanitizeStoredAttachmentNames() {
   const [rows] = await pool.query("SELECT id, original_name, mime_type FROM request_attachments");
   for (const row of rows) {
@@ -831,9 +879,61 @@ async function saveAttachments(requestId, stage, attachments = []) {
   }
 }
 
+async function saveDirectAttachments(messageId, attachments = []) {
+  if (!Array.isArray(attachments)) throw new Error("Attachments must be a list");
+  if (attachments.length > MAX_ATTACHMENTS_PER_STAGE) throw new Error(`Upload up to ${MAX_ATTACHMENTS_PER_STAGE} attachments`);
+  const decodedAttachments = attachments.map((attachment) => ({ attachment, decoded: decodeAttachment(attachment) }));
+  const saved = [];
+  try {
+    for (const { attachment, decoded } of decodedAttachments) {
+      const id = createId();
+      const fileName = `${id}${decoded.extension}`;
+      await fs.promises.writeFile(path.join(UPLOAD_DIR, fileName), decoded.buffer, { flag: "wx" });
+      saved.push({ id, fileName });
+      await pool.query(
+        "INSERT INTO direct_message_attachments (id, message_id, file_name, original_name, mime_type, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [id, messageId, fileName, sanitizedAttachmentName(attachment.name, decoded.extension, id), decoded.mimeType, decoded.buffer.length, nowMysql()]
+      );
+    }
+  } catch (error) {
+    for (const attachment of saved) {
+      await pool.query("DELETE FROM direct_message_attachments WHERE id = ?", [attachment.id]);
+      await fs.promises.unlink(path.join(UPLOAD_DIR, attachment.fileName)).catch(() => {});
+    }
+    throw error;
+  }
+}
+
+async function saveJobMessageAttachments(messageId, attachments = []) {
+  if (!Array.isArray(attachments)) throw new Error("Attachments must be a list");
+  if (attachments.length > MAX_ATTACHMENTS_PER_STAGE) throw new Error(`Upload up to ${MAX_ATTACHMENTS_PER_STAGE} attachments`);
+  const decodedAttachments = attachments.map((attachment) => ({ attachment, decoded: decodeAttachment(attachment) }));
+  const saved = [];
+  try {
+    for (const { attachment, decoded } of decodedAttachments) {
+      const id = createId();
+      const fileName = `${id}${decoded.extension}`;
+      await fs.promises.writeFile(path.join(UPLOAD_DIR, fileName), decoded.buffer, { flag: "wx" });
+      saved.push({ id, fileName });
+      await pool.query(
+        "INSERT INTO job_message_attachments (id, message_id, file_name, original_name, mime_type, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [id, messageId, fileName, sanitizedAttachmentName(attachment.name, decoded.extension, id), decoded.mimeType, decoded.buffer.length, nowMysql()]
+      );
+    }
+  } catch (error) {
+    for (const attachment of saved) {
+      await pool.query("DELETE FROM job_message_attachments WHERE id = ?", [attachment.id]);
+      await fs.promises.unlink(path.join(UPLOAD_DIR, attachment.fileName)).catch(() => {});
+    }
+    throw error;
+  }
+}
+
 async function cleanupOrphanUploads() {
-  const [rows] = await pool.query("SELECT file_name FROM request_attachments");
-  const referenced = new Set(rows.map((row) => row.file_name));
+  const [requestRows] = await pool.query("SELECT file_name FROM request_attachments");
+  const [jobMessageRows] = await pool.query("SELECT file_name FROM job_message_attachments");
+  const [directMessageRows] = await pool.query("SELECT file_name FROM direct_message_attachments");
+  const referenced = new Set([...requestRows, ...jobMessageRows, ...directMessageRows].map((row) => row.file_name));
   for (const fileName of await fs.promises.readdir(UPLOAD_DIR)) {
     if (!referenced.has(fileName)) await fs.promises.unlink(path.join(UPLOAD_DIR, fileName));
   }
@@ -982,12 +1082,49 @@ function mapDirectMessage(row) {
     id: row.id,
     senderId: row.sender_id,
     recipientId: row.recipient_id,
+    requestId: row.request_id || "",
     senderName: row.sender_name,
     detail: decryptMessage(row.detail, row.id),
     createdAt: row.created_at,
     kind: row.kind || "text",
     call: parseCallMetadata(row.call_metadata, row.id),
   };
+}
+
+function directRequestContext(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    category: row.category,
+    status: row.status,
+    urgency: row.urgency,
+    area: row.area,
+    budget: row.budget,
+    clientName: row.client_name,
+    details: row.details,
+  };
+}
+
+async function loadDirectRequestContext(requestId, user, target) {
+  if (!requestId) return null;
+  const [rows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
+  if (!rows.length) {
+    const error = new Error("Request context not found");
+    error.status = 404;
+    throw error;
+  }
+  const request = rows[0];
+  const supportInvolved = user.role === "customer_service" || target.role === "customer_service";
+  const userIsParty = request.client_id === user.id || request.accepted_provider_id === user.id;
+  const targetIsParty = request.client_id === target.id || request.accepted_provider_id === target.id;
+  const userCanUseContext = user.role === "customer_service" || user.role === "admin" || userIsParty;
+  const targetCanUseContext = target.role === "customer_service" || target.role === "admin" || targetIsParty;
+  if (!supportInvolved || !userCanUseContext || !targetCanUseContext) {
+    const error = new Error("Request context is not available for these accounts");
+    error.status = 403;
+    throw error;
+  }
+  return directRequestContext(request);
 }
 
 function parseCallMetadata(value, messageId) {
@@ -1020,7 +1157,9 @@ function directConversationKey(leftUserId, rightUserId) {
 
 function canInitiateDirectInteraction(user, target) {
   if (!user || !target || user.id === target.id) return false;
-  if (user.role === "admin") return ["admin", "ops", "provider", "client"].includes(target.role);
+  if (user.role === "admin") return ["admin", "ops", "customer_service", "provider", "client"].includes(target.role);
+  if (user.role === "customer_service") return ["admin", "customer_service", "provider", "client"].includes(target.role);
+  if (target.role === "customer_service") return ["provider", "client"].includes(user.role);
   return user.role === "ops" && target.role === "admin";
 }
 
@@ -1030,27 +1169,35 @@ function canReadDirectConversation(user, target) {
   return false;
 }
 
-async function directConversationHasMessages(leftUserId, rightUserId) {
+async function directConversationHasMessages(leftUserId, rightUserId, requestId = "") {
   const [rows] = await pool.query(
-    "SELECT id FROM direct_messages WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?) LIMIT 1",
-    [leftUserId, rightUserId, rightUserId, leftUserId]
+    "SELECT id FROM direct_messages WHERE ((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)) AND (request_id <=> ?) LIMIT 1",
+    [leftUserId, rightUserId, rightUserId, leftUserId, requestId || null]
   );
   return Boolean(rows.length);
 }
 
-async function canOpenDirectConversation(user, target) {
+async function canOpenDirectConversation(user, target, requestId = "") {
   if (!canReadDirectConversation(user, target)) return false;
   if (canInitiateDirectInteraction(user, target)) return true;
-  return directConversationHasMessages(user.id, target.id);
+  return directConversationHasMessages(user.id, target.id, requestId);
 }
 
-async function canWriteDirectConversation(user, target) {
+async function canWriteDirectConversation(user, target, requestId = "") {
   if (!canReadDirectConversation(user, target)) return false;
   if (canInitiateDirectInteraction(user, target)) return true;
-  return directConversationHasMessages(user.id, target.id);
+  return directConversationHasMessages(user.id, target.id, requestId);
+}
+
+function canInitiateDirectCall(user, target) {
+  if (!user || !target || user.id === target.id) return false;
+  if (user.role === "customer_service") return ["client", "provider"].includes(target.role);
+  if (user.role === "ops") return target.role === "admin";
+  return user.role === "admin" && ["admin", "ops", "customer_service"].includes(target.role);
 }
 
 function canReadConversation(request, user) {
+  if (user?.role === "customer_service") return Boolean(request.accepted_provider_id);
   return Boolean(request.accepted_provider_id) && (request.client_id === user.id || request.accepted_provider_id === user.id);
 }
 
@@ -1475,7 +1622,11 @@ async function createAccount(input = {}, allowedRoles = ["client", "provider"]) 
   const password = String(input.password || "");
   const role = normalizeAccountRole(input.role);
   const cleanCategory = normalizeCategories(input.category);
-  const area = role === "ops" ? (String(input.area || "").trim() || "Operations") : String(input.area || "").trim();
+  const area = role === "ops"
+    ? (String(input.area || "").trim() || "Operations")
+    : role === "customer_service"
+      ? (String(input.area || "").trim() || "Customer Service")
+      : String(input.area || "").trim();
   const contactNumber = String(input.contactNumber || "").trim();
   const preferredContactChannel = String(input.preferredContactChannel || "").trim();
   const dataPrivacyConsent = boolField(input.dataPrivacyConsent);
@@ -1612,6 +1763,22 @@ app.get("/api/rtc-config", (req, res) => {
 
 app.get("/media/:id", async (req, res) => {
   const [rows] = await pool.query("SELECT file_name, mime_type FROM request_attachments WHERE id = ? LIMIT 1", [req.params.id]);
+  if (!rows.length) return res.status(404).end();
+  res.type(rows[0].mime_type);
+  res.set("Cache-Control", "private, max-age=3600");
+  res.sendFile(path.join(UPLOAD_DIR, rows[0].file_name));
+});
+
+app.get("/direct-media/:id", async (req, res) => {
+  const [rows] = await pool.query("SELECT file_name, mime_type FROM direct_message_attachments WHERE id = ? LIMIT 1", [req.params.id]);
+  if (!rows.length) return res.status(404).end();
+  res.type(rows[0].mime_type);
+  res.set("Cache-Control", "private, max-age=3600");
+  res.sendFile(path.join(UPLOAD_DIR, rows[0].file_name));
+});
+
+app.get("/message-media/:id", async (req, res) => {
+  const [rows] = await pool.query("SELECT file_name, mime_type FROM job_message_attachments WHERE id = ? LIMIT 1", [req.params.id]);
   if (!rows.length) return res.status(404).end();
   res.type(rows[0].mime_type);
   res.set("Cache-Control", "private, max-age=3600");
@@ -1998,6 +2165,15 @@ app.get("/api/requests/:id/messages", requireUser, async (req, res) => {
   const request = requestRows[0];
   if (!canReadConversation(request, req.user)) return res.status(403).json({ error: "Conversation is only available to the confirmed job parties" });
   const [messageRows] = await pool.query("SELECT * FROM job_messages WHERE request_id = ? ORDER BY created_at ASC", [req.params.id]);
+  const messageIds = messageRows.map((row) => row.id);
+  const [attachmentRows] = messageIds.length
+    ? await pool.query(`SELECT * FROM job_message_attachments WHERE message_id IN (${messageIds.map(() => "?").join(",")}) ORDER BY created_at ASC`, messageIds)
+    : [[]];
+  const attachmentsByMessage = new Map();
+  for (const row of attachmentRows) {
+    if (!attachmentsByMessage.has(row.message_id)) attachmentsByMessage.set(row.message_id, []);
+    attachmentsByMessage.get(row.message_id).push(mapJobMessageAttachment(row));
+  }
   const [reactionRows] = await pool.query(
     "SELECT reaction.message_id, reaction.user_id, reaction.reaction FROM job_message_reactions AS reaction JOIN job_messages AS message ON message.id = reaction.message_id WHERE message.request_id = ?",
     [req.params.id]
@@ -2008,7 +2184,7 @@ app.get("/api/requests/:id/messages", requireUser, async (req, res) => {
     reactionsByMessage.get(row.message_id).push({ userId: row.user_id, reaction: row.reaction });
   }
   res.json({
-    messages: messageRows.map((row) => mapMessage(row, reactionsByMessage.get(row.id) || [])),
+    messages: messageRows.map((row) => ({ ...mapMessage(row, reactionsByMessage.get(row.id) || []), attachments: attachmentsByMessage.get(row.id) || [] })),
     writable: canWriteConversation(request, req.user),
     activeUserIds: activeConversationUserIds(req.params.id),
   });
@@ -2020,7 +2196,8 @@ app.post("/api/requests/:id/messages", requireUser, async (req, res) => {
   const request = requestRows[0];
   if (!canWriteConversation(request, req.user)) return res.status(403).json({ error: "This conversation is archived and can no longer receive messages" });
   const detail = String(req.body?.detail || "").trim();
-  if (!detail) return res.status(400).json({ error: "Message is required" });
+  const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+  if (!detail && !attachments.length) return res.status(400).json({ error: "Message or media is required" });
   if (detail.length > 2000) return res.status(400).json({ error: "Message must be 2000 characters or fewer" });
   const message = {
     id: createId(),
@@ -2028,12 +2205,23 @@ app.post("/api/requests/:id/messages", requireUser, async (req, res) => {
     senderId: req.user.id,
     senderName: req.user.name,
     detail,
+    attachments: [],
     createdAt: nowMysql(),
   };
   await pool.query(
     "INSERT INTO job_messages (id, request_id, sender_id, sender_name, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    [message.id, message.requestId, message.senderId, message.senderName, encryptMessage(message.detail, message.id), message.createdAt]
+    [message.id, message.requestId, message.senderId, message.senderName, encryptMessage(message.detail || "Media attachment", message.id), message.createdAt]
   );
+  try {
+    await saveJobMessageAttachments(message.id, attachments);
+  } catch (error) {
+    await pool.query("DELETE FROM job_messages WHERE id = ?", [message.id]);
+    return res.status(400).json({ error: error.message });
+  }
+  if (attachments.length) {
+    const [attachmentRows] = await pool.query("SELECT * FROM job_message_attachments WHERE message_id = ? ORDER BY created_at ASC", [message.id]);
+    message.attachments = attachmentRows.map(mapJobMessageAttachment);
+  }
   broadcast("kaila.message.saved", { requestId: req.params.id, message });
   res.status(201).json({ message });
 });
@@ -2084,15 +2272,33 @@ app.post("/api/requests/:requestId/messages/:messageId/reactions", requireUser, 
 app.get("/api/direct-conversations/:userId/messages", requireUser, async (req, res) => {
   const target = await getUser(req.params.userId);
   if (!target) return res.status(404).json({ error: "User not found" });
-  if (!await canOpenDirectConversation(req.user, target)) return res.status(403).json({ error: "Only Admin can start direct chats, except Ops can start chats with Admin" });
+  const requestId = String(req.query?.requestId || "").trim();
+  let requestContext = null;
+  try {
+    requestContext = await loadDirectRequestContext(requestId, req.user, target);
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message });
+  }
+  if (!await canOpenDirectConversation(req.user, target, requestId)) return res.status(403).json({ error: "Direct chat is not available for these accounts" });
   const [messageRows] = await pool.query(
-    "SELECT * FROM direct_messages WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?) ORDER BY created_at ASC",
-    [req.user.id, target.id, target.id, req.user.id]
+    "SELECT * FROM direct_messages WHERE ((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)) AND (request_id <=> ?) ORDER BY created_at ASC",
+    [req.user.id, target.id, target.id, req.user.id, requestId || null]
   );
+  const messageIds = messageRows.map((row) => row.id);
+  const [attachmentRows] = messageIds.length
+    ? await pool.query(`SELECT * FROM direct_message_attachments WHERE message_id IN (${messageIds.map(() => "?").join(",")}) ORDER BY created_at ASC`, messageIds)
+    : [[]];
+  const attachmentsByMessage = new Map();
+  for (const row of attachmentRows) {
+    if (!attachmentsByMessage.has(row.message_id)) attachmentsByMessage.set(row.message_id, []);
+    attachmentsByMessage.get(row.message_id).push(mapDirectAttachment(row));
+  }
   res.json({
     target: publicUser(target),
-    messages: messageRows.map(mapDirectMessage),
-    writable: await canWriteDirectConversation(req.user, target),
+    messages: messageRows.map((row) => ({ ...mapDirectMessage(row), attachments: attachmentsByMessage.get(row.id) || [] })),
+    writable: await canWriteDirectConversation(req.user, target, requestId),
+    callable: canInitiateDirectCall(req.user, target),
+    requestContext,
     activeUserIds: activeDirectConversationUserIds(req.user.id, target.id),
   });
 });
@@ -2100,22 +2306,41 @@ app.get("/api/direct-conversations/:userId/messages", requireUser, async (req, r
 app.post("/api/direct-conversations/:userId/messages", requireUser, async (req, res) => {
   const target = await getUser(req.params.userId);
   if (!target) return res.status(404).json({ error: "User not found" });
-  if (!await canWriteDirectConversation(req.user, target)) return res.status(403).json({ error: "Only Admin can start direct chats, except Ops can start chats with Admin" });
+  const requestId = String(req.query?.requestId || "").trim();
+  try {
+    await loadDirectRequestContext(requestId, req.user, target);
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message });
+  }
+  if (!await canWriteDirectConversation(req.user, target, requestId)) return res.status(403).json({ error: "Direct chat is not available for these accounts" });
   const detail = String(req.body?.detail || "").trim();
-  if (!detail) return res.status(400).json({ error: "Message is required" });
+  const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+  if (!detail && !attachments.length) return res.status(400).json({ error: "Message or media is required" });
   if (detail.length > 2000) return res.status(400).json({ error: "Message must be 2000 characters or fewer" });
   const message = {
     id: createId(),
     senderId: req.user.id,
     recipientId: target.id,
+    requestId,
     senderName: req.user.name,
     detail,
+    attachments: [],
     createdAt: nowMysql(),
   };
   await pool.query(
-    "INSERT INTO direct_messages (id, sender_id, recipient_id, sender_name, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    [message.id, message.senderId, message.recipientId, message.senderName, encryptMessage(message.detail, message.id), message.createdAt]
+    "INSERT INTO direct_messages (id, sender_id, recipient_id, request_id, sender_name, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [message.id, message.senderId, message.recipientId, message.requestId || null, message.senderName, encryptMessage(message.detail || "Media attachment", message.id), message.createdAt]
   );
+  try {
+    await saveDirectAttachments(message.id, attachments);
+  } catch (error) {
+    await pool.query("DELETE FROM direct_messages WHERE id = ?", [message.id]);
+    return res.status(400).json({ error: error.message });
+  }
+  if (attachments.length) {
+    const [attachmentRows] = await pool.query("SELECT * FROM direct_message_attachments WHERE message_id = ? ORDER BY created_at ASC", [message.id]);
+    message.attachments = attachmentRows.map(mapDirectAttachment);
+  }
   relayDirectEvent([req.user.id, target.id], "kaila.direct-message.saved", { userIds: [req.user.id, target.id], message });
   res.status(201).json({ message });
 });
@@ -2123,7 +2348,7 @@ app.post("/api/direct-conversations/:userId/messages", requireUser, async (req, 
 app.post("/api/direct-conversations/:userId/presence", requireUser, async (req, res) => {
   const target = await getUser(req.params.userId);
   if (!target) return res.status(404).json({ error: "User not found" });
-  if (!await canOpenDirectConversation(req.user, target)) return res.status(403).json({ error: "Only Admin can start direct chats, except Ops can start chats with Admin" });
+  if (!await canOpenDirectConversation(req.user, target)) return res.status(403).json({ error: "Direct chat is not available for these accounts" });
   const key = directConversationKey(req.user.id, target.id);
   const room = directConversationPresence.get(key) || new Map();
   if (req.body?.active) room.set(req.user.id, Date.now());
@@ -2280,7 +2505,7 @@ app.post("/api/admin/users", requireUser, async (req, res) => {
   if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
   let user;
   try {
-    user = await createAccount(req.body, ["client", "provider", "ops"]);
+    user = await createAccount(req.body, ["client", "provider", "ops", "customer_service"]);
   } catch (error) {
     return res.status(error.status || 400).json({ error: error.message || "Account creation failed" });
   }
@@ -2296,6 +2521,9 @@ app.post("/api/admin/truncate", requireUser, async (req, res) => {
   await pool.query("TRUNCATE TABLE activities");
   await pool.query("TRUNCATE TABLE job_message_reactions");
   await pool.query("TRUNCATE TABLE missed_calls");
+  await pool.query("TRUNCATE TABLE direct_message_attachments");
+  await pool.query("TRUNCATE TABLE direct_messages");
+  await pool.query("TRUNCATE TABLE job_message_attachments");
   await pool.query("TRUNCATE TABLE job_messages");
   await pool.query("TRUNCATE TABLE request_attachments");
   await pool.query("TRUNCATE TABLE request_passes");
@@ -2339,8 +2567,8 @@ socketServer.on("connection", (socket) => {
       const directUserId = String(payload.directUserId || "");
       if (directUserId) {
         const target = await getUser(directUserId);
-        if (!target || !canInitiateDirectInteraction(user, target)) {
-          throw new Error("Only Admin can start direct calls, except Ops can start calls with Admin");
+        if (!target || !canInitiateDirectCall(user, target)) {
+          throw new Error("Only Customer Service staff can call clients or providers");
         }
         const online = Boolean(await userSocketCount(target.id));
         if (!online) {
@@ -2395,8 +2623,8 @@ socketServer.on("connection", (socket) => {
         contextTitle = target.name;
         const activeCall = activeCalls.get(callId);
         if (type === "offer") {
-          if (!canInitiateDirectInteraction(user, target)) {
-            throw new Error("Only Admin can start direct calls, except Ops can start calls with Admin");
+          if (!canInitiateDirectCall(user, target)) {
+            throw new Error("Only Customer Service staff can call clients or providers");
           }
         } else if (!activeCall?.userIds.includes(user.id) || !activeCall.userIds.includes(target.id)) {
           throw new Error("Direct call is no longer active");
