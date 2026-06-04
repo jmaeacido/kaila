@@ -1287,7 +1287,7 @@ function analyticsInsightButton() {
   return `
     <button class="btn btn-sm btn-outline-primary ai-insight-button" type="button" data-dashboard-ai-insight>
       <i class="fa-solid fa-wand-magic-sparkles"></i>
-      <span>Groq Insight</span>
+      <span>AI Insight</span>
     </button>
   `;
 }
@@ -1303,7 +1303,7 @@ async function openDashboardAiInsight() {
   window.Swal.fire({
     customClass: { popup: "kaila-popup" },
     title: "Reading dashboard",
-    text: "Groq is summarizing the pilot analytics.",
+    text: "AI is summarizing the pilot analytics.",
     allowOutsideClick: false,
     didOpen: () => window.Swal.showLoading(),
   });
@@ -1311,7 +1311,7 @@ async function openDashboardAiInsight() {
     const insight = await apiFetch("/api/analytics/insights", { method: "POST", body: "{}" });
     window.Swal.close();
     await modal({
-      title: "Groq Dashboard Insight",
+      title: "AI Dashboard Insight",
       html: `
         <div class="ai-insight-panel">
           <p>${escapeHtml(insight.summary || "No summary returned.")}</p>
@@ -1324,7 +1324,7 @@ async function openDashboardAiInsight() {
     });
   } catch (error) {
     window.Swal.close();
-    notify("Groq insight failed", error.message, "error");
+    notify("AI insight failed", error.message, "error");
   }
 }
 
@@ -1763,7 +1763,7 @@ function bindDecisionSignalSuggestion(type) {
     button.disabled = true;
     const previousHtml = button.innerHTML;
     button.innerHTML = `<span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Thinking</span>`;
-    if (note) note.textContent = "Groq is reviewing the current answers.";
+    if (note) note.textContent = "AI is reviewing the current answers.";
     try {
       const payload = await apiFetch("/api/validation/decision-signal", {
         method: "POST",
@@ -1772,7 +1772,7 @@ function bindDecisionSignalSuggestion(type) {
       signal.value = payload.decisionSignal || "Neutral";
       signal.dispatchEvent(new Event("change", { bubbles: true }));
       saveValidationDraft(type, popup);
-      if (note) note.textContent = payload.reason || "Decision signal suggested by Groq.";
+      if (note) note.textContent = payload.reason || "Decision signal suggested by AI.";
     } catch (error) {
       if (note) note.textContent = "";
       notify("AI prefill failed", error.message, "error");
