@@ -4527,10 +4527,11 @@ function connectSocket(force = false) {
         notify("Audio call", "The live connection was lost.", "warning");
       }
     });
-    state.socket.on("connect_error", () => {
+    state.socket.on("connect_error", (error) => {
       state.connected = false;
       updateSocketStatus("offline");
       startRealtimePolling();
+      addActivity("Socket connection failed", `${socketUrl} - ${error?.message || "Connection error"}`);
     });
     state.socket.on("kaila.state.updated", applyServerState);
     state.socket.on("kaila.request.created", handleRequestCreated);
@@ -4566,10 +4567,10 @@ function connectSocket(force = false) {
       }
       renderActivity();
     });
-  }).catch(() => {
+  }).catch((error) => {
     updateSocketStatus("offline");
     startRealtimePolling();
-    addActivity("Socket offline", "Start kaila/socket.");
+    addActivity("Socket offline", `${socketUrl} - ${error?.message || "Could not load Socket.IO client."}`);
   });
 }
 

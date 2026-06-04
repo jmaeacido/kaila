@@ -3,6 +3,7 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..");
 const outDir = path.join(root, "native-www");
+const androidPublicDir = path.join(root, "android", "app", "src", "main", "assets", "public");
 
 const files = [
   "index.html",
@@ -34,3 +35,9 @@ for (const directory of directories) {
 }
 
 console.log(`Prepared Capacitor web bundle in ${path.relative(root, outDir)}`);
+
+if (fs.existsSync(path.dirname(androidPublicDir))) {
+  fs.rmSync(androidPublicDir, { recursive: true, force: true });
+  fs.cpSync(outDir, androidPublicDir, { recursive: true });
+  console.log(`Updated Android web assets in ${path.relative(root, androidPublicDir)}`);
+}

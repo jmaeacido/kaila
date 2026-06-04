@@ -1,4 +1,13 @@
+import org.apache.tools.ant.taskdefs.condition.Os
+
 apply plugin: 'com.android.application'
+
+tasks.register('prepareCapacitorWebAssets', Exec) {
+    workingDir rootProject.projectDir.parentFile
+    commandLine Os.isFamily(Os.FAMILY_WINDOWS) ? ['cmd', '/c', 'npm', 'run', 'native:prepare'] : ['npm', 'run', 'native:prepare']
+}
+
+preBuild.dependsOn prepareCapacitorWebAssets
 
 android {
     namespace = "com.kaila.marketplace"
