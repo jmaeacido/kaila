@@ -27,6 +27,8 @@ const SUPPORT_ROLE = "customer_service";
 const SUPPORT_LABEL = "Customer Service";
 const SUPPORT_AVATAR = "assets/kaila-customer-service-avatar.png";
 const APP_TIME_ZONE = "Asia/Manila";
+const CALL_RING_TIMEOUT_MS = 60000;
+const URGENT_ATTENTION_MS = 18000;
 const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
 const GEOGRAPHY_SOURCE = "assets/Gingoog City PSGC.xlsx";
 const FALLBACK_GEOGRAPHY = {
@@ -52,6 +54,8 @@ const state = {
   unreadMessages: [],
   attentionTimer: null,
   attentionOpen: false,
+  attentionLoop: null,
+  notificationClicksBound: false,
   activeOfferPromptRequestId: null,
   lastDashboardTabTarget: "#requests-pane",
   activeConversationId: null,
@@ -112,14 +116,31 @@ function setupAttentionNotifications() {
     if ("Notification" in window && Notification.permission === "default") {
       Notification.requestPermission().catch(() => {});
     }
+    resumeAttentionAudio();
   };
   ["pointerdown", "keydown", "touchstart"].forEach((eventName) => {
     document.addEventListener(eventName, markInteraction, { once: true, passive: true });
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && state.call && ["incoming", "ringing", "connected", "reconnecting"].includes(state.call.status)) {
+      requestCallWakeLock();
+    }
   });
 }
 
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
+  if (!state.notificationClicksBound) {
+    state.notificationClicksBound = true;
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      const action = event.data?.action;
+      if (action === "open-call" && state.call?.status === "incoming") {
+        route("app");
+        setCallMinimized(false);
+      }
+      if (action === "open-notifications") openNotificationBell();
+    });
+  }
   let refreshing = false;
   navigator.serviceWorker.addEventListener("controllerchange", () => {
     if (refreshing) return;
@@ -2927,6 +2948,7 @@ let callTone = null;
 let callClockTimer = null;
 let callQualityTimer = null;
 let attentionTone = null;
+let callWakeLock = null;
 
 function callSupported() {
   return Boolean(window.RTCPeerConnection && navigator.mediaDevices?.getUserMedia);
@@ -2972,6 +2994,7 @@ async function startCall(requestId, withVideo = false) {
     const call = createCallState(requestId, createBrowserId(), "outgoing", conversationOtherPartyName(request), conversationOtherPartyPhoto(request), withVideo);
     state.call = call;
     renderCallPanel();
+    requestCallWakeLock();
     startCallTone("outgoing");
     scheduleCallTimeout(call);
     await ensureRtcConfig();
@@ -3014,6 +3037,7 @@ async function startDirectCall(userId, withVideo = false) {
     const call = createCallState("", createBrowserId(), "outgoing", target.name, target.photoUrl, withVideo, { directUserId: userId });
     state.call = call;
     renderCallPanel();
+    requestCallWakeLock();
     startCallTone("outgoing");
     scheduleCallTimeout(call);
     await ensureRtcConfig();
@@ -3073,6 +3097,7 @@ function createCallState(requestId, callId, direction, otherName, otherPhotoUrl 
     remoteVideoExpected: direction === "incoming" && withVideo,
     remoteVideoPaused: false,
     requestedVideo: withVideo,
+    audioOutputMode: "earpiece",
     remoteStream: new MediaStream(),
     qualityBadSamples: 0,
     cameraStallSamples: 0,
@@ -3090,7 +3115,11 @@ function createCallState(requestId, callId, direction, otherName, otherPhotoUrl 
 
 function callMediaConstraints(withVideo = false, facingMode = "user") {
   return {
-    audio: true,
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
     video: withVideo ? {
       facingMode: { ideal: facingMode },
       width: { ideal: 640, max: 960 },
@@ -3174,6 +3203,7 @@ function createPeerConnection(call) {
       call.status = "connected";
       call.minimized = false;
       call.connectedAt ||= Date.now();
+      requestCallWakeLock();
       startCallClock();
       startCallQualityMonitor(call);
       renderCallPanel();
@@ -3194,6 +3224,7 @@ function ensureRemoteAudio() {
   audio = document.createElement("audio");
   audio.dataset.callAudio = "";
   audio.autoplay = true;
+  audio.playsInline = true;
   document.body.appendChild(audio);
   return audio;
 }
@@ -3202,6 +3233,7 @@ function syncCallMedia(call = state.call) {
   if (!call) return;
   const audio = ensureRemoteAudio();
   if (audio.srcObject !== call.remoteStream) audio.srcObject = call.remoteStream;
+  applyCallAudioOutput(call, audio);
   audio.play().catch(() => {});
   const remoteVideo = $("[data-call-remote-video]");
   if (remoteVideo) {
@@ -3235,6 +3267,41 @@ function syncCallMedia(call = state.call) {
     localVideo.play().catch(() => {});
   }
   updateCallVideoWaiting(call);
+}
+
+async function applyCallAudioOutput(call = state.call, audio = ensureRemoteAudio()) {
+  if (!call || !audio) return;
+  // Browser limitation: PWAs cannot directly select the phone earpiece, speaker,
+  // ringtone stream, or notification stream the way native Android/iOS apps can.
+  // WebRTC audio normally uses the browser's "communications" route on phones,
+  // which is the closest web equivalent to a default earpiece call. setSinkId()
+  // is available only in some browsers and usually not on mobile.
+  if (!audio.setSinkId) {
+    audio.dataset.outputMode = call.audioOutputMode;
+    return;
+  }
+  try {
+    let sinkId = "";
+    if (call.audioOutputMode === "speaker" && navigator.mediaDevices?.enumerateDevices) {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const speaker = devices.find((device) => device.kind === "audiooutput" && /speaker|loud/i.test(device.label));
+      sinkId = speaker?.deviceId || "";
+    }
+    if (audio.sinkId !== sinkId) await audio.setSinkId(sinkId);
+  } catch (error) {
+    console.warn("KAILA could not change call audio output:", error);
+  }
+}
+
+async function toggleCallAudioOutput() {
+  const call = state.call;
+  if (!call) return;
+  call.audioOutputMode = call.audioOutputMode === "speaker" ? "earpiece" : "speaker";
+  await applyCallAudioOutput(call);
+  renderCallPanel();
+  if (call.audioOutputMode === "speaker" && !ensureRemoteAudio().setSinkId) {
+    notify("Speaker control limited", "This mobile browser does not let PWAs force loudspeaker output. Use the phone/browser audio route controls if available.", "info");
+  }
 }
 
 async function refreshCallCameraAvailability(call = state.call) {
@@ -3357,6 +3424,10 @@ function renderCallPanel() {
               <span><i class="fa-solid fa-microphone${call.muted ? "-slash" : ""}"></i></span>
               <b>${call.muted ? "Unmute" : "Mute"}</b>
             </button>
+            <button class="audio-call-control" type="button" data-call-output>
+              <span><i class="fa-solid fa-volume-${call.audioOutputMode === "speaker" ? "high" : "low"}"></i></span>
+              <b>${call.audioOutputMode === "speaker" ? "Speaker" : "Earpiece"}</b>
+            </button>
             <button class="audio-call-control" type="button" data-call-video>
               <span><i class="fa-solid fa-video${call.localVideoEnabled ? "-slash" : ""}"></i></span>
               <b>${call.localVideoEnabled ? "Audio only" : "Start video"}</b>
@@ -3383,6 +3454,7 @@ function bindCallPanelActions(panel) {
   $("[data-call-accept]", panel)?.addEventListener("click", acceptAudioCall);
   $("[data-call-decline]", panel)?.addEventListener("click", declineAudioCall);
   $("[data-call-mute]", panel)?.addEventListener("click", toggleAudioMute);
+  $("[data-call-output]", panel)?.addEventListener("click", toggleCallAudioOutput);
   $("[data-call-video]", panel)?.addEventListener("click", toggleCallVideo);
   $("[data-call-switch-camera]", panel)?.addEventListener("click", switchCallCamera);
   $("[data-call-end]", panel)?.addEventListener("click", () => endAudioCall(true));
@@ -3706,6 +3778,7 @@ function endAudioCall(notifyOther = true) {
   state.call.localStream?.getTracks().forEach((track) => track.stop());
   state.call.peerConnection?.close();
   state.call = null;
+  releaseCallWakeLock();
   clearInterval(callClockTimer);
   callClockTimer = null;
   stopCallQualityMonitor();
@@ -3762,6 +3835,7 @@ async function handleCallSignal(signal = {}) {
     state.call.remoteDescription = signal.description;
     scheduleCallTimeout(state.call);
     renderCallPanel();
+    requestCallWakeLock();
     startCallTone("incoming");
     notifyIncomingCall(senderName, state.call.requestedVideo);
     return;
@@ -3806,9 +3880,18 @@ function notifyIncomingCall(senderName, withVideo = false) {
   const callType = withVideo ? "video" : "audio";
   notify(`Incoming ${callType} call`, `${senderName || "Your job contact"} is calling.`, "info");
   vibrateAfterInteraction([450, 180, 450, 180, 700]);
-  if (document.hidden && window.Notification?.permission === "granted") {
-    new Notification(`Incoming KAILA ${callType} call`, { body: `${senderName || "Your job contact"} is calling.` });
-  }
+  showSystemNotification(`Incoming KAILA ${callType} call`, {
+    body: `${senderName || "Your job contact"} is calling.`,
+    tag: state.call?.callId ? `kaila-call-${state.call.callId}` : "kaila-call",
+    requireInteraction: true,
+    renotify: true,
+    silent: false,
+    urgency: "call",
+    data: { action: "open-call" },
+    actions: [
+      { action: "open-call", title: "Open KAILA" },
+    ],
+  });
 }
 
 function startCallTone(mode) {
@@ -3817,6 +3900,10 @@ function startCallTone(mode) {
   const AudioContext = window.AudioContext || window.webkitAudioContext;
   if (!AudioContext) return;
   const context = new AudioContext();
+  // Browser limitation: Web Audio from a PWA is treated as page/media audio.
+  // Browsers do not expose Android/iOS ringtone or notification volume streams
+  // to JavaScript, so KAILA can only request a loud, persistent tone and system
+  // notification; the OS/browser decides the final volume behavior.
   const playBeep = (frequency, duration, delay = 0, type = "square", volume = 0.3) => {
     const oscillator = context.createOscillator();
     const gain = context.createGain();
@@ -3860,7 +3947,7 @@ function scheduleCallTimeout(call) {
     emitCallSignal("hangup");
     endAudioCall(false);
     notify("Audio call", "No answer.", "info");
-  }, 30000);
+  }, CALL_RING_TIMEOUT_MS);
 }
 
 async function flushPendingCandidates(call) {
@@ -4472,6 +4559,9 @@ function connectSocket(force = false) {
       if (!missedCall || missedCall.recipientId !== state.session?.id) return;
       state.missedCalls = [missedCall, ...state.missedCalls.filter((item) => item.id !== missedCall.id)].slice(0, 30);
       addUnreadNotification(notificationItemFromMissedCall(missedCall));
+      if (missedCall.callerId !== state.session.id) {
+        announceAttentionEvent("Missed call", `${missedCall.callerName || "A KAILA user"} tried to call${missedCall.contextTitle ? ` about ${missedCall.contextTitle}` : ""}.`, "urgent");
+      }
       renderActivity();
     });
   }).catch(() => {
@@ -4837,15 +4927,21 @@ function handleTypingChanged({ requestId, senderId, senderName, typing } = {}) {
 
 function announceAttentionEvent(title, detail = "", kind = "update") {
   if (kind !== "message") addUnreadNotification();
-  playAttentionTone(kind);
-  vibrateAfterInteraction(kind === "urgent" ? [500, 100, 500, 100, 700] : [280, 90, 280, 90, 420]);
-  if (document.hidden && window.Notification?.permission === "granted") {
-    new Notification(`KAILA: ${title}`, {
-      body: detail,
-      icon: "assets/android-chrome-192x192.png",
-      tag: `kaila-${kind}`,
-    });
+  if (kind === "urgent") startPersistentAttention(title, detail);
+  else {
+    playAttentionTone(kind);
+    vibrateAfterInteraction([280, 90, 280, 90, 420]);
   }
+  showSystemNotification(`KAILA: ${title}`, {
+    body: detail,
+    tag: `kaila-${kind}`,
+    requireInteraction: kind === "urgent",
+    renotify: kind === "urgent",
+    silent: false,
+    urgency: kind,
+    data: { action: "open-notifications" },
+    actions: [{ action: "open-notifications", title: "Open KAILA" }],
+  });
 }
 
 function loadAttentionBadgesForSession() {
@@ -5186,6 +5282,9 @@ function playAttentionTone(kind = "update") {
   if (!AudioContext) return;
   attentionTone?.close().catch(() => {});
   const context = new AudioContext();
+  // Browser limitation: this is still web/media audio, not the native
+  // notification-volume channel. The accompanying system notification is the
+  // browser-supported path that may use OS notification behavior.
   attentionTone = context;
   const urgent = kind === "urgent";
   const notes = urgent ? [980, 720, 980, 720] : [880, 1120, 880];
@@ -5208,6 +5307,97 @@ function playAttentionTone(kind = "update") {
     context.close().catch(() => {});
     attentionTone = null;
   }, notes.length * 180 + 180);
+}
+
+function startPersistentAttention(title, detail = "") {
+  stopPersistentAttention();
+  const startedAt = Date.now();
+  const pulse = () => {
+    playAttentionTone("urgent");
+    vibrateAfterInteraction([500, 100, 500, 100, 700]);
+    if (document.hidden) {
+      showSystemNotification(`KAILA: ${title}`, {
+        body: detail,
+        tag: "kaila-urgent",
+        requireInteraction: true,
+        renotify: true,
+        silent: false,
+        urgency: "urgent",
+        data: { action: "open-notifications" },
+        actions: [{ action: "open-notifications", title: "Open KAILA" }],
+      });
+    }
+    if (Date.now() - startedAt >= URGENT_ATTENTION_MS) stopPersistentAttention();
+  };
+  pulse();
+  state.attentionLoop = setInterval(pulse, 4200);
+}
+
+function stopPersistentAttention() {
+  clearInterval(state.attentionLoop);
+  state.attentionLoop = null;
+  vibrateAfterInteraction(0);
+}
+
+function resumeAttentionAudio() {
+  attentionTone?.resume?.().catch(() => {});
+  callTone?.context?.resume?.().catch(() => {});
+}
+
+async function showSystemNotification(title, options = {}) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const actions = Array.isArray(options.actions) ? options.actions : [];
+  const payload = {
+    body: options.body || "",
+    icon: "assets/android-chrome-192x192.png",
+    badge: "assets/android-chrome-192x192.png",
+    tag: options.tag || "kaila-notification",
+    renotify: Boolean(options.renotify),
+    requireInteraction: Boolean(options.requireInteraction),
+    silent: Boolean(options.silent),
+    vibrate: options.urgency === "call" ? [450, 180, 450, 180, 700] : options.urgency === "urgent" ? [500, 100, 500, 100, 700] : [280, 90, 280],
+    data: options.data || {},
+    ...(actions.length ? { actions } : {}),
+  };
+  const simplePayload = { ...payload };
+  delete simplePayload.actions;
+  try {
+    const registration = await navigator.serviceWorker?.ready;
+    if (registration?.showNotification) {
+      try {
+        await registration.showNotification(title, payload);
+      } catch {
+        await registration.showNotification(title, simplePayload);
+      }
+      return;
+    }
+  } catch {}
+  try {
+    new Notification(title, simplePayload);
+  } catch {}
+}
+
+async function requestCallWakeLock() {
+  if (!state.call || callWakeLock || document.visibilityState !== "visible") return;
+  // Browser limitation: Screen Wake Lock can keep an already-visible PWA awake,
+  // but it cannot wake a locked phone, bypass Do Not Disturb, or keep JavaScript
+  // running after the browser suspends the page. True lock-screen ringing needs
+  // native app call APIs or Web Push delivered by the browser/OS.
+  try {
+    callWakeLock = await navigator.wakeLock?.request?.("screen");
+    callWakeLock?.addEventListener?.("release", () => {
+      callWakeLock = null;
+      if (state.call && document.visibilityState === "visible") setTimeout(requestCallWakeLock, 1000);
+    });
+  } catch {
+    callWakeLock = null;
+  }
+}
+
+function releaseCallWakeLock() {
+  const lock = callWakeLock;
+  callWakeLock = null;
+  lock?.release?.().catch(() => {});
 }
 
 function vibrateAfterInteraction(pattern) {

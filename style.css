@@ -2676,7 +2676,7 @@ body.call-overlay-open {
   align-items: center;
   justify-content: center;
   justify-self: stretch;
-  gap: clamp(1.4rem, 12vw, 3rem);
+  gap: clamp(0.65rem, 6vw, 2.4rem);
 }
 
 .audio-call-control {
@@ -2844,11 +2844,12 @@ body.call-overlay-open {
 
   .audio-call-overlay-actions {
     display: flex;
-    gap: 0.1rem;
+    flex-wrap: wrap;
+    gap: 0.45rem 0.1rem;
   }
 
   .audio-call-control {
-    flex: 0 1 5.4rem;
+    flex: 0 1 4.85rem;
     min-width: 0;
     gap: 0.35rem;
     font-size: 0.68rem;
@@ -2861,6 +2862,9 @@ body.call-overlay-open {
   }
 
   .audio-call-control b {
+    max-width: 4.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 

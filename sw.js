@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v105";
+const CACHE_NAME = "kaila-pwa-v106";
 const APP_PATH = new URL("./", self.location.href).pathname;
 const APP_SHELL = [
   "./",
@@ -82,4 +82,20 @@ self.addEventListener("fetch", (event) => {
       return response;
     }))
   );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  const action = event.action || event.notification?.data?.action || "open-notifications";
+  event.notification.close();
+  event.waitUntil((async () => {
+    const clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const appClient = clientList.find((client) => new URL(client.url).pathname.startsWith(APP_PATH));
+    if (appClient) {
+      await appClient.focus();
+      appClient.postMessage({ action });
+      return;
+    }
+    const opened = await self.clients.openWindow(APP_PATH || "./");
+    opened?.postMessage?.({ action });
+  })());
 });
