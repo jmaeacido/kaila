@@ -47,6 +47,8 @@ const state = {
   typingTimer: null,
   typingSent: false,
   presenceTimer: null,
+  realtimePollTimer: null,
+  conversationPollTimer: null,
   call: null,
   adminMetric: "",
   theme: localStorage.getItem(STORAGE.theme) || "system",
@@ -155,6 +157,7 @@ function applyTheme(theme = "system") {
 function initializeSocketUrl() {
   const input = $("[data-socket-url]");
   input.value = normalizeSocketUrl(localStorage.getItem(STORAGE.socketUrl) || "") || defaultSocketUrl();
+  localStorage.setItem(STORAGE.socketUrl, input.value);
 }
 
 async function loadGeography() {
@@ -232,7 +235,7 @@ async function apiFetch(path, options = {}) {
   return payload;
 }
 
-async function loadState() {
+async function loadState(options = {}) {
   try {
     const payload = await apiFetch("/api/state", { method: "GET" });
     applyServerState(payload);
@@ -244,12 +247,12 @@ async function loadState() {
     const cached = readJson(STORAGE.stateSnapshot, null);
     if (cached) {
       applyServerState(cached, { fromCache: true });
-      addActivity("Offline snapshot loaded", "KAILA is using the last saved state on this device.");
+      if (!options.silent) addActivity("Offline snapshot loaded", "KAILA is using the last saved state on this device.");
       return;
     }
     state.validationEntries = mergeQueuedValidationEntries([]);
     render();
-    addActivity("Offline mode", "KAILA can open offline, but no previous state snapshot is saved on this device.");
+    if (!options.silent) addActivity("Offline mode", "KAILA can open offline, but no previous state snapshot is saved on this device.");
   }
 }
 
@@ -2127,6 +2130,7 @@ function conversationIdentityHtml(request) {
 
 function bindConversationInput(requestId, writable) {
   scrollConversationToBottom();
+  startConversationPolling(requestId);
   $("[data-audio-call]")?.addEventListener("click", () => startAudioCall(requestId));
   $("[data-video-call]")?.addEventListener("click", () => startVideoCall(requestId));
   if (!writable) return;
@@ -2218,8 +2222,19 @@ async function setConversationPresence(requestId, active) {
 }
 
 function closeConversationRoom(requestId) {
+  stopConversationPolling();
   stopConversationTyping(requestId);
   setConversationPresence(requestId, false);
+}
+
+function startConversationPolling(requestId) {
+  stopConversationPolling();
+  state.conversationPollTimer = setInterval(() => refreshConversation(requestId, { preserveScroll: true }), state.connected ? 5000 : 2500);
+}
+
+function stopConversationPolling() {
+  clearInterval(state.conversationPollTimer);
+  state.conversationPollTimer = null;
 }
 
 async function updateConversationPresence(requestId) {
@@ -2264,7 +2279,11 @@ async function startVideoCall(requestId) {
 
 async function startCall(requestId, withVideo = false) {
   if (!callSupported()) return notify("Audio call unavailable", audioCallUnavailableMessage(), "warning");
-  if (!state.connected || !state.socket) return notify("Audio call unavailable", "Reconnect the live socket before calling.", "warning");
+  if (!state.connected || !state.socket) {
+    notify("Live socket", "Reconnecting before the call...", "info");
+    await ensureSocketConnected();
+  }
+  if (!state.connected || !state.socket) return notify("Audio call unavailable", "Live socket is still offline. Reload the page and try again.", "warning");
   if (state.call) return notify("Call already active", "End the current call before starting another.", "warning");
   const request = state.requests.find((item) => item.id === requestId);
   if (!request || !canViewConversation(request)) return;
@@ -3634,27 +3653,43 @@ function connectSocket(force = false) {
   const socketUrl = normalizeSocketUrl(urlInput.value.trim()) || normalizeSocketUrl(savedUrl) || defaultSocketUrl();
   urlInput.value = socketUrl;
   localStorage.setItem(STORAGE.socketUrl, socketUrl);
+  updateSocketStatus("connecting");
   if (force && state.socket) {
     state.socket.disconnect();
     state.socket = null;
   }
-  if (state.socket) return;
+  if (state.socket) {
+    updateSocketStatus(state.connected ? "connected" : "offline");
+    return;
+  }
   loadSocketClient(socketUrl).then(() => {
-    state.socket = window.io(socketIoOrigin(socketUrl), { path: socketIoPath(socketUrl) });
+    state.socket = window.io(socketIoOrigin(socketUrl), {
+      path: socketIoPath(socketUrl),
+      transports: ["polling", "websocket"],
+      timeout: 12000,
+      reconnectionAttempts: 8,
+    });
     state.socket.on("connect", () => {
       state.connected = true;
-      $("[data-socket-dot]").classList.add("connected");
+      updateSocketStatus("connected");
+      stopRealtimePolling();
       state.socket.emit("subscribe", CHANNEL);
       syncSocketIdentity();
       syncQueuedValidationEntries();
     });
     state.socket.on("disconnect", () => {
       state.connected = false;
-      $("[data-socket-dot]").classList.remove("connected");
+      updateSocketStatus("offline");
+      startRealtimePolling();
       if (state.call) {
         endAudioCall(false);
         notify("Audio call", "The live connection was lost.", "warning");
       }
+    });
+    state.socket.on("connect_error", () => {
+      state.connected = false;
+      updateSocketStatus("offline");
+      startRealtimePolling();
     });
     state.socket.on("kaila.state.updated", applyServerState);
     state.socket.on("kaila.request.created", handleRequestCreated);
@@ -3675,11 +3710,59 @@ function connectSocket(force = false) {
       if (!state.activity.some((item) => item.id === activity.id)) state.activity.unshift(activity);
       renderActivity();
     });
-  }).catch(() => addActivity("Socket offline", "Start kaila/socket."));
+  }).catch(() => {
+    updateSocketStatus("offline");
+    startRealtimePolling();
+    addActivity("Socket offline", "Start kaila/socket.");
+  });
+}
+
+function ensureSocketConnected(timeout = 12000) {
+  connectSocket(!state.socket);
+  if (state.connected && state.socket?.connected) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      if (state.connected && state.socket?.connected) return cleanup(true);
+      if (state.socket && !state.socket.connected) state.socket.connect?.();
+      if (Date.now() - startedAt >= timeout) cleanup(false);
+    }, 250);
+    function cleanup(result) {
+      clearInterval(timer);
+      resolve(result);
+    }
+  });
+}
+
+function updateSocketStatus(status) {
+  const isConnected = status === "connected";
+  const isConnecting = status === "connecting";
+  const dot = $("[data-socket-dot]");
+  const label = $("[data-socket-label]");
+  const button = $("[data-socket-button]");
+  if (dot) dot.classList.toggle("connected", isConnected);
+  if (label) label.textContent = isConnected ? "Live" : status === "connecting" ? "Connecting" : "Offline";
+  if (button) {
+    button.classList.toggle("btn-outline-success", isConnected);
+    button.classList.toggle("btn-outline-secondary", isConnecting);
+    button.classList.toggle("btn-outline-danger", !isConnected && !isConnecting);
+  }
 }
 
 function syncSocketIdentity() {
   state.socket?.emit("identify", state.session?.id || "");
+}
+
+function startRealtimePolling() {
+  if (state.realtimePollTimer) return;
+  state.realtimePollTimer = setInterval(() => {
+    if (!state.connected) loadState({ silent: true }).catch(() => {});
+  }, 10000);
+}
+
+function stopRealtimePolling() {
+  clearInterval(state.realtimePollTimer);
+  state.realtimePollTimer = null;
 }
 
 function handleRequestCreated({ request } = {}) {
@@ -4029,7 +4112,11 @@ function normalizeSocketUrl(value) {
   if (!value) return "";
   try {
     const url = new URL(value);
-    if (["localhost", "127.0.0.1", "::1"].includes(url.hostname) && !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)) return "";
+    const localHosts = ["localhost", "127.0.0.1", "::1"];
+    const isLocalPage = localHosts.includes(window.location.hostname);
+    if (localHosts.includes(url.hostname) && !isLocalPage) return "";
+    if (window.location.protocol === "https:" && !isLocalPage && url.hostname !== window.location.hostname) return "";
+    if (window.location.protocol === "https:" && !isLocalPage && url.pathname.replace(/\/$/, "") !== "/kaila-api") return "";
     if (window.location.protocol === "https:" && url.protocol !== "https:") return "";
     return value;
   } catch {
@@ -4048,9 +4135,14 @@ function socketIoPath(socketUrl) {
 
 function loadSocketClient(socketUrl) {
   if (window.io) return Promise.resolve();
+  return loadScript(`${socketUrl.replace(/\/$/, "")}/socket.io/socket.io.js`)
+    .catch(() => loadScript("https://cdn.socket.io/4.8.1/socket.io.min.js"));
+}
+
+function loadScript(src) {
   return new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = `${socketUrl.replace(/\/$/, "")}/socket.io/socket.io.js`;
+    script.src = src;
     script.onload = resolve;
     script.onerror = reject;
     document.head.appendChild(script);
