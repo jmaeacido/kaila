@@ -1362,6 +1362,7 @@ function renderSupportRequestSummary(request) {
         <button class="btn btn-sm btn-outline-primary" type="button" data-support-focus-request="${escapeAttribute(request.id)}"><i class="fa-solid fa-clipboard-list"></i> View Request</button>
         ${request.clientId ? `<button class="btn btn-sm btn-outline-primary" type="button" data-direct-chat="${escapeAttribute(request.clientId)}" data-direct-request-id="${escapeAttribute(request.id)}"><i class="fa-solid fa-message"></i> Client</button>` : ""}
         ${request.acceptedProviderId ? `<button class="btn btn-sm btn-outline-primary" type="button" data-direct-chat="${escapeAttribute(request.acceptedProviderId)}" data-direct-request-id="${escapeAttribute(request.id)}"><i class="fa-solid fa-message"></i> Provider</button>` : ""}
+        ${jobActionButtons(request)}
       </div>
     </article>
   `;
@@ -1370,6 +1371,9 @@ function renderSupportRequestSummary(request) {
 function bindCustomerServiceActions(host = document) {
   $$("[data-support-focus-request]", host).forEach((button) => {
     button.addEventListener("click", () => focusRequestCard(button.dataset.supportFocusRequest));
+  });
+  $$("[data-job-action]", host).forEach((button) => {
+    button.addEventListener("click", () => openJobAction(button.dataset.requestId, button.dataset.jobAction));
   });
 }
 
@@ -3750,12 +3754,16 @@ async function handleCallSignal(signal = {}) {
       return;
     }
     const request = signal.requestId ? state.requests.find((item) => item.id === signal.requestId) : null;
-    state.call = createCallState(signal.requestId || "", signal.callId, "incoming", signal.senderName, userProfile(signal.senderId).photoUrl || conversationOtherPartyPhoto(request), Boolean(signal.withVideo), { directUserId: signal.directUserId || signal.senderId || "" });
+    const sender = userProfile(signal.senderId);
+    const displaySender = directConversationDisplayTarget(sender);
+    const senderName = displaySender.name || signal.senderName;
+    const senderPhotoUrl = displaySender.photoUrl || sender.photoUrl || (request ? conversationOtherPartyPhoto(request) : "");
+    state.call = createCallState(signal.requestId || "", signal.callId, "incoming", senderName, senderPhotoUrl, Boolean(signal.withVideo), { directUserId: signal.directUserId || signal.senderId || "" });
     state.call.remoteDescription = signal.description;
     scheduleCallTimeout(state.call);
     renderCallPanel();
     startCallTone("incoming");
-    notifyIncomingCall(signal.senderName, state.call.requestedVideo);
+    notifyIncomingCall(senderName, state.call.requestedVideo);
     return;
   }
   if (!state.call || signal.callId !== state.call.callId) return;
@@ -3929,12 +3937,13 @@ async function checkCallVideoQuality(call) {
   } catch {}
 }
 
-function conversationOtherPartyName(request) {
+function conversationOtherPartyName(request = {}) {
   if (request.clientId === state.session?.id) return userProfile(request.acceptedProviderId).name || "Provider";
   return request.clientName || "Client";
 }
 
 function conversationOtherPartyPhoto(request = {}) {
+  if (!request?.clientId && !request?.acceptedProviderId) return "";
   if (request.clientId === state.session?.id) return request.acceptedProviderPhotoUrl || userProfile(request.acceptedProviderId).photoUrl || "";
   return request.clientPhotoUrl || userProfile(request.clientId).photoUrl || "";
 }
@@ -3971,7 +3980,23 @@ async function openJobAction(requestId, action) {
     body.note = result.note;
     body.attachments = result.attachments;
   } else if (action === "resolve_dispute") {
-    const result = await notePrompt("Resolve dispute", "Resolution note", false, "Resolve");
+    const result = await notePrompt("Close dispute", "Resolution note", true, "Close Dispute");
+    if (!result) return;
+    body.note = result.note;
+  } else if (action === "support_resume_job") {
+    const result = await notePrompt("Resume job", "Why should the job continue?", true, "Resume Job");
+    if (!result) return;
+    body.note = result.note;
+  } else if (action === "support_request_revision") {
+    const result = await notePrompt("Request revision", "What must the provider correct?", true, "Request Revision");
+    if (!result) return;
+    body.note = result.note;
+  } else if (action === "support_release_payment") {
+    const result = await notePrompt("Release payment", "Why is payment being released?", true, "Release Payment");
+    if (!result) return;
+    body.note = result.note;
+  } else if (action === "support_cancel_request") {
+    const result = await notePrompt("Cancel after dispute", "Why is this request being cancelled?", true, "Cancel Request");
     if (!result) return;
     body.note = result.note;
   } else if (action === "rate") {
@@ -3985,7 +4010,7 @@ async function openJobAction(requestId, action) {
     body.note = result.note;
   }
 
-  if (!["cancel", "dispute", "resolve_dispute", "rate", "provider_complete", "request_revision"].includes(action)) {
+  if (!["cancel", "dispute", "resolve_dispute", "support_resume_job", "support_request_revision", "support_release_payment", "support_cancel_request", "rate", "provider_complete", "request_revision"].includes(action)) {
     const result = await modal({ title, text, icon: "question", confirmButtonText });
     if (!result.isConfirmed) return;
   }
@@ -5346,10 +5371,19 @@ function jobActionButtons(request) {
   const buttons = [];
   const isClient = state.session.role === "client" && request.clientId === state.session.id;
   const isProvider = state.session.role === "provider" && request.acceptedProviderId === state.session.id;
+  const isSupport = state.session.role === SUPPORT_ROLE;
   const add = (action, label, style = "outline-secondary") => {
     buttons.push(`<button class="btn btn-sm btn-${style}" data-request-id="${request.id}" data-job-action="${action}">${label}</button>`);
   };
 
+  if (isSupport && request.status === "Disputed") {
+    add("support_resume_job", "Resume Job", "outline-primary");
+    add("support_request_revision", "Request Revision", "outline-warning");
+    add("support_release_payment", "Release Payment", "outline-success");
+    add("support_cancel_request", "Cancel Request", "outline-danger");
+    add("resolve_dispute", "Close Dispute", "outline-secondary");
+    return buttons.join("");
+  }
   if (isProvider && request.status === "Accepted") add("start", "Start", "outline-primary");
   if (isProvider && ["Accepted", "In Progress", "Revision Requested"].includes(request.status)) add("provider_complete", "Job Done", "outline-success");
   if (isClient && request.status === "Provider Marked Done") add("client_complete", "Confirm Completion", "outline-success");

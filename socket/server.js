@@ -1203,8 +1203,14 @@ function canReadConversation(request, user) {
 
 function canWriteConversation(request, user) {
   if (user.role === "admin" || !canReadConversation(request, user)) return false;
-  if (request.status === "Disputed") return !request.payment_released_at;
+  if (request.status === "Disputed") return false;
   return ["Accepted", "In Progress", "Provider Marked Done", "Revision Requested"].includes(request.status);
+}
+
+function supportDisputeNote(request, outcome, note) {
+  const existing = String(request.dispute_note || "").trim();
+  const resolution = `${outcome}${note ? `: ${note}` : ""}`;
+  return existing ? `${existing}\n\nSupport resolution - ${resolution}` : `Support resolution - ${resolution}`;
 }
 
 function otherConversationUserId(request, userId) {
@@ -2067,6 +2073,7 @@ app.post("/api/requests/:id/action", requireUser, async (req, res) => {
   const timestamp = nowMysql();
   const isClient = req.user.role === "client" && request.client_id === req.user.id;
   const isProviderForJob = req.user.role === "provider" && request.accepted_provider_id === req.user.id;
+  const isSupport = req.user.role === "customer_service";
 
   let nextStatus = "";
   let activityTitle = "";
@@ -2139,6 +2146,41 @@ app.post("/api/requests/:id/action", requireUser, async (req, res) => {
     extraParams = [note];
     activityTitle = "Revision requested";
     activityDetail = `${request.category} - ${note}`;
+  } else if (["support_resume_job", "support_request_revision", "support_release_payment", "resolve_dispute", "support_cancel_request"].includes(action)) {
+    if (!isSupport) return res.status(403).json({ error: "Only Customer Service can resolve disputed jobs" });
+    if (request.status !== "Disputed") return res.status(400).json({ error: "Only disputed jobs can receive a support outcome" });
+    if (!note) return res.status(400).json({ error: "Resolution note is required" });
+    if (action === "support_resume_job") {
+      nextStatus = "In Progress";
+      extraSql = ", dispute_note = ?, provider_done_at = NULL, auto_confirm_at = NULL, payment_released_at = NULL, rating_deadline_at = NULL";
+      extraParams = [supportDisputeNote(request, "Job resumed", note)];
+      activityTitle = "Dispute resolved: job resumed";
+      activityDetail = `${request.category} returned to in-progress work`;
+    } else if (action === "support_request_revision") {
+      nextStatus = "Revision Requested";
+      extraSql = ", revision_note = ?, dispute_note = ?, auto_confirm_at = NULL, payment_released_at = NULL, rating_deadline_at = NULL";
+      extraParams = [note, supportDisputeNote(request, "Revision requested", note)];
+      activityTitle = "Dispute resolved: revision requested";
+      activityDetail = `${request.category} needs provider revision`;
+    } else if (action === "support_release_payment") {
+      nextStatus = "Payment Released";
+      extraSql = ", confirmed_at = ?, payment_released_at = ?, rating_deadline_at = ?, dispute_note = ?, auto_confirm_at = NULL";
+      extraParams = [timestamp, timestamp, futureMysqlDays(RATING_WINDOW_DAYS), supportDisputeNote(request, "Payment released", note)];
+      activityTitle = "Dispute resolved: payment released";
+      activityDetail = `${request.category} was completed by support decision`;
+    } else if (action === "support_cancel_request") {
+      nextStatus = "Cancelled";
+      extraSql = ", dispute_note = ?, auto_confirm_at = NULL, payment_released_at = NULL, rating_deadline_at = NULL";
+      extraParams = [supportDisputeNote(request, "Request cancelled", note)];
+      activityTitle = "Dispute resolved: request cancelled";
+      activityDetail = `${request.category} was cancelled by support decision`;
+    } else {
+      nextStatus = "Resolved";
+      extraSql = ", dispute_note = ?, auto_confirm_at = NULL";
+      extraParams = [supportDisputeNote(request, "Closed", note)];
+      activityTitle = "Dispute resolved";
+      activityDetail = `${request.category} was closed by Customer Service`;
+    }
   } else {
     return res.status(400).json({ error: "Invalid job action" });
   }
@@ -2618,18 +2660,23 @@ socketServer.on("connection", (socket) => {
       let targetUserId = "";
       let contextTitle = "";
       if (directUserId) {
-        const target = await getUser(directUserId);
-        if (!target) throw new Error("Call recipient not found");
-        contextTitle = target.name;
         const activeCall = activeCalls.get(callId);
         if (type === "offer") {
+          const target = await getUser(directUserId);
+          if (!target) throw new Error("Call recipient not found");
           if (!canInitiateDirectCall(user, target)) {
             throw new Error("Only Customer Service staff can call clients or providers");
           }
-        } else if (!activeCall?.userIds.includes(user.id) || !activeCall.userIds.includes(target.id)) {
-          throw new Error("Direct call is no longer active");
+          contextTitle = target.name;
+          targetUserId = target.id;
+        } else {
+          if (!activeCall?.userIds.includes(user.id) || (directUserId && !activeCall.userIds.includes(directUserId))) {
+            throw new Error("Direct call is no longer active");
+          }
+          targetUserId = activeCall.userIds.find((item) => item !== user.id) || "";
+          const target = await getUser(targetUserId);
+          contextTitle = activeCall.contextTitle || target?.name || "";
         }
-        targetUserId = target.id;
       } else {
         const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
         if (!requestRows.length || !canWriteConversation(requestRows[0], user)) {
@@ -2658,6 +2705,7 @@ socketServer.on("connection", (socket) => {
           answeredBySocketId: "",
           answeredByUserId: "",
           declinedSocketIds: new Set(),
+          busySocketIds: new Set(),
         });
       }
       const activeCall = activeCalls.get(callId);
@@ -2710,6 +2758,15 @@ socketServer.on("connection", (socket) => {
           callType: activeCall.callType || "audio",
           contextTitle: activeCall.contextTitle || "",
         });
+      }
+      if (type === "busy" && activeCall?.answeredBySocketId) {
+        return acknowledge({ ok: true });
+      }
+      if (type === "busy" && activeCall && !activeCall.answeredBySocketId) {
+        activeCall.busySocketIds.add(socket.id);
+        const userSocketGroups = await Promise.all(socketServers.map((serverItem) => serverItem.in(`user:${user.id}`).fetchSockets()));
+        const userSockets = userSocketGroups.flat();
+        if (userSockets.some((item) => !activeCall.busySocketIds.has(item.id))) return acknowledge({ ok: true });
       }
       if (["hangup", "reject", "busy"].includes(type)) activeCalls.delete(callId);
       relayCallSignal(targetUserId, {
