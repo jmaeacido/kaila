@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v75";
+const CACHE_NAME = "kaila-pwa-v78";
 const APP_PATH = new URL("./", self.location.href).pathname;
 const APP_SHELL = [
   "./",
@@ -36,6 +36,10 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const requestUrl = new URL(event.request.url);
+
+  if (requestUrl.pathname.startsWith("/kaila-api/") || requestUrl.pathname.startsWith(`${APP_PATH}kaila-api/`) || requestUrl.pathname.includes("/socket.io/")) {
+    return;
+  }
 
   if (requestUrl.origin !== self.location.origin) {
     event.respondWith(

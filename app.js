@@ -38,6 +38,7 @@ const state = {
   activity: [],
   socket: null,
   connected: false,
+  userInteracted: false,
   attentionQueue: [],
   attentionTimer: null,
   attentionOpen: false,
@@ -88,10 +89,15 @@ function setupOfflineSync() {
 }
 
 function setupAttentionNotifications() {
-  if (!("Notification" in window) || Notification.permission !== "default") return;
-  document.addEventListener("pointerdown", () => {
-    Notification.requestPermission().catch(() => {});
-  }, { once: true });
+  const markInteraction = () => {
+    state.userInteracted = true;
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+  };
+  ["pointerdown", "keydown", "touchstart"].forEach((eventName) => {
+    document.addEventListener(eventName, markInteraction, { once: true, passive: true });
+  });
 }
 
 function registerServiceWorker() {
@@ -3071,13 +3077,14 @@ async function handleCallSignal(signal = {}) {
 function notifyIncomingCall(senderName, withVideo = false) {
   const callType = withVideo ? "video" : "audio";
   notify(`Incoming ${callType} call`, `${senderName || "Your job contact"} is calling.`, "info");
-  navigator.vibrate?.([450, 180, 450, 180, 700]);
+  vibrateAfterInteraction([450, 180, 450, 180, 700]);
   if (document.hidden && window.Notification?.permission === "granted") {
     new Notification(`Incoming KAILA ${callType} call`, { body: `${senderName || "Your job contact"} is calling.` });
   }
 }
 
 function startCallTone(mode) {
+  if (!state.userInteracted) return;
   stopCallTone();
   const AudioContext = window.AudioContext || window.webkitAudioContext;
   if (!AudioContext) return;
@@ -3101,7 +3108,7 @@ function startCallTone(mode) {
       playBeep(1120, 0.22, 0.27, "sawtooth", 0.34);
       playBeep(820, 0.22, 0.54);
       playBeep(1120, 0.34, 0.81, "sawtooth", 0.34);
-      navigator.vibrate?.([420, 100, 420, 100, 650]);
+      vibrateAfterInteraction([420, 100, 420, 100, 650]);
     } else {
       playBeep(520, 0.18, 0, "square", 0.22);
       playBeep(680, 0.18, 0.25, "square", 0.22);
@@ -3116,7 +3123,7 @@ function stopCallTone() {
   clearInterval(callTone.timer);
   callTone.context.close().catch(() => {});
   callTone = null;
-  navigator.vibrate?.(0);
+  vibrateAfterInteraction(0);
 }
 
 function scheduleCallTimeout(call) {
@@ -4026,7 +4033,7 @@ function handleTypingChanged({ requestId, senderId, senderName, typing } = {}) {
 
 function announceAttentionEvent(title, detail = "", kind = "update") {
   playAttentionTone(kind);
-  navigator.vibrate?.(kind === "urgent" ? [500, 100, 500, 100, 700] : [280, 90, 280, 90, 420]);
+  vibrateAfterInteraction(kind === "urgent" ? [500, 100, 500, 100, 700] : [280, 90, 280, 90, 420]);
   if (document.hidden && window.Notification?.permission === "granted") {
     new Notification(`KAILA: ${title}`, {
       body: detail,
@@ -4037,7 +4044,7 @@ function announceAttentionEvent(title, detail = "", kind = "update") {
 }
 
 function playAttentionTone(kind = "update") {
-  if (state.call || callTone) return;
+  if (!state.userInteracted || state.call || callTone) return;
   const AudioContext = window.AudioContext || window.webkitAudioContext;
   if (!AudioContext) return;
   attentionTone?.close().catch(() => {});
@@ -4064,6 +4071,11 @@ function playAttentionTone(kind = "update") {
     context.close().catch(() => {});
     attentionTone = null;
   }, notes.length * 180 + 180);
+}
+
+function vibrateAfterInteraction(pattern) {
+  if (!state.userInteracted || !navigator.vibrate) return;
+  navigator.vibrate(pattern);
 }
 
 function queueAttentionModal(options) {
@@ -4115,8 +4127,6 @@ function normalizeSocketUrl(value) {
     const localHosts = ["localhost", "127.0.0.1", "::1"];
     const isLocalPage = localHosts.includes(window.location.hostname);
     if (localHosts.includes(url.hostname) && !isLocalPage) return "";
-    if (window.location.protocol === "https:" && !isLocalPage && url.hostname !== window.location.hostname) return "";
-    if (window.location.protocol === "https:" && !isLocalPage && url.pathname.replace(/\/$/, "") !== "/kaila-api") return "";
     if (window.location.protocol === "https:" && url.protocol !== "https:") return "";
     return value;
   } catch {

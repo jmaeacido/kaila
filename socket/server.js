@@ -14,12 +14,15 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
+const socketOptions = {
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
   },
-});
+};
+const io = new Server(server, socketOptions);
+const proxiedIo = new Server(server, { ...socketOptions, path: "/kaila-api/socket.io" });
+const socketServers = [io, proxiedIo];
 
 const PORT = Number(process.env.PORT || 6002);
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
@@ -913,11 +916,14 @@ function otherConversationUserId(request, userId) {
 }
 
 async function userSocketCount(userId) {
-  return (await io.in(`user:${userId}`).fetchSockets()).length;
+  const socketGroups = await Promise.all(socketServers.map((socketServer) => socketServer.in(`user:${userId}`).fetchSockets()));
+  return socketGroups.reduce((count, sockets) => count + sockets.length, 0);
 }
 
 function relayCallSignal(targetUserId, signal) {
-  io.to(`user:${targetUserId}`).emit("kaila.call.signal", signal);
+  socketServers.forEach((socketServer) => {
+    socketServer.to(`user:${targetUserId}`).emit("kaila.call.signal", signal);
+  });
 }
 
 async function endDisconnectedUserCalls(userId) {
@@ -1203,7 +1209,9 @@ async function createAccount(input = {}, allowedRoles = ["client", "provider"]) 
 }
 
 function broadcast(event, data) {
-  io.to(CHANNEL).emit(event, data);
+  socketServers.forEach((socketServer) => {
+    socketServer.to(CHANNEL).emit(event, data);
+  });
 }
 
 async function requireUser(req, res, next) {
@@ -1840,7 +1848,8 @@ app.post("/api/admin/truncate", requireUser, async (req, res) => {
   res.json({ state });
 });
 
-io.on("connection", (socket) => {
+function registerSocketHandlers(socketServer) {
+socketServer.on("connection", (socket) => {
   socket.on("subscribe", (channel) => {
     if (!channel) return;
     socket.join(channel);
@@ -1927,7 +1936,8 @@ io.on("connection", (socket) => {
       }
       if (type === "reject" && activeCall && !activeCall.answeredBySocketId) {
         activeCall.declinedSocketIds.add(socket.id);
-        const userSockets = await io.in(`user:${user.id}`).fetchSockets();
+        const userSocketGroups = await Promise.all(socketServers.map((serverItem) => serverItem.in(`user:${user.id}`).fetchSockets()));
+        const userSockets = userSocketGroups.flat();
         if (userSockets.some((item) => !activeCall.declinedSocketIds.has(item.id))) return acknowledge({ ok: true });
       }
       if (["hangup", "reject", "busy"].includes(type)) activeCalls.delete(callId);
@@ -1952,6 +1962,9 @@ io.on("connection", (socket) => {
     setTimeout(() => endDisconnectedUserCalls(userId).catch((error) => console.error("Call disconnect cleanup failed:", error)), 0);
   });
 });
+}
+
+socketServers.forEach(registerSocketHandlers);
 
 initializeDatabase()
   .then(() => {
