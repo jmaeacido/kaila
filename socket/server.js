@@ -888,6 +888,32 @@ function mapValidationEntry(row) {
   };
 }
 
+function validationPayload(input = {}) {
+  const type = String(input?.type || "").trim();
+  if (!["client_survey", "provider_interview"].includes(type)) {
+    const error = new Error("Invalid validation form type");
+    error.status = 400;
+    throw error;
+  }
+  const responses = input?.responses && typeof input.responses === "object" ? input.responses : {};
+  const subjectName = String(input?.subjectName || responses.name || responses.providerName || "").trim();
+  const area = String(input?.area || responses.area || responses.coverageArea || "").trim();
+  const category = String(input?.category || responses.serviceNeeded || responses.servicesOffered || "").trim();
+  const decisionSignal = String(input?.decisionSignal || responses.decisionSignal || "").trim();
+  const notes = String(input?.notes || responses.notes || "").trim();
+  if (!subjectName || !area) {
+    const error = new Error("Name and area are required");
+    error.status = 400;
+    throw error;
+  }
+  if (JSON.stringify(responses).length > 12000) {
+    const error = new Error("Validation entry is too long");
+    error.status = 400;
+    throw error;
+  }
+  return { type, responses, subjectName, area, category, decisionSignal, notes };
+}
+
 function mapMessage(row, reactions = []) {
   return {
     id: row.id,
@@ -1780,38 +1806,64 @@ app.post("/api/analytics/insights", requireUser, async (req, res) => {
 
 app.post("/api/validation", requireUser, async (req, res) => {
   if (!["admin", "ops"].includes(req.user.role)) return res.status(403).json({ error: "Admin or ops only" });
-  const type = String(req.body?.type || "").trim();
-  if (!["client_survey", "provider_interview"].includes(type)) return res.status(400).json({ error: "Invalid validation form type" });
-  const responses = req.body?.responses && typeof req.body.responses === "object" ? req.body.responses : {};
-  const subjectName = String(req.body?.subjectName || responses.name || responses.providerName || "").trim();
-  const area = String(req.body?.area || responses.area || responses.coverageArea || "").trim();
-  const category = String(req.body?.category || responses.serviceNeeded || responses.servicesOffered || "").trim();
-  const decisionSignal = String(req.body?.decisionSignal || responses.decisionSignal || "").trim();
-  const notes = String(req.body?.notes || responses.notes || "").trim();
-  if (!subjectName || !area) return res.status(400).json({ error: "Name and area are required" });
-  if (JSON.stringify(responses).length > 12000) return res.status(400).json({ error: "Validation entry is too long" });
+  let payload;
+  try {
+    payload = validationPayload(req.body);
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message });
+  }
 
   const entry = {
     id: createId(),
-    type,
+    ...payload,
     operatorId: req.user.id,
     operatorName: req.user.name,
-    subjectName,
-    area,
-    category,
-    decisionSignal,
-    responses,
-    notes,
     createdAt: nowMysql(),
   };
   await pool.query(
     "INSERT INTO validation_entries (id, type, operator_id, operator_name, subject_name, area, category, decision_signal, responses, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     [entry.id, entry.type, entry.operatorId, entry.operatorName, entry.subjectName, entry.area, entry.category, entry.decisionSignal, JSON.stringify(entry.responses), entry.notes, entry.createdAt]
   );
-  await addActivity(type === "client_survey" ? "Client survey recorded" : "Provider interview recorded", `${req.user.name}: ${entry.subjectName} - ${entry.decisionSignal || "No decision signal"}`);
+  await addActivity(payload.type === "client_survey" ? "Client survey recorded" : "Provider interview recorded", `${req.user.name}: ${entry.subjectName} - ${entry.decisionSignal || "No decision signal"}`);
   const state = await getStateFor(req.user);
   broadcast("kaila.state.updated", await getState());
+  broadcast("kaila.validation.updated", { entryId: entry.id, action: "created" });
   res.status(201).json({ entry, state });
+});
+
+app.put("/api/validation/:id", requireUser, async (req, res) => {
+  if (!["admin", "ops"].includes(req.user.role)) return res.status(403).json({ error: "Admin or ops only" });
+  const [rows] = await pool.query("SELECT * FROM validation_entries WHERE id = ? LIMIT 1", [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: "Validation entry not found" });
+  let payload;
+  try {
+    payload = validationPayload(req.body);
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message });
+  }
+  await pool.query(
+    "UPDATE validation_entries SET type = ?, subject_name = ?, area = ?, category = ?, decision_signal = ?, responses = ?, notes = ? WHERE id = ?",
+    [payload.type, payload.subjectName, payload.area, payload.category, payload.decisionSignal, JSON.stringify(payload.responses), payload.notes, req.params.id]
+  );
+  await addActivity(payload.type === "client_survey" ? "Client survey edited" : "Provider interview edited", `${req.user.name}: ${payload.subjectName} - ${payload.decisionSignal || "No decision signal"}`);
+  const [updatedRows] = await pool.query("SELECT * FROM validation_entries WHERE id = ? LIMIT 1", [req.params.id]);
+  const state = await getStateFor(req.user);
+  broadcast("kaila.state.updated", await getState());
+  broadcast("kaila.validation.updated", { entryId: req.params.id, action: "updated" });
+  res.json({ entry: mapValidationEntry(updatedRows[0]), state });
+});
+
+app.delete("/api/validation/:id", requireUser, async (req, res) => {
+  if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+  const [rows] = await pool.query("SELECT * FROM validation_entries WHERE id = ? LIMIT 1", [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: "Validation entry not found" });
+  const entry = mapValidationEntry(rows[0]);
+  await pool.query("DELETE FROM validation_entries WHERE id = ?", [req.params.id]);
+  await addActivity(entry.type === "client_survey" ? "Client survey deleted" : "Provider interview deleted", `${req.user.name}: ${entry.subjectName || "Validation entry"}`);
+  const state = await getStateFor(req.user);
+  broadcast("kaila.state.updated", await getState());
+  broadcast("kaila.validation.updated", { entryId: req.params.id, action: "deleted" });
+  res.json({ state });
 });
 
 app.post("/api/admin/users", requireUser, async (req, res) => {

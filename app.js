@@ -1211,11 +1211,14 @@ function renderValidation() {
   }
 
   host.innerHTML = `${summary}${entries.map(renderValidationEntry).join("")}`;
+  bindValidationEntryActions();
 }
 
 function renderValidationEntry(entry) {
   const title = entry.type === "client_survey" ? "Client Survey" : "Provider Interview";
   const responses = entry.responses || {};
+  const canEdit = canEditValidationEntry(entry);
+  const canDelete = canDeleteValidationEntry(entry);
   const highlights = Object.entries(responses)
     .filter(([key, value]) => value && !["name", "providerName", "area", "coverageArea", "decisionSignal", "notes"].includes(key))
     .slice(0, 8);
@@ -1228,6 +1231,12 @@ function renderValidationEntry(entry) {
         </div>
         ${entry.decisionSignal ? `<span class="badge text-bg-${validationSignalColor(entry.decisionSignal)} align-self-start">${escapeHtml(entry.decisionSignal)}</span>` : ""}
       </div>
+      ${canEdit || canDelete ? `
+        <div class="d-flex gap-2 flex-wrap mt-2">
+          ${canEdit ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-validation="${escapeAttribute(entry.id)}"><i class="fa-solid fa-pen-to-square"></i><span>Edit</span></button>` : ""}
+          ${canDelete ? `<button class="btn btn-sm btn-outline-danger" type="button" data-delete-validation="${escapeAttribute(entry.id)}"><i class="fa-solid fa-trash"></i><span>Delete</span></button>` : ""}
+        </div>
+      ` : ""}
       <div class="meta">
         <span>${escapeHtml(entry.operatorName || "Ops")}</span>
         <span>${formatDateTime(entry.createdAt)}</span>
@@ -1239,6 +1248,26 @@ function renderValidationEntry(entry) {
       </div>
     </article>
   `;
+}
+
+function canEditValidationEntry(entry = {}) {
+  return Boolean(!entry.pendingSync && ["admin", "ops"].includes(state.session?.role));
+}
+
+function canDeleteValidationEntry(entry = {}) {
+  return Boolean(!entry.pendingSync && state.session?.role === "admin");
+}
+
+function bindValidationEntryActions() {
+  $$("[data-edit-validation]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const entry = state.validationEntries.find((item) => item.id === button.dataset.editValidation);
+      if (entry) openValidationEditModal(entry);
+    });
+  });
+  $$("[data-delete-validation]").forEach((button) => {
+    button.addEventListener("click", () => deleteValidationEntry(button.dataset.deleteValidation));
+  });
 }
 
 function validationSignalColor(signal) {
@@ -1355,38 +1384,40 @@ function renderActivity() {
   $("[data-live-feed]").innerHTML = html;
 }
 
-async function openClientSurveyModal() {
+async function openClientSurveyModal(entry = null) {
+  const isEdit = Boolean(entry?.id);
+  const values = entry?.responses || {};
   const result = await modal({
-    title: "Client Survey Form",
+    title: isEdit ? "Edit Client Survey" : "Client Survey Form",
     html: `
       <div class="swal-form two">
         ${validationBriefer("client_survey")}
-        ${validationDraftTools("client_survey")}
-        <label>${questionLabel("Name or nickname", "Who gave this response. A nickname is enough for privacy, but it should let Ops follow up if needed.")}<input id="survey-name" class="form-control" maxlength="80"></label>
-        <label>${questionLabel("Age range", "Optional demographic context. Use it only for broad validation patterns, not individual targeting.")}${select("survey-age", ["Under 18", "18-24", "25-34", "35-44", "45-54", "55+"], "", "Optional")}</label>
-        <label class="wide">${questionLabel("Barangay / area", "Maps where demand is coming from so Admin can decide which areas are strong enough for the pilot.")}${addressFields("survey-address", state.session.area || "")}</label>
-        <label>${questionLabel("Needed a provider recently?", "Confirms whether the person actually experienced the problem KAILA wants to solve.")}${select("survey-needed", ["Yes", "No"], "Yes")}</label>
-        <label>${questionLabel("Service needed", "Identifies which service categories have real local demand.")}${categorySelect("survey-service", true)}</label>
-        <label>${questionLabel("How did they look?", "Shows current discovery behavior and what KAILA must improve or integrate with.")}${select("survey-search-method", ["Referral", "Facebook", "Messenger", "Neighbor", "Shop", "Previous provider", "Other"], "", "Choose method")}</label>
-        <label>${questionLabel("How long did it take?", "Measures search friction and urgency. Longer search time is stronger evidence of pain.")}${select("survey-time-to-find", ["Same day", "1-2 days", "3-7 days", "More than a week", "Never found one"], "", "Choose time")}</label>
-        <label>${questionLabel("Compared prices?", "Checks whether clients already want multiple offers or are stuck with one option.")}${select("survey-compared-prices", ["Yes", "No"], "", "Choose")}</label>
-        <label>${questionLabel("Price clear before job?", "Tests pricing transparency problems that KAILA can solve with offers and scope notes.")}${select("survey-price-clear", ["Yes", "No", "Somewhat"], "", "Choose")}</label>
-        <label>${questionLabel("Satisfied with work?", "Captures quality outcome and whether current alternatives are good enough.")}${select("survey-satisfaction", ["5 - Very satisfied", "4 - Satisfied", "3 - Neutral", "2 - Unsatisfied", "1 - Very unsatisfied", "Not applicable"], "", "Choose")}</label>
-        <label>${questionLabel("Would post in KAILA?", "Direct willingness signal for demand validation. Probe why if the answer is No or Maybe.")}${select("survey-would-post", YES_NO_MAYBE_OPTIONS, "Maybe")}</label>
-        <label>${questionLabel("Would upload photos/videos?", "Tests comfort with giving providers evidence for better estimates.")}${select("survey-would-upload", YES_NO_MAYBE_OPTIONS, "Maybe")}</label>
-        <label>${questionLabel("Would compare offers?", "Validates the marketplace comparison workflow.")}${select("survey-would-compare", YES_NO_MAYBE_OPTIONS, "Maybe")}</label>
-        <label>${questionLabel("Would rate provider?", "Checks whether two-way trust and reputation can work in the pilot.")}${select("survey-would-rate", YES_NO_MAYBE_OPTIONS, "Maybe")}</label>
-        ${decisionSignalField("survey-signal", "client_survey", "Ops judgment after the conversation: does this response support, weaken, or block the pilot assumption?")}
-        <label class="wide">${questionLabel("Hardest part", "Capture the pain point in the respondent's own words for decision-making and future copy.")}<textarea id="survey-hardest-part" class="form-control" rows="2"></textarea></label>
-        <label class="wide">${questionLabel("Trust factors", "Records what makes a provider credible to this client: referral, reviews, samples, ID, shop, price, etc.")}<textarea id="survey-trust-factors" class="form-control" rows="2" placeholder="Referral, reviews, work samples, ID, shop, price, etc."></textarea></label>
-        <label class="wide">${questionLabel("Notes", "Use for context, exact quotes, objections, or follow-up details that do not fit elsewhere.")}<textarea id="survey-notes" class="form-control" rows="2"></textarea></label>
+        ${isEdit ? "" : validationDraftTools("client_survey")}
+        <label>${questionLabel("Name or nickname", "Who gave this response. A nickname is enough for privacy, but it should let Ops follow up if needed.")}<input id="survey-name" class="form-control" maxlength="80" value="${escapeAttribute(values.name || entry?.subjectName || "")}"></label>
+        <label>${questionLabel("Age range", "Optional demographic context. Use it only for broad validation patterns, not individual targeting.")}${select("survey-age", ["Under 18", "18-24", "25-34", "35-44", "45-54", "55+"], values.ageRange || "", "Optional")}</label>
+        <label class="wide">${questionLabel("Barangay / area", "Maps where demand is coming from so Admin can decide which areas are strong enough for the pilot.")}${addressFields("survey-address", values.area || entry?.area || state.session.area || "")}</label>
+        <label>${questionLabel("Needed a provider recently?", "Confirms whether the person actually experienced the problem KAILA wants to solve.")}${select("survey-needed", ["Yes", "No"], values.neededProvider || "Yes")}</label>
+        <label>${questionLabel("Service needed", "Identifies which service categories have real local demand.")}${categorySelect("survey-service", true, values.serviceNeeded || entry?.category || "")}</label>
+        <label>${questionLabel("How did they look?", "Shows current discovery behavior and what KAILA must improve or integrate with.")}${select("survey-search-method", ["Referral", "Facebook", "Messenger", "Neighbor", "Shop", "Previous provider", "Other"], values.searchMethod || "", "Choose method")}</label>
+        <label>${questionLabel("How long did it take?", "Measures search friction and urgency. Longer search time is stronger evidence of pain.")}${select("survey-time-to-find", ["Same day", "1-2 days", "3-7 days", "More than a week", "Never found one"], values.timeToFind || "", "Choose time")}</label>
+        <label>${questionLabel("Compared prices?", "Checks whether clients already want multiple offers or are stuck with one option.")}${select("survey-compared-prices", ["Yes", "No"], values.comparedPrices || "", "Choose")}</label>
+        <label>${questionLabel("Price clear before job?", "Tests pricing transparency problems that KAILA can solve with offers and scope notes.")}${select("survey-price-clear", ["Yes", "No", "Somewhat"], values.priceClear || "", "Choose")}</label>
+        <label>${questionLabel("Satisfied with work?", "Captures quality outcome and whether current alternatives are good enough.")}${select("survey-satisfaction", ["5 - Very satisfied", "4 - Satisfied", "3 - Neutral", "2 - Unsatisfied", "1 - Very unsatisfied", "Not applicable"], values.satisfaction || "", "Choose")}</label>
+        <label>${questionLabel("Would post in KAILA?", "Direct willingness signal for demand validation. Probe why if the answer is No or Maybe.")}${select("survey-would-post", YES_NO_MAYBE_OPTIONS, values.wouldPostRequest || "Maybe")}</label>
+        <label>${questionLabel("Would upload photos/videos?", "Tests comfort with giving providers evidence for better estimates.")}${select("survey-would-upload", YES_NO_MAYBE_OPTIONS, values.wouldUploadMedia || "Maybe")}</label>
+        <label>${questionLabel("Would compare offers?", "Validates the marketplace comparison workflow.")}${select("survey-would-compare", YES_NO_MAYBE_OPTIONS, values.wouldCompareOffers || "Maybe")}</label>
+        <label>${questionLabel("Would rate provider?", "Checks whether two-way trust and reputation can work in the pilot.")}${select("survey-would-rate", YES_NO_MAYBE_OPTIONS, values.wouldRateProvider || "Maybe")}</label>
+        ${decisionSignalField("survey-signal", "client_survey", "Ops judgment after the conversation: does this response support, weaken, or block the pilot assumption?", values.decisionSignal || entry?.decisionSignal || "Neutral")}
+        <label class="wide">${questionLabel("Hardest part", "Capture the pain point in the respondent's own words for decision-making and future copy.")}<textarea id="survey-hardest-part" class="form-control" rows="2">${escapeHtml(values.hardestPart || "")}</textarea></label>
+        <label class="wide">${questionLabel("Trust factors", "Records what makes a provider credible to this client: referral, reviews, samples, ID, shop, price, etc.")}<textarea id="survey-trust-factors" class="form-control" rows="2" placeholder="Referral, reviews, work samples, ID, shop, price, etc.">${escapeHtml(values.trustFactors || "")}</textarea></label>
+        <label class="wide">${questionLabel("Notes", "Use for context, exact quotes, objections, or follow-up details that do not fit elsewhere.")}<textarea id="survey-notes" class="form-control" rows="2">${escapeHtml(values.notes || entry?.notes || "")}</textarea></label>
       </div>
     `,
-    confirmButtonText: "Save Survey",
+    confirmButtonText: isEdit ? "Save Changes" : "Save Survey",
     didOpen: () => {
       bindAddressGroup("survey-address");
       bindQuestionGuides();
-      bindValidationDraft("client_survey");
+      if (!isEdit) bindValidationDraft("client_survey");
       bindDecisionSignalSuggestion("client_survey");
     },
     preConfirm: () => {
@@ -1407,42 +1438,46 @@ async function openClientSurveyModal() {
     },
   });
   if (!result.isConfirmed) return;
-  const saved = await saveValidationEntry(result.value, "Client survey saved");
-  if (saved) clearValidationDraft("client_survey");
+  const saved = isEdit
+    ? await updateValidationEntry(entry.id, result.value, "Client survey updated")
+    : await saveValidationEntry(result.value, "Client survey saved");
+  if (saved && !isEdit) clearValidationDraft("client_survey");
 }
 
-async function openProviderInterviewModal() {
+async function openProviderInterviewModal(entry = null) {
+  const isEdit = Boolean(entry?.id);
+  const values = entry?.responses || {};
   const result = await modal({
-    title: "Provider Interview Form",
+    title: isEdit ? "Edit Provider Interview" : "Provider Interview Form",
     html: `
       <div class="swal-form two">
         ${validationBriefer("provider_interview")}
-        ${validationDraftTools("provider_interview")}
-        <label>${questionLabel("Provider name", "Identifies who was interviewed and allows Admin to connect answers to onboarding decisions.")}<input id="interview-name" class="form-control" maxlength="80"></label>
-        <label>${questionLabel("Years of experience", "A trust and capability signal. Experience can matter even without formal certification.")}${select("interview-experience", EXPERIENCE_OPTIONS, "", "Choose experience")}</label>
-        <label class="wide">${questionLabel("Services offered", "Ask for exact jobs, not just a broad category, so matching is accurate.")}<textarea id="interview-services" class="form-control" rows="2"></textarea></label>
-        <label>${questionLabel("How clients find them", "Shows current provider discovery channels and what KAILA must improve.")}${select("interview-client-source", ["Referral", "Facebook", "Shop walk-ins", "Repeat clients", "Other"], "", "Choose source")}</label>
-        <label>${questionLabel("Weekly jobs", "Supply-side baseline. Helps Admin see whether the provider is active, overloaded, or looking for work.")}<input id="interview-weekly-jobs" class="form-control" inputmode="numeric" maxlength="40"></label>
-        <label>${questionLabel("Wants more clients?", "Validates provider-side motivation. Ask why if the answer is No or Depends.")}${select("interview-wants-more", ["Yes", "No", "Depends"], "Yes")}</label>
-        <label class="wide">${questionLabel("Coverage area", "Defines where this provider can realistically accept requests and any travel limits or fees.")}<textarea id="interview-coverage" class="form-control" rows="2" placeholder="Barangays, city limits, travel fee rules"></textarea></label>
-        <label class="wide">${questionLabel("Most profitable jobs", "Helps prioritize categories and avoid sending low-value matches that providers ignore.")}<textarea id="interview-profitable" class="form-control" rows="2"></textarea></label>
-        <label class="wide">${questionLabel("Jobs avoided", "Prevents poor matches and reduces disputes by learning what work they refuse.")}<textarea id="interview-avoid" class="form-control" rows="2"></textarea></label>
-        <label>${questionLabel("Can receive requests?", "Confirms which channel Ops should use during the manual pilot.")}${select("interview-request-channel", ["Messenger", "SMS", "Call", "Email", "Other"], "Messenger")}</label>
-        <label>${questionLabel("Comfortable submitting offers?", "Tests whether providers will participate in KAILA's quote/offer workflow.")}${select("interview-offers", YES_NO_MAYBE_OPTIONS, "Maybe")}</label>
-        <label class="wide">${questionLabel("How they estimate price", "Captures pricing logic: inspection fee, fixed fee, parts and labor, or scope-based estimate.")}<textarea id="interview-price-estimate" class="form-control" rows="2" placeholder="Inspection fee, fixed fee, parts/labor, scope-based"></textarea></label>
-        <label class="wide">${questionLabel("Difficult client signals", "Helps define client reminders and operational rules that protect providers.")}<textarea id="interview-difficult-client" class="form-control" rows="2"></textarea></label>
-        <label class="wide">${questionLabel("Acceptable verification", "Finds verification steps providers consider fair: ID, samples, references, certificate, shop photo, or pilot history.")}<textarea id="interview-verification" class="form-control" rows="2" placeholder="ID, work samples, references, certificate, shop photo, pilot job history"></textarea></label>
-        <label class="wide">${questionLabel("Rating concerns", "Surfaces fears about unfair reviews, public complaints, or client abuse before the trust system launches.")}<textarea id="interview-rating-concerns" class="form-control" rows="2"></textarea></label>
-        <label class="wide">${questionLabel("What makes KAILA valuable?", "Captures provider value propositions: more jobs, better clients, visibility, trust badges, performance summary.")}<textarea id="interview-value" class="form-control" rows="2"></textarea></label>
-        <label class="wide">${questionLabel("Provider referrals", "Asks whether they can recommend other reliable providers to build supply faster.")}<textarea id="interview-referrals" class="form-control" rows="2"></textarea></label>
-        ${decisionSignalField("interview-signal", "provider_interview", "Ops judgment after the interview: does this provider strengthen, weaken, or block supply validation?")}
-        <label class="wide">${questionLabel("Notes", "Use for exact quotes, objections, category insights, or follow-up tasks.")}<textarea id="interview-notes" class="form-control" rows="2"></textarea></label>
+        ${isEdit ? "" : validationDraftTools("provider_interview")}
+        <label>${questionLabel("Provider name", "Identifies who was interviewed and allows Admin to connect answers to onboarding decisions.")}<input id="interview-name" class="form-control" maxlength="80" value="${escapeAttribute(values.providerName || entry?.subjectName || "")}"></label>
+        <label>${questionLabel("Years of experience", "A trust and capability signal. Experience can matter even without formal certification.")}${select("interview-experience", EXPERIENCE_OPTIONS, values.yearsExperience || "", "Choose experience")}</label>
+        <label class="wide">${questionLabel("Services offered", "Ask for exact jobs, not just a broad category, so matching is accurate.")}<textarea id="interview-services" class="form-control" rows="2">${escapeHtml(values.servicesOffered || entry?.category || "")}</textarea></label>
+        <label>${questionLabel("How clients find them", "Shows current provider discovery channels and what KAILA must improve.")}${select("interview-client-source", ["Referral", "Facebook", "Shop walk-ins", "Repeat clients", "Other"], values.clientSource || "", "Choose source")}</label>
+        <label>${questionLabel("Weekly jobs", "Supply-side baseline. Helps Admin see whether the provider is active, overloaded, or looking for work.")}<input id="interview-weekly-jobs" class="form-control" inputmode="numeric" maxlength="40" value="${escapeAttribute(values.weeklyJobs || "")}"></label>
+        <label>${questionLabel("Wants more clients?", "Validates provider-side motivation. Ask why if the answer is No or Depends.")}${select("interview-wants-more", ["Yes", "No", "Depends"], values.wantsMoreClients || "Yes")}</label>
+        <label class="wide">${questionLabel("Coverage area", "Defines where this provider can realistically accept requests and any travel limits or fees.")}<textarea id="interview-coverage" class="form-control" rows="2" placeholder="Barangays, city limits, travel fee rules">${escapeHtml(values.coverageArea || entry?.area || "")}</textarea></label>
+        <label class="wide">${questionLabel("Most profitable jobs", "Helps prioritize categories and avoid sending low-value matches that providers ignore.")}<textarea id="interview-profitable" class="form-control" rows="2">${escapeHtml(values.profitableJobs || "")}</textarea></label>
+        <label class="wide">${questionLabel("Jobs avoided", "Prevents poor matches and reduces disputes by learning what work they refuse.")}<textarea id="interview-avoid" class="form-control" rows="2">${escapeHtml(values.jobsAvoided || "")}</textarea></label>
+        <label>${questionLabel("Can receive requests?", "Confirms which channel Ops should use during the manual pilot.")}${select("interview-request-channel", ["Messenger", "SMS", "Call", "Email", "Other"], values.requestChannel || "Messenger")}</label>
+        <label>${questionLabel("Comfortable submitting offers?", "Tests whether providers will participate in KAILA's quote/offer workflow.")}${select("interview-offers", YES_NO_MAYBE_OPTIONS, values.comfortableSubmittingOffers || "Maybe")}</label>
+        <label class="wide">${questionLabel("How they estimate price", "Captures pricing logic: inspection fee, fixed fee, parts and labor, or scope-based estimate.")}<textarea id="interview-price-estimate" class="form-control" rows="2" placeholder="Inspection fee, fixed fee, parts/labor, scope-based">${escapeHtml(values.priceEstimateMethod || "")}</textarea></label>
+        <label class="wide">${questionLabel("Difficult client signals", "Helps define client reminders and operational rules that protect providers.")}<textarea id="interview-difficult-client" class="form-control" rows="2">${escapeHtml(values.difficultClientSignals || "")}</textarea></label>
+        <label class="wide">${questionLabel("Acceptable verification", "Finds verification steps providers consider fair: ID, samples, references, certificate, shop photo, or pilot history.")}<textarea id="interview-verification" class="form-control" rows="2" placeholder="ID, work samples, references, certificate, shop photo, pilot job history">${escapeHtml(values.acceptableVerification || "")}</textarea></label>
+        <label class="wide">${questionLabel("Rating concerns", "Surfaces fears about unfair reviews, public complaints, or client abuse before the trust system launches.")}<textarea id="interview-rating-concerns" class="form-control" rows="2">${escapeHtml(values.ratingConcerns || "")}</textarea></label>
+        <label class="wide">${questionLabel("What makes KAILA valuable?", "Captures provider value propositions: more jobs, better clients, visibility, trust badges, performance summary.")}<textarea id="interview-value" class="form-control" rows="2">${escapeHtml(values.kailaValue || "")}</textarea></label>
+        <label class="wide">${questionLabel("Provider referrals", "Asks whether they can recommend other reliable providers to build supply faster.")}<textarea id="interview-referrals" class="form-control" rows="2">${escapeHtml(values.providerReferrals || "")}</textarea></label>
+        ${decisionSignalField("interview-signal", "provider_interview", "Ops judgment after the interview: does this provider strengthen, weaken, or block supply validation?", values.decisionSignal || entry?.decisionSignal || "Neutral")}
+        <label class="wide">${questionLabel("Notes", "Use for exact quotes, objections, category insights, or follow-up tasks.")}<textarea id="interview-notes" class="form-control" rows="2">${escapeHtml(values.notes || entry?.notes || "")}</textarea></label>
       </div>
     `,
-    confirmButtonText: "Save Interview",
+    confirmButtonText: isEdit ? "Save Changes" : "Save Interview",
     didOpen: () => {
       bindQuestionGuides();
-      bindValidationDraft("provider_interview");
+      if (!isEdit) bindValidationDraft("provider_interview");
       bindDecisionSignalSuggestion("provider_interview");
     },
     preConfirm: () => {
@@ -1463,8 +1498,10 @@ async function openProviderInterviewModal() {
     },
   });
   if (!result.isConfirmed) return;
-  const saved = await saveValidationEntry(result.value, "Provider interview saved");
-  if (saved) clearValidationDraft("provider_interview");
+  const saved = isEdit
+    ? await updateValidationEntry(entry.id, result.value, "Provider interview updated")
+    : await saveValidationEntry(result.value, "Provider interview saved");
+  if (saved && !isEdit) clearValidationDraft("provider_interview");
 }
 
 async function saveValidationEntry(payload, title) {
@@ -1483,6 +1520,52 @@ async function saveValidationEntry(payload, title) {
     }
     notify("Validation entry failed", error.message, "error");
     return false;
+  }
+}
+
+function openValidationEditModal(entry) {
+  if (entry.type === "client_survey") {
+    openClientSurveyModal(entry);
+    return;
+  }
+  openProviderInterviewModal(entry);
+}
+
+async function updateValidationEntry(entryId, payload, title) {
+  try {
+    const response = await apiFetch(`/api/validation/${encodeURIComponent(entryId)}`, { method: "PUT", body: JSON.stringify(payload) });
+    safeApplyState(response.state);
+    activateTab("#validation-pane");
+    notify(title, "Validation evidence has been updated.", "success");
+    return true;
+  } catch (error) {
+    notify("Validation update failed", error.message, "error");
+    return false;
+  }
+}
+
+async function deleteValidationEntry(entryId) {
+  if (state.session?.role !== "admin") return;
+  const entry = state.validationEntries.find((item) => item.id === entryId);
+  if (!entry) return;
+  const result = await window.Swal.fire({
+    customClass: { popup: "kaila-popup" },
+    icon: "warning",
+    title: "Delete validation entry?",
+    text: `${entry.subjectName || "This entry"} will be removed from the Ops tracker.`,
+    showCancelButton: true,
+    confirmButtonText: "Delete",
+    confirmButtonColor: "#dc3545",
+    reverseButtons: true,
+  });
+  if (!result.isConfirmed) return;
+  try {
+    const response = await apiFetch(`/api/validation/${encodeURIComponent(entryId)}`, { method: "DELETE" });
+    safeApplyState(response.state);
+    activateTab("#validation-pane");
+    notify("Validation entry deleted", "The entry was removed from the Ops tracker.", "success");
+  } catch (error) {
+    notify("Delete failed", error.message, "error");
   }
 }
 
@@ -1651,12 +1734,12 @@ function questionLabel(text, guide) {
   `;
 }
 
-function decisionSignalField(id, type, guide) {
+function decisionSignalField(id, type, guide, selected = "Neutral") {
   return `
     <label data-decision-signal-field="${escapeAttribute(type)}">
       ${questionLabel("Decision signal", guide)}
       <div class="decision-signal-row">
-        ${select(id, DECISION_SIGNAL_OPTIONS, "Neutral")}
+        ${select(id, DECISION_SIGNAL_OPTIONS, selected || "Neutral")}
         <button class="btn btn-outline-primary btn-sm" type="button" data-suggest-decision-signal="${escapeAttribute(type)}">
           <i class="fa-solid fa-wand-magic-sparkles"></i>
           <span>AI Prefill</span>
@@ -3705,6 +3788,9 @@ function connectSocket(force = false) {
     state.socket.on("kaila.request.confirmed", handleRequestConfirmed);
     state.socket.on("kaila.request.passed", handleRequestPassed);
     state.socket.on("kaila.request.action", handleRequestAction);
+    state.socket.on("kaila.validation.updated", () => {
+      if (["admin", "ops"].includes(state.session?.role)) loadState({ silent: true }).catch(() => {});
+    });
     state.socket.on("kaila.message.saved", handleMessageSaved);
     state.socket.on("kaila.typing.changed", handleTypingChanged);
     state.socket.on("kaila.message.reaction", ({ requestId }) => refreshConversation(requestId));
