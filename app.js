@@ -236,6 +236,17 @@ function nativePushNotifications() {
   return window.Capacitor?.Plugins?.PushNotifications || null;
 }
 
+async function nativeFirebaseAvailable() {
+  const bridge = nativeKailaBridge();
+  if (!bridge?.isFirebaseAvailable) return false;
+  try {
+    const result = await bridge.isFirebaseAvailable();
+    return Boolean(result?.available);
+  } catch {
+    return false;
+  }
+}
+
 function isNativeApp() {
   return Boolean(window.Capacitor?.isNativePlatform?.() || window.Capacitor?.getPlatform?.() === "android" || window.Capacitor?.getPlatform?.() === "ios");
 }
@@ -252,8 +263,12 @@ function handleAttentionAction(action) {
 async function setupPushNotifications() {
   const push = nativePushNotifications();
   if (!push || state.pushNotificationsBound) return;
-  state.pushNotificationsBound = true;
   try {
+    if (!await nativeFirebaseAvailable()) {
+      console.warn("KAILA push setup skipped: Firebase is not configured for this native build.");
+      return;
+    }
+    state.pushNotificationsBound = true;
     await push.addListener("registration", (token) => {
       state.pushToken = token.value || "";
       registerPushToken(state.pushToken).catch((error) => console.warn("KAILA push token registration failed:", error));

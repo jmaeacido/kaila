@@ -21,6 +21,7 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.google.firebase.FirebaseApp;
 
 @CapacitorPlugin(name = "KailaNative")
 public class KailaNativePlugin extends Plugin {
@@ -101,6 +102,17 @@ public class KailaNativePlugin extends Plugin {
     public void cancelIncomingCall(PluginCall call) {
         NotificationManagerCompat.from(getContext()).cancel(INCOMING_CALL_NOTIFICATION_ID);
         call.resolve();
+    }
+
+    @PluginMethod
+    public void isFirebaseAvailable(PluginCall call) {
+        JSObject result = new JSObject();
+        try {
+            result.put("available", FirebaseApp.getInstance() != null);
+        } catch (IllegalStateException error) {
+            result.put("available", false);
+        }
+        call.resolve(result);
     }
 
     private void createCallChannel() {
