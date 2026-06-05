@@ -22,6 +22,33 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            outputFileName = "kaila-mobile.apk"
+        }
+    }
+}
+
+afterEvaluate {
+    android.applicationVariants.all { variant ->
+        def variantName = variant.name
+        def capitalizedVariantName = variantName.capitalize()
+        def apkOutputDir = layout.buildDirectory.dir("outputs/apk/${variantName}")
+        def copyTaskName = "copy${capitalizedVariantName}Apk"
+
+        tasks.register(copyTaskName, Copy) {
+            from(apkOutputDir) {
+                include "*.apk"
+                exclude "kaila-mobile.apk"
+                rename { "kaila-mobile.apk" }
+            }
+            into apkOutputDir
+        }
+
+        tasks.named("assemble${capitalizedVariantName}") {
+            finalizedBy copyTaskName
+        }
+    }
 }
 
 repositories {
