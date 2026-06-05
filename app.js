@@ -11,6 +11,7 @@ const STORAGE = {
   attentionBadges: "kaila.deploy.attentionBadges",
   messageReads: "kaila.deploy.messageReads",
   notificationReads: "kaila.deploy.notificationReads",
+  pushDeviceId: "kaila.deploy.pushDeviceId",
 };
 const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Cellphone repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
@@ -73,6 +74,8 @@ const state = {
   notificationSummarySyncing: false,
   nativeNotificationsReady: false,
   nativeNotificationListenersBound: false,
+  pushNotificationsBound: false,
+  pushToken: "",
   validationSyncing: false,
   typingTimer: null,
   typingSent: false,
@@ -95,6 +98,7 @@ async function init() {
   registerServiceWorker();
   setupAttentionNotifications();
   setupNativeNotifications();
+  setupPushNotifications();
   setupOfflineSync();
   initializeTheme();
   bindEvents();
@@ -227,6 +231,11 @@ function nativeKailaBridge() {
   return window.Capacitor?.Plugins?.KailaNative || null;
 }
 
+function nativePushNotifications() {
+  if (!isNativeApp()) return null;
+  return window.Capacitor?.Plugins?.PushNotifications || null;
+}
+
 function isNativeApp() {
   return Boolean(window.Capacitor?.isNativePlatform?.() || window.Capacitor?.getPlatform?.() === "android" || window.Capacitor?.getPlatform?.() === "ios");
 }
@@ -238,6 +247,80 @@ function handleAttentionAction(action) {
     return;
   }
   if (action === "open-notifications") openNotificationBell();
+}
+
+async function setupPushNotifications() {
+  const push = nativePushNotifications();
+  if (!push || state.pushNotificationsBound) return;
+  state.pushNotificationsBound = true;
+  try {
+    await push.addListener("registration", (token) => {
+      state.pushToken = token.value || "";
+      registerPushToken(state.pushToken).catch((error) => console.warn("KAILA push token registration failed:", error));
+    });
+    await push.addListener("registrationError", (error) => {
+      console.warn("KAILA push registration error:", error);
+    });
+    await push.addListener("pushNotificationReceived", (notification) => {
+      handlePushNotification(notification);
+    });
+    await push.addListener("pushNotificationActionPerformed", (event) => {
+      handlePushAction(event.notification?.data || event.notification || {});
+    });
+    const permission = await push.checkPermissions();
+    const nextPermission = permission.receive === "prompt" ? await push.requestPermissions() : permission;
+    if (nextPermission.receive === "granted") await push.register();
+  } catch (error) {
+    console.warn("KAILA push setup failed:", error);
+  }
+}
+
+async function registerPushToken(token) {
+  if (!token || !state.session) return;
+  await apiFetch("/api/push-token", {
+    method: "POST",
+    body: JSON.stringify({
+      token,
+      platform: window.Capacitor?.getPlatform?.() || "android",
+      deviceId: pushDeviceId(),
+    }),
+    silentError: true,
+  });
+}
+
+function pushDeviceId() {
+  let id = localStorage.getItem(STORAGE.pushDeviceId);
+  if (!id) {
+    id = createBrowserId();
+    localStorage.setItem(STORAGE.pushDeviceId, id);
+  }
+  return id;
+}
+
+function handlePushNotification(notification = {}) {
+  const data = notification.data || notification;
+  if (data.type === "call") {
+    showNativeIncomingCall(data.callerName || "Your job contact", data.callType || "audio").catch(() => {});
+  } else if (data.title || notification.title) {
+    addUnreadNotification();
+    renderAttentionBadges();
+  }
+}
+
+function handlePushAction(data = {}) {
+  const action = data.action || data.type;
+  if (action === "call" || action === "open-call") {
+    route("app");
+    setCallMinimized(false);
+    return;
+  }
+  if (action === "message" || action === "direct-message") openMessageBell();
+  else if (action === "request" || action === "offer" || action === "job") {
+    route("app");
+    activateTab("#requests-pane");
+  } else {
+    openNotificationBell();
+  }
 }
 
 function registerServiceWorker() {
@@ -517,6 +600,7 @@ async function register(event) {
   loadAttentionBadgesForSession();
   await rememberOfflineLogin(data.username, data.password, payload.user);
   await offerPasswordSave(data.username, data.password, payload.user);
+  await registerPushToken(state.pushToken);
   syncSocketIdentity();
   safeApplyState(payload.state);
   await syncUnreadNotificationSummaries();
@@ -549,6 +633,7 @@ async function login(event) {
   loadAttentionBadgesForSession();
   await rememberOfflineLogin(data.username, data.password, payload.user);
   await offerPasswordSave(data.username, data.password, payload.user);
+  await registerPushToken(state.pushToken);
   syncSocketIdentity();
   safeApplyState(payload.state);
   await syncUnreadNotificationSummaries();
@@ -1193,7 +1278,7 @@ function renderIdentity(name, photoUrl, reputationLabel, reputation, size = "") 
       <img class="user-avatar" src="${escapeAttribute(resolveMediaUrl(photoUrl))}" alt="${escapeAttribute(name)} photo">
       <div class="user-identity-copy">
         <strong>${escapeHtml(name)}</strong>
-        ${renderReputationBadge(reputationLabel, reputation)}
+        ${reputation === false ? "" : renderReputationBadge(reputationLabel, reputation)}
       </div>
     </div>
   `;
@@ -1227,6 +1312,16 @@ function userProfile(userId) {
   return state.users.find((user) => user.id === userId) || {};
 }
 
+function displayUserName(user = {}) {
+  if (user.role === "admin") return "Admin";
+  if (user.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session?.role)) return "KAILA Customer Service";
+  return user.name || "KAILA user";
+}
+
+function displayReputationForUser(user = {}) {
+  return ["client", "provider"].includes(user.role) ? user.reputation : false;
+}
+
 function canDirectContact(target = {}) {
   if (!state.session || !target.id || target.id === state.session.id) return false;
   if (state.session.role === "admin") return ["admin", "ops", SUPPORT_ROLE, "provider", "client"].includes(target.role);
@@ -1249,8 +1344,10 @@ function canDirectCall(target = {}) {
 }
 
 function directConversationDisplayTarget(target = {}) {
+  if (target.role === "admin") return { ...target, name: "Admin", reputation: false };
+  if (["ops", SUPPORT_ROLE].includes(target.role)) return { ...target, reputation: false };
   if (target.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session?.role)) {
-    return { ...target, name: "KAILA Customer Service", photoUrl: SUPPORT_AVATAR };
+    return { ...target, name: "KAILA Customer Service", photoUrl: SUPPORT_AVATAR, reputation: false };
   }
   return target;
 }
@@ -1554,7 +1651,7 @@ function renderOps() {
       <article class="k-card">
         <div class="d-flex justify-content-between gap-2">
           <div>
-            ${renderIdentity(user.name, user.photoUrl, "Admin account", user.reputation)}
+          ${renderIdentity("Admin", user.photoUrl, "Admin account", false)}
             <p>${escapeHtml(user.username || "No username")} ${user.contactNumber ? `- ${escapeHtml(user.contactNumber)}` : ""}</p>
           </div>
           <span class="badge text-bg-light align-self-start">Admin</span>
@@ -1588,7 +1685,7 @@ function renderOps() {
       <article class="k-card">
         <div class="d-flex justify-content-between gap-2">
           <div>
-            ${renderIdentity(user.name, user.photoUrl, "Ops account", user.reputation)}
+          ${renderIdentity(user.name, user.photoUrl, "Ops account", false)}
             <p>${escapeHtml(user.username || "No username")} ${user.contactNumber ? `- ${escapeHtml(user.contactNumber)}` : ""}</p>
           </div>
           <span class="badge text-bg-light align-self-start">${entries.length} validation entr${entries.length === 1 ? "y" : "ies"}</span>
@@ -2664,7 +2761,7 @@ function renderChatMessage(message = {}, { writable = false, reactions = false }
 
 function chatMessageSenderName(message = {}) {
   const sender = userProfile(message.senderId);
-  if (sender.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session?.role)) return "KAILA Customer Service";
+  if (["admin", "ops", SUPPORT_ROLE].includes(sender.role)) return displayUserName(sender);
   return message.senderName || sender.name || "KAILA user";
 }
 
@@ -2912,7 +3009,7 @@ function directConversationHtml(messages, writable, activeUserIds = [], target =
 
   return `
     <div class="chat-shell">
-      <div class="chat-reputation">${renderIdentity(displayTarget.name || "Direct contact", displayTarget.photoUrl, `${roleLabel(displayTarget.role || "user")} account`, displayTarget.reputation, "compact")}</div>
+      <div class="chat-reputation">${renderIdentity(displayTarget.name || "Direct contact", displayTarget.photoUrl, `${roleLabel(displayTarget.role || "user")} account`, displayReputationForUser(displayTarget), "compact")}</div>
       ${requestContext ? directConversationTopicHtml(requestContext) : ""}
       ${canDirectCall(target) ? `
         <div class="chat-call-row">
@@ -5024,7 +5121,7 @@ function handleDirectMessageSaved({ userIds = [], message } = {}) {
     onConfirm: () => openDirectConversation(otherUserId, requestId),
     html: `
       <div class="text-start">
-        ${renderIdentity(sender.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session.role) ? "KAILA Customer Service" : sender.name || message.senderName, sender.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session.role) ? SUPPORT_AVATAR : sender.photoUrl, `${roleLabel(sender.role || "user")} account`, sender.reputation, "compact")}
+        ${renderIdentity(displayUserName(sender), sender.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session.role) ? SUPPORT_AVATAR : sender.photoUrl, `${roleLabel(sender.role || "user")} account`, displayReputationForUser(sender), "compact")}
         <p class="mb-0">${escapeHtml(message.detail || "Sent media")}</p>
       </div>
     `,
@@ -6120,6 +6217,7 @@ async function tryOfflineLogin(data = {}) {
   state.session = stored.user;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   loadAttentionBadgesForSession();
+  await registerPushToken(state.pushToken);
   syncSocketIdentity();
   const cached = readJson(STORAGE.stateSnapshot, null);
   if (cached) applyServerState(cached, { fromCache: true });

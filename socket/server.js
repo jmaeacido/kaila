@@ -11,6 +11,12 @@ const http = require("http");
 const cors = require("cors");
 const mysql = require("mysql2/promise");
 const { Server } = require("socket.io");
+let firebaseAdmin = null;
+try {
+  firebaseAdmin = require("firebase-admin");
+} catch {
+  firebaseAdmin = null;
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -31,7 +37,9 @@ const SOCKET_TOKEN = sanitizeToken(process.env.KAILA_SOCKET_BEARER_TOKEN || "kai
 const MESSAGE_ENCRYPTION_KEY = parseMessageEncryptionKey(process.env.KAILA_MESSAGE_ENCRYPTION_KEY);
 const AUTO_CONFIRM_HOURS = Number(process.env.KAILA_AUTO_CONFIRM_HOURS || 48);
 const RATING_WINDOW_DAYS = Number(process.env.KAILA_RATING_WINDOW_DAYS || 7);
+const CALL_RING_TIMEOUT_MS = Number(process.env.KAILA_CALL_RING_TIMEOUT_MS || 60000);
 const CALL_DISCONNECT_GRACE_MS = Number(process.env.KAILA_CALL_DISCONNECT_GRACE_MS || 20000);
+const FIREBASE_SERVICE_ACCOUNT_JSON = String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || "").trim();
 const GROQ_API_KEY = sanitizeToken(process.env.GROQ_API_KEY || "");
 const GROQ_MODEL = sanitizeToken(process.env.GROQ_MODEL || "llama-3.1-8b-instant");
 const UPLOAD_DIR = path.resolve(__dirname, "..", "uploads");
@@ -67,6 +75,7 @@ let pool;
 const conversationPresence = new Map();
 const directConversationPresence = new Map();
 const activeCalls = new Map();
+let firebaseMessaging = null;
 
 app.use(cors());
 app.use(express.json({ limit: "35mb" }));
@@ -79,6 +88,25 @@ function parseMessageEncryptionKey(value) {
   const clean = sanitizeToken(value);
   if (!/^[a-f0-9]{64}$/i.test(clean)) throw new Error("KAILA_MESSAGE_ENCRYPTION_KEY must be a 64-character hexadecimal value");
   return Buffer.from(clean, "hex");
+}
+
+function initializePushMessaging() {
+  if (!firebaseAdmin || firebaseMessaging) return;
+  try {
+    if (FIREBASE_SERVICE_ACCOUNT_JSON) {
+      firebaseAdmin.initializeApp({
+        credential: firebaseAdmin.credential.cert(JSON.parse(FIREBASE_SERVICE_ACCOUNT_JSON)),
+      });
+    } else {
+      firebaseAdmin.initializeApp({
+        credential: firebaseAdmin.credential.applicationDefault(),
+      });
+    }
+    firebaseMessaging = firebaseAdmin.messaging();
+  } catch (error) {
+    firebaseMessaging = null;
+    console.warn("KAILA push notifications disabled:", error.message);
+  }
 }
 
 function parseIceServers() {
@@ -529,6 +557,22 @@ async function initializeDatabase() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS push_tokens (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(64) NOT NULL,
+      token TEXT NOT NULL,
+      token_hash VARCHAR(128) NOT NULL UNIQUE,
+      platform VARCHAR(40) NOT NULL DEFAULT 'android',
+      device_id VARCHAR(120) NULL,
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      CONSTRAINT push_tokens_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await ensureColumn("push_tokens", "platform", "VARCHAR(40) NOT NULL DEFAULT 'android'");
+  await ensureColumn("push_tokens", "device_id", "VARCHAR(120) NULL");
+  await ensureIndex("push_tokens", "push_tokens_hash_unique", "token_hash", true);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS request_attachments (
       id VARCHAR(64) PRIMARY KEY,
       request_id VARCHAR(64) NOT NULL,
@@ -741,9 +785,10 @@ function emptyReputation() {
 function mapUser(row, reputation = emptyReputation()) {
   if (!row) return null;
   const photoVersion = row.photo_file ? encodeURIComponent(row.photo_file) : "";
+  const staffRole = ["admin", "ops", "customer_service"].includes(row.role);
   return {
     id: row.id,
-    name: row.name,
+    name: row.role === "admin" ? "Admin" : row.name,
     username: row.username,
     email: row.email,
     password_hash: row.password_hash,
@@ -756,9 +801,69 @@ function mapUser(row, reputation = emptyReputation()) {
     bestContactTime: row.best_contact_time || "",
     dataPrivacyConsent: Boolean(row.data_privacy_consent),
     photoUrl: row.photo_file ? `/profile-media/${encodeURIComponent(row.id)}?v=${photoVersion}` : "",
-    reputation,
+    reputation: staffRole ? emptyReputation() : reputation,
     createdAt: row.created_at,
   };
+}
+
+function displayNameForUser(user = {}) {
+  if (user.role === "admin") return "Admin";
+  if (user.role === "customer_service") return "KAILA Customer Service";
+  return user.name || "KAILA user";
+}
+
+function tokenHash(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+async function pushTokensForUsers(userIds = []) {
+  const ids = Array.from(new Set(userIds.filter(Boolean)));
+  if (!ids.length) return [];
+  const [rows] = await pool.query(`SELECT user_id, token, token_hash FROM push_tokens WHERE user_id IN (${ids.map(() => "?").join(",")})`, ids);
+  return rows;
+}
+
+async function sendPushToUsers(userIds = [], payload = {}) {
+  if (!firebaseMessaging) return;
+  const rows = await pushTokensForUsers(userIds);
+  if (!rows.length) return;
+  await Promise.all(rows.map(async (row) => {
+    try {
+      await firebaseMessaging.send({
+        token: row.token,
+        data: Object.fromEntries(Object.entries(payload.data || {}).map(([key, value]) => [key, String(value ?? "")])),
+        android: {
+          priority: "high",
+          ttl: payload.ttl || 60 * 60 * 1000,
+        },
+      });
+    } catch (error) {
+      const code = error?.errorInfo?.code || error?.code || "";
+      if (["messaging/registration-token-not-registered", "messaging/invalid-registration-token"].includes(code)) {
+        await pool.query("DELETE FROM push_tokens WHERE token_hash = ?", [row.token_hash]);
+      } else {
+        console.warn("KAILA push send failed:", code || error.message);
+      }
+    }
+  }));
+}
+
+async function pushNotification(userIds, { type, title, body, data = {}, ttl } = {}) {
+  await sendPushToUsers(userIds, {
+    ttl,
+    data: {
+      type,
+      title,
+      body,
+      action: type,
+      ...data,
+    },
+  });
+}
+
+async function providerUserIdsForRequestCategory(category) {
+  const [rows] = await pool.query("SELECT user_id, category FROM providers WHERE status = 'Active'");
+  return rows.filter((row) => hasCategory(row.category, category)).map((row) => row.user_id);
 }
 
 function mapProvider(row, reputation = emptyReputation(), photoUrl = "") {
@@ -1447,7 +1552,7 @@ async function recordMissedCall({ caller, recipientId, requestId = "", directUse
   const missedCall = {
     id: createId(),
     callerId: caller.id,
-    callerName: caller.name,
+    callerName: displayNameForUser(caller),
     recipientId,
     requestId,
     directUserId,
@@ -1462,6 +1567,12 @@ async function recordMissedCall({ caller, recipientId, requestId = "", directUse
   socketServers.forEach((socketServer) => {
     socketServer.to(`user:${recipientId}`).emit("kaila.missed-call.saved", missedCall);
   });
+  pushNotification([recipientId], {
+    type: "call",
+    title: `Missed KAILA ${callType === "video" ? "video call" : "audio call"}`,
+    body: `${missedCall.callerName} tried to call${contextTitle ? ` about ${contextTitle}` : ""}.`,
+    data: { callId: missedCall.id, callType, callerName: missedCall.callerName, requestId, directUserId },
+  }).catch((error) => console.warn("Missed-call push failed:", error.message));
   return missedCall;
 }
 
@@ -1516,13 +1627,14 @@ async function recordCallLogMessage({ caller, targetUserId, requestId = "", dire
   };
   const detail = callLogDetail(metadata);
   const activityTitle = status === "completed" ? "Call completed" : "Missed call";
-  const activityDetail = `${caller.name} ${status === "completed" ? "completed" : "missed"} a ${callType === "video" ? "video" : "audio"} call${contextTitle ? ` for ${contextTitle}` : ""}${status === "completed" ? ` (${formatCallLogDuration(metadata.durationSeconds)})` : ""}`;
+  const callerName = displayNameForUser(caller);
+  const activityDetail = `${callerName} ${status === "completed" ? "completed" : "missed"} a ${callType === "video" ? "video" : "audio"} call${contextTitle ? ` for ${contextTitle}` : ""}${status === "completed" ? ` (${formatCallLogDuration(metadata.durationSeconds)})` : ""}`;
   if (requestId) {
     const message = {
       id,
       requestId,
       senderId: caller.id,
-      senderName: caller.name,
+      senderName: callerName,
       detail,
       kind: "call",
       call: metadata,
@@ -1542,7 +1654,7 @@ async function recordCallLogMessage({ caller, targetUserId, requestId = "", dire
       id,
       senderId: caller.id,
       recipientId: targetUserId,
-      senderName: caller.name,
+      senderName: callerName,
       detail,
       kind: "call",
       call: metadata,
@@ -1821,6 +1933,22 @@ app.get("/api/notification-summary", requireUser, async (req, res) => {
   res.json(await notificationSummaryFor(req.user));
 });
 
+app.post("/api/push-token", requireUser, async (req, res) => {
+  const token = String(req.body?.token || "").trim();
+  const platform = String(req.body?.platform || "android").trim().slice(0, 40) || "android";
+  const deviceId = String(req.body?.deviceId || "").trim().slice(0, 120);
+  if (!token || token.length < 20) return res.status(400).json({ error: "Push token is required" });
+  const hash = tokenHash(token);
+  const timestamp = nowMysql();
+  await pool.query(
+    `INSERT INTO push_tokens (id, user_id, token, token_hash, platform, device_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), token = VALUES(token), platform = VALUES(platform), device_id = VALUES(device_id), updated_at = VALUES(updated_at)`,
+    [createId(), req.user.id, token, hash, platform, deviceId || null, timestamp, timestamp]
+  );
+  res.json({ ok: true });
+});
+
 app.post("/api/register", async (req, res) => {
   let user;
   try {
@@ -1995,6 +2123,12 @@ app.post("/api/requests", requireUser, async (req, res) => {
   }
   await addActivity("Request posted", `${request.category} in ${request.area}`);
   broadcast("kaila.request.created", { request });
+  pushNotification(await providerUserIdsForRequestCategory(request.category), {
+    type: "request",
+    title: "New KAILA request",
+    body: `${request.category} in ${request.area}`,
+    data: { requestId: request.id, category: request.category },
+  }).catch((error) => console.warn("Request push failed:", error.message));
   res.status(201).json({ request, state: await getStateFor(req.user) });
 });
 
@@ -2028,6 +2162,12 @@ app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
   await pool.query("UPDATE requests SET status = ?, updated_at = ? WHERE id = ?", [status, nowMysql(), req.params.id]);
   await addActivity(offer.type === "counter" ? "Counter-offer sent" : "Offer sent", `${offer.amount} for ${requestRows[0].category}`);
   broadcast("kaila.offer.saved", { requestId: req.params.id, offer, status });
+  pushNotification([requestRows[0].client_id], {
+    type: "offer",
+    title: offer.type === "counter" ? "New counter-offer" : "New provider offer",
+    body: `${displayNameForUser(req.user)} sent ${offer.amount} for ${requestRows[0].category}`,
+    data: { requestId: req.params.id, offerId: offer.id },
+  }).catch((error) => console.warn("Offer push failed:", error.message));
   res.status(201).json({ offer, state: await getStateFor(req.user) });
 });
 
@@ -2066,6 +2206,12 @@ app.post("/api/requests/:id/confirm", requireUser, async (req, res) => {
   await pool.query("UPDATE requests SET status = 'Accepted', accepted_provider_id = ?, confirmed_at = ?, updated_at = ? WHERE id = ?", [offerRows[0].provider_id, timestamp, timestamp, req.params.id]);
   await addActivity("Offer accepted", `${request.category} for ${request.client_name}`);
   broadcast("kaila.request.confirmed", { requestId: req.params.id, actorId: req.user.id });
+  pushNotification([offerRows[0].provider_id], {
+    type: "job",
+    title: "Offer accepted",
+    body: `${request.category} is confirmed. Messaging is open.`,
+    data: { requestId: req.params.id },
+  }).catch((error) => console.warn("Confirm push failed:", error.message));
   res.json({ state: await getStateFor(req.user) });
 });
 
@@ -2253,7 +2399,7 @@ app.post("/api/requests/:id/messages", requireUser, async (req, res) => {
     id: createId(),
     requestId: req.params.id,
     senderId: req.user.id,
-    senderName: req.user.name,
+    senderName: displayNameForUser(req.user),
     detail,
     attachments: [],
     createdAt: nowMysql(),
@@ -2273,6 +2419,13 @@ app.post("/api/requests/:id/messages", requireUser, async (req, res) => {
     message.attachments = attachmentRows.map(mapJobMessageAttachment);
   }
   broadcast("kaila.message.saved", { requestId: req.params.id, message });
+  const recipientId = otherConversationUserId(request, req.user.id);
+  pushNotification([recipientId], {
+    type: "message",
+    title: "New KAILA message",
+    body: `${message.senderName}: ${message.detail || "Sent media"}`,
+    data: { requestId: req.params.id, messageId: message.id },
+  }).catch((error) => console.warn("Message push failed:", error.message));
   res.status(201).json({ message });
 });
 
@@ -2372,7 +2525,7 @@ app.post("/api/direct-conversations/:userId/messages", requireUser, async (req, 
     senderId: req.user.id,
     recipientId: target.id,
     requestId,
-    senderName: req.user.name,
+    senderName: displayNameForUser(req.user),
     detail,
     attachments: [],
     createdAt: nowMysql(),
@@ -2392,6 +2545,12 @@ app.post("/api/direct-conversations/:userId/messages", requireUser, async (req, 
     message.attachments = attachmentRows.map(mapDirectAttachment);
   }
   relayDirectEvent([req.user.id, target.id], "kaila.direct-message.saved", { userIds: [req.user.id, target.id], message });
+  pushNotification([target.id], {
+    type: "direct-message",
+    title: "New direct message",
+    body: `${message.senderName}: ${message.detail || "Sent media"}`,
+    data: { userId: req.user.id, requestId, messageId: message.id },
+  }).catch((error) => console.warn("Direct message push failed:", error.message));
   res.status(201).json({ message });
 });
 
@@ -2605,6 +2764,21 @@ socketServer.on("connection", (socket) => {
       if (!user) return;
       socket.join(`user:${user.id}`);
       socket.emit("kaila.socket.identified", { userId: user.id });
+      for (const [callId, call] of activeCalls) {
+        if (call.targetUserId !== user.id || call.answeredByUserId) continue;
+        const caller = await getUser(call.callerId);
+        socket.emit("kaila.call.signal", {
+          requestId: call.requestId || "",
+          directUserId: call.directUserIds?.find((id) => id !== user.id) || call.callerId || "",
+          callId,
+          type: "offer",
+          senderId: call.callerId,
+          senderName: call.callerName || displayNameForUser(caller || {}),
+          description: call.offerDescription,
+          candidate: null,
+          withVideo: Boolean(call.withVideo),
+        });
+      }
     } catch (error) {
       console.error("Socket identity failed:", error);
     }
@@ -2676,21 +2850,9 @@ socketServer.on("connection", (socket) => {
         targetUserId = otherConversationUserId(requestRows[0], user.id);
       }
       if (!targetUserId) throw new Error("Call recipient not found");
-      if (!await userSocketCount(targetUserId)) {
-        activeCalls.delete(callId);
-        if (type === "offer") {
-          await recordMissedCallForBoth({
-            caller: user,
-            targetUserId,
-            requestId,
-            directUserId: directUserId || "",
-            callType: payload.withVideo ? "video" : "audio",
-            contextTitle,
-          });
-        }
-        return acknowledge({ ok: false, code: "recipient_offline", error: "The other party is offline" });
-      }
+      const targetSocketCount = await userSocketCount(targetUserId);
       if (type === "offer") {
+        const callerName = displayNameForUser(user);
         activeCalls.set(callId, {
           requestId,
           directUserIds: directUserId ? [user.id, targetUserId] : [],
@@ -2698,6 +2860,9 @@ socketServer.on("connection", (socket) => {
           targetUserId,
           callType: payload.withVideo ? "video" : "audio",
           contextTitle,
+          offerDescription: payload.description || null,
+          withVideo: Boolean(payload.withVideo),
+          callerName,
           userIds: [user.id, targetUserId],
           startedAt: nowMysql(),
           answeredAt: 0,
@@ -2707,6 +2872,22 @@ socketServer.on("connection", (socket) => {
           declinedSocketIds: new Set(),
           busySocketIds: new Set(),
         });
+        if (!targetSocketCount) {
+          pushNotification([targetUserId], {
+            type: "call",
+            title: `Incoming KAILA ${payload.withVideo ? "video call" : "audio call"}`,
+            body: `${callerName} is calling.`,
+            ttl: CALL_RING_TIMEOUT_MS,
+            data: {
+              callId,
+              callType: payload.withVideo ? "video" : "audio",
+              callerId: user.id,
+              callerName,
+              requestId,
+              directUserId: directUserId ? user.id : "",
+            },
+          }).catch((error) => console.warn("Incoming-call push failed:", error.message));
+        }
       }
       const activeCall = activeCalls.get(callId);
       if (type === "hangup" && activeCall && !activeCall.answeredByUserId) {
@@ -2737,7 +2918,7 @@ socketServer.on("connection", (socket) => {
             callId,
             type: "answered-elsewhere",
             senderId: user.id,
-            senderName: user.name,
+            senderName: displayNameForUser(user),
           });
         }
       }
@@ -2775,7 +2956,7 @@ socketServer.on("connection", (socket) => {
         callId,
         type,
         senderId: user.id,
-        senderName: user.name,
+        senderName: displayNameForUser(user),
         description: payload.description || null,
         candidate: payload.candidate || null,
         withVideo: Boolean(payload.withVideo),
@@ -2794,6 +2975,8 @@ socketServer.on("connection", (socket) => {
 }
 
 socketServers.forEach(registerSocketHandlers);
+
+initializePushMessaging();
 
 initializeDatabase()
   .then(() => {

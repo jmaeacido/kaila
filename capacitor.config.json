@@ -16,6 +16,9 @@
       "iconColor": "#0B4552",
       "sound": "kaila_notification.wav",
       "presentationOptions": ["badge", "sound", "banner", "list"]
+    },
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert", "banner", "list"]
     }
   }
 }

@@ -46,6 +46,24 @@ KAILA_TURN_CREDENTIAL=turn-password
 
 For advanced setups, set `KAILA_RTC_ICE_SERVERS` to a JSON array of `RTCIceServer` objects.
 
+## Push Notifications
+
+Native Android notifications use Firebase Cloud Messaging. Put the Firebase Android
+`google-services.json` file in `android/app/google-services.json`, then configure
+the Node service with a Firebase Admin service account:
+
+```env
+GOOGLE_APPLICATION_CREDENTIALS=C:\path\to\firebase-service-account.json
+# or
+FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+```
+
+The app registers device tokens through `/api/push-token`. The server sends high
+priority FCM data messages for job requests, offers, messages, missed calls, and
+incoming call invites. The Android app has a native Firebase messaging service so
+closed/backgrounded apps can still show persistent notifications and full-screen
+incoming call alerts when Android permits full-screen intent.
+
 ## Events
 
 Clients join the shared MVP pilot room:
