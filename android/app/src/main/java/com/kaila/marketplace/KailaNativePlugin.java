@@ -27,6 +27,9 @@ import com.google.firebase.FirebaseApp;
 public class KailaNativePlugin extends Plugin {
     private static final String CALL_CHANNEL_ID = "kaila-native-calls";
     private static final int INCOMING_CALL_NOTIFICATION_ID = 7001;
+    private static String pendingLaunchAction = "";
+    private static String pendingLaunchId = "";
+    private static long pendingLaunchAt = 0;
 
     @Override
     public void load() {
@@ -105,6 +108,18 @@ public class KailaNativePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void consumeLaunchAction(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("action", pendingLaunchAction);
+        result.put("id", pendingLaunchId);
+        result.put("createdAt", pendingLaunchAt);
+        pendingLaunchAction = "";
+        pendingLaunchId = "";
+        pendingLaunchAt = 0;
+        call.resolve(result);
+    }
+
+    @PluginMethod
     public void isFirebaseAvailable(PluginCall call) {
         JSObject result = new JSObject();
         try {
@@ -153,5 +168,19 @@ public class KailaNativePlugin extends Plugin {
 
     private int pendingIntentImmutableFlag() {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0;
+    }
+
+    static void captureLaunchIntent(Intent intent) {
+        if (intent == null) return;
+        String action = value(intent.getStringExtra("kailaAction"), "");
+        String id = value(intent.getStringExtra("kailaCallId"), value(intent.getStringExtra("kailaId"), ""));
+        if (action.isEmpty() && id.isEmpty()) return;
+        pendingLaunchAction = action;
+        pendingLaunchId = id;
+        pendingLaunchAt = System.currentTimeMillis();
+    }
+
+    private static String value(String value, String fallback) {
+        return value == null || value.trim().isEmpty() ? fallback : value;
     }
 }

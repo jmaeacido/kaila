@@ -111,6 +111,7 @@ async function init() {
   syncQueuedValidationEntries();
   route(state.session ? "app" : "landing");
   connectSocket();
+  consumeNativeLaunchAction();
 }
 
 function setupOfflineSync() {
@@ -147,6 +148,7 @@ function setupAttentionNotifications() {
 }
 
 function handleAppResumed() {
+  consumeNativeLaunchAction();
   if (!state.session) return;
   if (!state.socket || !state.connected) connectSocket(!state.socket);
   else syncSocketIdentity();
@@ -258,7 +260,22 @@ function handleAttentionAction(action) {
     setCallMinimized(false);
     return;
   }
+  if (action === "open-call") {
+    route("app");
+    return;
+  }
   if (action === "open-notifications") openNotificationBell();
+}
+
+async function consumeNativeLaunchAction() {
+  const bridge = nativeKailaBridge();
+  if (!bridge?.consumeLaunchAction) return;
+  try {
+    const payload = await bridge.consumeLaunchAction();
+    if (payload?.action) handlePushAction({ action: payload.action, id: payload.id || "" });
+  } catch (error) {
+    console.warn("KAILA native launch action failed:", error);
+  }
 }
 
 async function setupPushNotifications() {
@@ -282,6 +299,7 @@ async function setupPushNotifications() {
     });
     await push.addListener("pushNotificationActionPerformed", (event) => {
       handlePushAction(event.notification?.data || event.notification || {});
+      consumeNativeLaunchAction();
     });
     const permission = await push.checkPermissions();
     const nextPermission = permission.receive === "prompt" ? await push.requestPermissions() : permission;
@@ -6206,16 +6224,18 @@ function modal(options) {
 }
 
 async function successRedirect(title, text) {
-  await window.Swal.fire({
+  route("app");
+  window.Swal.fire({
     customClass: { popup: "kaila-popup" },
     icon: "success",
     title,
     text,
     showConfirmButton: false,
-    timer: 1200,
+    toast: true,
+    position: "top",
+    timer: 1600,
     timerProgressBar: true,
   });
-  route("app");
 }
 
 async function rememberOfflineLogin(username, password, user) {
