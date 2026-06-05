@@ -34,6 +34,7 @@ afterEvaluate {
         def variantName = variant.name
         def capitalizedVariantName = variantName.capitalize()
         def apkOutputDir = layout.buildDirectory.dir("outputs/apk/${variantName}")
+        def apkAliasDir = layout.buildDirectory.dir("outputs/apk/kaila/${variantName}")
         def copyTaskName = "copy${capitalizedVariantName}Apk"
 
         tasks.register(copyTaskName, Copy) {
@@ -42,7 +43,7 @@ afterEvaluate {
                 exclude "kaila-mobile.apk"
                 rename { "kaila-mobile.apk" }
             }
-            into apkOutputDir
+            into apkAliasDir
         }
 
         tasks.named("assemble${capitalizedVariantName}") {
