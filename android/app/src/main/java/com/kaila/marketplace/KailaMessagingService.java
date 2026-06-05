@@ -141,11 +141,15 @@ public class KailaMessagingService extends FirebaseMessagingService {
     }
 
     static int jobNotificationId(String requestId) {
-        return stableNotificationId("job-request:" + value(requestId, "latest"));
+        return stableNotificationId("job-request:" + staticValue(requestId, "latest"));
     }
 
     private static int stableNotificationId(String key) {
-        return Math.abs(value(key, "kaila").hashCode() & 0x7fffffff);
+        return Math.abs(staticValue(key, "kaila").hashCode() & 0x7fffffff);
+    }
+
+    private static String staticValue(String value, String fallback) {
+        return value == null || value.trim().isEmpty() ? fallback : value;
     }
 
     private Uri rawSound(String name) {
