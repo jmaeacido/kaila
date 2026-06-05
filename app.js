@@ -37,6 +37,7 @@ const URGENT_ATTENTION_MS = 18000;
 const NATIVE_NOTIFICATION_CHANNELS = {
   updates: "kaila-updates",
   urgent: "kaila-urgent",
+  jobs: "kaila-job-alerts-v2",
   calls: "kaila-calls",
 };
 const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
@@ -198,16 +199,29 @@ async function setupNativeNotifications() {
       vibration: true,
       sound: "kaila_call.wav",
     });
+    await notifications.createChannel({
+      id: NATIVE_NOTIFICATION_CHANNELS.jobs,
+      name: "KAILA job requests",
+      description: "Persistent provider alerts for new matching job requests.",
+      importance: 5,
+      visibility: 1,
+      lights: true,
+      lightColor: "#F2C66D",
+      vibration: true,
+      sound: "kaila_call.wav",
+    });
     await notifications.registerActionTypes({
       types: [
         { id: "kaila-call", actions: [{ id: "open-call", title: "Open KAILA" }] },
+        { id: "kaila-job-request", actions: [{ id: "job-request", title: "View request" }] },
         { id: "kaila-open", actions: [{ id: "open-notifications", title: "Open KAILA" }] },
       ],
     });
     if (!state.nativeNotificationListenersBound) {
       state.nativeNotificationListenersBound = true;
       notifications.addListener("localNotificationActionPerformed", (event) => {
-        handleAttentionAction(event.actionId || event.notification?.extra?.action || "open-notifications");
+        const extra = event.notification?.extra || {};
+        handleAttentionAction(event.actionId || extra.action || "open-notifications", extra);
       }).catch(() => {});
     }
     state.nativeNotificationsReady = true;
@@ -259,9 +273,13 @@ function isNativeApp() {
   return Boolean(window.Capacitor?.isNativePlatform?.() || window.Capacitor?.getPlatform?.() === "android" || window.Capacitor?.getPlatform?.() === "ios");
 }
 
-function handleAttentionAction(action) {
+function handleAttentionAction(action, data = {}) {
   if (["answer-call", "decline-call"].includes(action)) {
-    handleNativeCallAction({ action });
+    handleNativeCallAction({ action, ...data });
+    return;
+  }
+  if (action === "job-request") {
+    handlePushAction({ action, ...data });
     return;
   }
   if (action === "open-call" && state.call?.status === "incoming") {
@@ -5021,7 +5039,7 @@ function handleRequestCreated({ request } = {}) {
   if (state.session.role !== "provider") return;
   if (state.session.role === "provider" && !providerMatchesRequest(request)) return;
   const client = userProfile(request.clientId);
-  announceAttentionEvent("New job request", `${request.category} in ${request.area}`, "request");
+  announceJobRequestAttention(request);
 
   queueAttentionModal({
     customClass: { popup: "kaila-popup attention-request-popup" },
@@ -5046,6 +5064,28 @@ function handleRequestCreated({ request } = {}) {
         </div>
       </div>
     `,
+  });
+}
+
+function announceJobRequestAttention(request = {}) {
+  const detail = `${request.category || "Job request"} in ${request.area || "your service area"}${request.urgency ? ` - ${request.urgency}` : ""}`;
+  const data = { action: "job-request", requestId: request.id || "", id: request.id || "" };
+  addUnreadNotification();
+  startPersistentAttention("New job request", detail, {
+    tag: `kaila-job-request-${request.id || "latest"}`,
+    data,
+    actions: [{ action: "job-request", title: "View request" }],
+    durationMs: 60000,
+  });
+  showSystemNotification("KAILA: New job request", {
+    body: detail,
+    tag: `kaila-job-request-${request.id || "latest"}`,
+    requireInteraction: true,
+    renotify: true,
+    silent: false,
+    urgency: "job",
+    data,
+    actions: [{ action: "job-request", title: "View request" }],
   });
 }
 
@@ -5706,7 +5746,7 @@ function playAttentionTone(kind = "update") {
   }, notes.length * 180 + 180);
 }
 
-function startPersistentAttention(title, detail = "") {
+function startPersistentAttention(title, detail = "", options = {}) {
   stopPersistentAttention();
   const startedAt = Date.now();
   const pulse = () => {
@@ -5715,16 +5755,16 @@ function startPersistentAttention(title, detail = "") {
     if (document.hidden) {
       showSystemNotification(`KAILA: ${title}`, {
         body: detail,
-        tag: "kaila-urgent",
+        tag: options.tag || "kaila-urgent",
         requireInteraction: true,
         renotify: true,
         silent: false,
-        urgency: "urgent",
-        data: { action: "open-notifications" },
-        actions: [{ action: "open-notifications", title: "Open KAILA" }],
+        urgency: options.urgency || "urgent",
+        data: options.data || { action: "open-notifications" },
+        actions: options.actions || [{ action: "open-notifications", title: "Open KAILA" }],
       });
     }
-    if (Date.now() - startedAt >= URGENT_ATTENTION_MS) stopPersistentAttention();
+    if (Date.now() - startedAt >= (options.durationMs || URGENT_ATTENTION_MS)) stopPersistentAttention();
   };
   pulse();
   state.attentionLoop = setInterval(pulse, 4200);
@@ -5753,7 +5793,7 @@ async function showSystemNotification(title, options = {}) {
     renotify: Boolean(options.renotify),
     requireInteraction: Boolean(options.requireInteraction),
     silent: Boolean(options.silent),
-    vibrate: options.urgency === "call" ? [450, 180, 450, 180, 700] : options.urgency === "urgent" ? [500, 100, 500, 100, 700] : [280, 90, 280],
+    vibrate: options.urgency === "call" ? [450, 180, 450, 180, 700] : ["urgent", "job"].includes(options.urgency) ? [500, 100, 500, 100, 700] : [280, 90, 280],
     data: options.data || {},
     ...(actions.length ? { actions } : {}),
   };
@@ -5782,9 +5822,12 @@ async function showNativeNotification(title, options = {}) {
   const permitted = await ensureNativeNotificationPermission();
   if (!permitted) return false;
   const urgency = options.urgency || "update";
+  const isJobRequest = urgency === "job" || options.data?.action === "job-request";
   const channelId = urgency === "call"
     ? NATIVE_NOTIFICATION_CHANNELS.calls
-    : urgency === "urgent"
+    : isJobRequest
+      ? NATIVE_NOTIFICATION_CHANNELS.jobs
+      : urgency === "urgent"
       ? NATIVE_NOTIFICATION_CHANNELS.urgent
       : NATIVE_NOTIFICATION_CHANNELS.updates;
   const action = options.data?.action || (urgency === "call" ? "open-call" : "open-notifications");
@@ -5797,15 +5840,15 @@ async function showNativeNotification(title, options = {}) {
         largeBody: options.body || "",
         summaryText: "KAILA",
         channelId,
-        actionTypeId: urgency === "call" ? "kaila-call" : "kaila-open",
-        extra: { action },
+        actionTypeId: urgency === "call" ? "kaila-call" : isJobRequest ? "kaila-job-request" : "kaila-open",
+        extra: { ...(options.data || {}), action },
         smallIcon: "kaila_notification_icon",
         iconColor: "#0B4552",
-        sound: urgency === "call" ? "kaila_call.wav" : "kaila_notification.wav",
-        ongoing: urgency === "call",
-        autoCancel: urgency !== "call",
-        group: urgency === "call" ? "kaila-calls" : "kaila-alerts",
-        interruptionLevel: urgency === "call" || urgency === "urgent" ? "timeSensitive" : "active",
+        sound: urgency === "call" || isJobRequest ? "kaila_call.wav" : "kaila_notification.wav",
+        ongoing: urgency === "call" || isJobRequest,
+        autoCancel: urgency !== "call" && !isJobRequest,
+        group: urgency === "call" ? "kaila-calls" : isJobRequest ? "kaila-job-requests" : "kaila-alerts",
+        interruptionLevel: urgency === "call" || urgency === "urgent" || isJobRequest ? "timeSensitive" : "active",
       }],
     });
     return true;

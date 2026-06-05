@@ -2207,7 +2207,15 @@ app.post("/api/requests", requireUser, async (req, res) => {
     type: "request",
     title: "New KAILA job request",
     body: `${request.category} in ${request.area}${request.urgency ? ` - ${request.urgency}` : ""}`,
-    data: { action: "job-request", requestId: request.id, category: request.category, urgency: request.urgency },
+    ttl: 2 * 60 * 60 * 1000,
+    data: {
+      action: "job-request",
+      requestId: request.id,
+      category: request.category,
+      urgency: request.urgency,
+      persistent: "true",
+      attention: "job-request",
+    },
   }).catch((error) => console.warn("Request push failed:", error.message));
   res.status(201).json({ request, state: await getStateFor(req.user) });
 });

@@ -18,6 +18,7 @@ public class MainActivity extends BridgeActivity {
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(KailaNativePlugin.class);
         clearCallNotificationForAction(getIntent());
+        clearJobNotificationForAction(getIntent());
         KailaNativePlugin.captureLaunchIntent(getIntent());
         super.onCreate(savedInstanceState);
 
@@ -37,6 +38,7 @@ public class MainActivity extends BridgeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         clearCallNotificationForAction(intent);
+        clearJobNotificationForAction(intent);
         KailaNativePlugin.captureLaunchIntent(intent);
     }
 
@@ -45,5 +47,13 @@ public class MainActivity extends BridgeActivity {
         String action = intent.getStringExtra("kailaAction");
         if (!"answer-call".equals(action) && !"decline-call".equals(action) && !"open-call".equals(action)) return;
         NotificationManagerCompat.from(this).cancel(INCOMING_CALL_NOTIFICATION_ID);
+    }
+
+    private void clearJobNotificationForAction(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getStringExtra("kailaAction");
+        if (!"job-request".equals(action)) return;
+        String requestId = intent.getStringExtra("kailaId");
+        NotificationManagerCompat.from(this).cancel(KailaMessagingService.jobNotificationId(requestId));
     }
 }

@@ -23,7 +23,7 @@ import java.util.Map;
 
 public class KailaMessagingService extends FirebaseMessagingService {
     private static final String CALL_CHANNEL_ID = "kaila-native-calls";
-    private static final String JOB_CHANNEL_ID = "kaila-job-alerts";
+    private static final String JOB_CHANNEL_ID = "kaila-job-alerts-v2";
     private static final String ALERT_CHANNEL_ID = "kaila-push-alerts";
     private static final int CALL_NOTIFICATION_ID = 7001;
 
@@ -70,23 +70,31 @@ public class KailaMessagingService extends FirebaseMessagingService {
         boolean jobRequest = "request".equals(type);
         String title = value(data.get("title"), jobRequest ? "New KAILA job request" : "KAILA");
         String body = value(data.get("body"), "New KAILA update");
-        PendingIntent contentIntent = appIntent(jobRequest ? "job-request" : value(data.get("action"), "open-notifications"), data.get("requestId"), 7201);
-        int notificationId = Math.abs(value(data.get("messageId"), title + body).hashCode());
+        String requestId = value(data.get("requestId"), "");
+        int notificationId = jobRequest ? jobNotificationId(requestId) : stableNotificationId(value(data.get("messageId"), title + body));
+        PendingIntent contentIntent = appIntent(
+            jobRequest ? "job-request" : value(data.get("action"), "open-notifications"),
+            requestId,
+            notificationId
+        );
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, jobRequest ? JOB_CHANNEL_ID : ALERT_CHANNEL_ID)
             .setSmallIcon(R.drawable.kaila_notification_icon)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
-            .setCategory(jobRequest ? NotificationCompat.CATEGORY_STATUS : NotificationCompat.CATEGORY_MESSAGE)
+            .setCategory(jobRequest ? NotificationCompat.CATEGORY_ALARM : NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(jobRequest ? NotificationCompat.PRIORITY_MAX : NotificationCompat.PRIORITY_HIGH)
             .setVisibility(jobRequest ? NotificationCompat.VISIBILITY_PUBLIC : NotificationCompat.VISIBILITY_PRIVATE)
-            .setAutoCancel(true)
+            .setOngoing(jobRequest)
+            .setAutoCancel(!jobRequest)
             .setContentIntent(contentIntent)
             .setColor(ContextCompat.getColor(this, R.color.ic_launcher_background))
-            .setVibrate(jobRequest ? new long[] { 0, 500, 120, 500, 120, 700 } : new long[] { 0, 280, 90, 280 })
+            .setOnlyAlertOnce(false)
+            .setVibrate(jobRequest ? new long[] { 0, 700, 180, 700, 180, 900 } : new long[] { 0, 280, 90, 280 })
             .addAction(R.drawable.kaila_notification_icon, jobRequest ? "View request" : "Open KAILA", contentIntent);
 
+        if (jobRequest) builder.setFullScreenIntent(contentIntent, true);
         NotificationManagerCompat.from(this).notify(notificationId, builder.build());
     }
 
@@ -123,13 +131,21 @@ public class KailaMessagingService extends FirebaseMessagingService {
         }
         if (manager.getNotificationChannel(JOB_CHANNEL_ID) == null) {
             NotificationChannel channel = new NotificationChannel(JOB_CHANNEL_ID, "KAILA job requests", NotificationManager.IMPORTANCE_HIGH);
-            channel.setDescription("Urgent provider alerts for new matching job requests.");
+            channel.setDescription("Persistent provider alerts for new matching job requests.");
             channel.enableVibration(true);
-            channel.setVibrationPattern(new long[] { 0, 500, 120, 500, 120, 700 });
+            channel.setVibrationPattern(new long[] { 0, 700, 180, 700, 180, 900 });
             channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
-            channel.setSound(rawSound("kaila_notification"), new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
+            channel.setSound(rawSound("kaila_call"), new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
             manager.createNotificationChannel(channel);
         }
+    }
+
+    static int jobNotificationId(String requestId) {
+        return stableNotificationId("job-request:" + value(requestId, "latest"));
+    }
+
+    private static int stableNotificationId(String key) {
+        return Math.abs(value(key, "kaila").hashCode() & 0x7fffffff);
     }
 
     private Uri rawSound(String name) {
