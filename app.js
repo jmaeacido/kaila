@@ -31,6 +31,8 @@ const STAFF_ROLES = ["admin", "ops", SUPPORT_ROLE];
 const APP_TIME_ZONE = "Asia/Manila";
 const NATIVE_SOCKET_URL = "https://kaila-app.duckdns.org/kaila-api";
 const CALL_RING_TIMEOUT_MS = 60000;
+const CALL_SIGNAL_TIMEOUT_MS = 20000;
+const CALL_CANDIDATE_TIMEOUT_MS = 10000;
 const URGENT_ATTENTION_MS = 18000;
 const NATIVE_NOTIFICATION_CHANNELS = {
   updates: "kaila-updates",
@@ -55,6 +57,7 @@ const state = {
   missedCalls: [],
   socket: null,
   connected: false,
+  socketIdentityUserId: "",
   userInteracted: false,
   attentionQueue: [],
   unreadNotifications: 0,
@@ -3266,9 +3269,9 @@ async function startCall(requestId, withVideo = false) {
   if (!callSupported()) return notify("Audio call unavailable", audioCallUnavailableMessage(), "warning");
   if (!state.connected || !state.socket) {
     notify("Live socket", "Reconnecting before the call...", "info");
-    await ensureSocketConnected();
+    await ensureCallSocketReady();
   }
-  if (!state.connected || !state.socket) return notify("Audio call unavailable", "Live socket is still offline. Reload the page and try again.", "warning");
+  if (!await ensureCallSocketReady()) return notify("Audio call unavailable", "Live socket is still offline or not signed in. Reopen KAILA and try again.", "warning");
   if (state.call) return notify("Call already active", "End the current call before starting another.", "warning");
   const request = state.requests.find((item) => item.id === requestId);
   if (!request || !canViewConversation(request)) return;
@@ -3308,9 +3311,9 @@ async function startDirectCall(userId, withVideo = false) {
   if (!callSupported()) return notify("Audio call unavailable", audioCallUnavailableMessage(), "warning");
   if (!state.connected || !state.socket) {
     notify("Live socket", "Reconnecting before the call...", "info");
-    await ensureSocketConnected();
+    await ensureCallSocketReady();
   }
-  if (!state.connected || !state.socket) return notify("Audio call unavailable", "Live socket is still offline. Reload the page and try again.", "warning");
+  if (!await ensureCallSocketReady()) return notify("Audio call unavailable", "Live socket is still offline or not signed in. Reopen KAILA and try again.", "warning");
   if (state.call) return notify("Call already active", "End the current call before starting another.", "warning");
   try {
     const displayTarget = directConversationDisplayTarget(target);
@@ -4065,17 +4068,34 @@ function clearNativeCallNotification(callId) {
 
 function emitCallSignal(type, extra = {}) {
   if (!state.call || !state.socket) return;
-  state.socket.timeout(type === "candidate" ? 8000 : 5000).emit("kaila.call.signal", {
+  const signal = {
     requestId: state.call.requestId,
     directUserId: state.call.directUserId,
     callId: state.call.callId,
     type,
     ...extra,
-  }, (error, response = {}) => {
+  };
+  sendCallSignal(signal, false);
+}
+
+async function sendCallSignal(signal, retried = false) {
+  const type = signal.type;
+  if (!state.call || signal.callId !== state.call.callId) return;
+  if (!await ensureCallSocketReady()) {
+    if (type === "candidate" || !state.call) return;
+    endAudioCall(false);
+    notify("Audio call", "Live socket is not ready. Reopen KAILA and try again.", "error");
+    return;
+  }
+  state.socket.timeout(type === "candidate" ? CALL_CANDIDATE_TIMEOUT_MS : CALL_SIGNAL_TIMEOUT_MS).emit("kaila.call.signal", signal, (error, response = {}) => {
     if (error) {
       if (type === "candidate" || !state.call) return;
+      if (!retried) {
+        setTimeout(() => sendCallSignal(signal, true), 700);
+        return;
+      }
       endAudioCall(false);
-      notify("Audio call", "Call signaling timed out. Check the live socket connection and try again.", "error");
+      notify("Audio call", "Call signaling timed out after retry. Check that both users show Live, then try again.", "error");
       return;
     }
     if (response.ok || !state.call) return;
@@ -4796,6 +4816,7 @@ function connectSocket(force = false) {
     });
     state.socket.on("connect", () => {
       state.connected = true;
+      state.socketIdentityUserId = "";
       clearTimeout(socketDisconnectCallTimer);
       socketDisconnectCallTimer = null;
       updateSocketStatus("connected");
@@ -4806,6 +4827,7 @@ function connectSocket(force = false) {
     });
     state.socket.on("disconnect", () => {
       state.connected = false;
+      state.socketIdentityUserId = "";
       updateSocketStatus("offline");
       startRealtimePolling();
       if (state.call) {
@@ -4821,6 +4843,7 @@ function connectSocket(force = false) {
     });
     state.socket.on("connect_error", (error) => {
       state.connected = false;
+      state.socketIdentityUserId = "";
       updateSocketStatus("offline");
       startRealtimePolling();
       addActivity("Socket connection failed", `${socketUrl} - ${error?.message || "Connection error"}`);
@@ -4841,6 +4864,9 @@ function connectSocket(force = false) {
     state.socket.on("kaila.message.reaction", ({ requestId }) => refreshConversation(requestId));
     state.socket.on("kaila.presence.changed", ({ requestId }) => updateConversationPresence(requestId));
     state.socket.on("kaila.direct-presence.changed", ({ userIds }) => updateDirectConversationPresence(userIds));
+    state.socket.on("kaila.socket.identified", ({ userId } = {}) => {
+      state.socketIdentityUserId = userId || "";
+    });
     state.socket.on("kaila.call.signal", (signal) => handleCallSignal(signal).catch((error) => {
       endAudioCall(false);
       notify("Call failed", error.message || "Audio call signaling failed.", "error");
@@ -4883,6 +4909,12 @@ function ensureSocketConnected(timeout = 12000) {
   });
 }
 
+async function ensureCallSocketReady(timeout = CALL_SIGNAL_TIMEOUT_MS) {
+  if (!await ensureSocketConnected(timeout)) return false;
+  if (state.socketIdentityUserId === state.session?.id) return true;
+  return syncSocketIdentity(timeout);
+}
+
 function updateSocketStatus(status) {
   const isConnected = status === "connected";
   const isConnecting = status === "connecting";
@@ -4898,8 +4930,30 @@ function updateSocketStatus(status) {
   }
 }
 
-function syncSocketIdentity() {
-  state.socket?.emit("identify", state.session?.id || "");
+function syncSocketIdentity(timeout = 8000) {
+  if (!state.socket?.connected || !state.session?.id) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      state.socket?.off?.("kaila.socket.identified", onIdentified);
+      resolve(result);
+    };
+    const onIdentified = ({ userId } = {}) => {
+      state.socketIdentityUserId = userId || "";
+      if (userId === state.session?.id) finish(true);
+    };
+    const timer = setTimeout(() => finish(state.socketIdentityUserId === state.session?.id), timeout);
+    state.socket.on("kaila.socket.identified", onIdentified);
+    state.socket.emit("identify", state.session.id, (response = {}) => {
+      if (response.ok && response.userId === state.session?.id) {
+        state.socketIdentityUserId = response.userId;
+        finish(true);
+      }
+    });
+  });
 }
 
 function startRealtimePolling() {
@@ -6233,7 +6287,7 @@ async function successRedirect(title, text) {
     showConfirmButton: false,
     toast: true,
     position: "top",
-    timer: 1600,
+    timer: 3500,
     timerProgressBar: true,
   });
 }
@@ -6332,7 +6386,8 @@ function localStringVerifier(value) {
 }
 
 function notify(title, text = "", icon = "info") {
-  window.Swal.fire({ toast: true, position: "top-end", icon, title, text, showConfirmButton: false, timer: 2200 });
+  const timer = icon === "error" ? 5000 : icon === "warning" ? 4500 : 3500;
+  window.Swal.fire({ toast: true, position: "top-end", icon, title, text, showConfirmButton: false, timer, timerProgressBar: true });
 }
 
 function readJson(key, fallback) {

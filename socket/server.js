@@ -2839,14 +2839,18 @@ socketServer.on("connection", (socket) => {
     socket.emit("kaila.socket.ready", { channel, socketId: socket.id });
   });
 
-  socket.on("identify", async (userId) => {
+  socket.on("identify", async (userId, acknowledge = () => {}) => {
     try {
       const user = await getUser(userId);
       if (socket.data.userId) socket.leave(`user:${socket.data.userId}`);
       socket.data.userId = user?.id || "";
-      if (!user) return;
+      if (!user) {
+        acknowledge({ ok: false, error: "User not found" });
+        return;
+      }
       socket.join(`user:${user.id}`);
       socket.emit("kaila.socket.identified", { userId: user.id });
+      acknowledge({ ok: true, userId: user.id });
       for (const [callId, call] of activeCalls) {
         if (call.targetUserId !== user.id || call.answeredByUserId) continue;
         const caller = await getUser(call.callerId);
@@ -2864,6 +2868,7 @@ socketServer.on("connection", (socket) => {
       }
     } catch (error) {
       console.error("Socket identity failed:", error);
+      acknowledge({ ok: false, error: error.message || "Socket identity failed" });
     }
   });
 
