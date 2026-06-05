@@ -222,6 +222,11 @@ function nativeLocalNotifications() {
   return window.Capacitor?.Plugins?.LocalNotifications || null;
 }
 
+function nativeKailaBridge() {
+  if (!isNativeApp()) return null;
+  return window.Capacitor?.Plugins?.KailaNative || null;
+}
+
 function isNativeApp() {
   return Boolean(window.Capacitor?.isNativePlatform?.() || window.Capacitor?.getPlatform?.() === "android" || window.Capacitor?.getPlatform?.() === "ios");
 }
@@ -553,6 +558,7 @@ async function login(event) {
 }
 
 async function hydrateLoginCredentials() {
+  if (!isNativeApp()) return;
   if (!navigator.credentials?.get || !window.PasswordCredential) return;
   const form = $("[data-login-form]");
   if (!form) return;
@@ -565,6 +571,7 @@ async function hydrateLoginCredentials() {
 }
 
 async function offerPasswordSave(username, password, user = {}) {
+  if (!isNativeApp()) return;
   if (!navigator.credentials?.store || !window.PasswordCredential || !username || !password) return;
   try {
     const credential = new window.PasswordCredential({
@@ -3900,6 +3907,7 @@ function endAudioCall(notifyOther = true) {
 }
 
 function clearNativeCallNotification(callId) {
+  nativeKailaBridge()?.cancelIncomingCall?.().catch(() => {});
   const notifications = nativeLocalNotifications();
   if (!notifications || !callId) return;
   const descriptor = { id: nativeNotificationId(`kaila-call-${callId}`) };
@@ -4002,7 +4010,7 @@ function notifyIncomingCall(senderName, withVideo = false) {
   const callType = withVideo ? "video" : "audio";
   notify(`Incoming ${callType} call`, `${senderName || "Your job contact"} is calling.`, "info");
   vibrateAfterInteraction([450, 180, 450, 180, 700]);
-  showSystemNotification(`Incoming KAILA ${callType} call`, {
+  const notificationOptions = {
     body: `${senderName || "Your job contact"} is calling.`,
     tag: state.call?.callId ? `kaila-call-${state.call.callId}` : "kaila-call",
     requireInteraction: true,
@@ -4013,7 +4021,12 @@ function notifyIncomingCall(senderName, withVideo = false) {
     actions: [
       { action: "open-call", title: "Open KAILA" },
     ],
-  });
+  };
+  showNativeIncomingCall(senderName, callType)
+    .then((shown) => {
+      if (!shown) showSystemNotification(`Incoming KAILA ${callType} call`, notificationOptions);
+    })
+    .catch(() => showSystemNotification(`Incoming KAILA ${callType} call`, notificationOptions));
 }
 
 function startCallTone(mode) {
@@ -5548,6 +5561,24 @@ async function showNativeNotification(title, options = {}) {
     return true;
   } catch (error) {
     console.warn("KAILA native notification failed:", error);
+    return false;
+  }
+}
+
+async function showNativeIncomingCall(senderName, callType = "audio") {
+  const nativeBridge = nativeKailaBridge();
+  if (!nativeBridge?.showIncomingCall) return false;
+  const permitted = await ensureNativeNotificationPermission();
+  if (!permitted) return false;
+  try {
+    const result = await nativeBridge.showIncomingCall({
+      callerName: senderName || "Your job contact",
+      callType,
+      callId: state.call?.callId || "",
+    });
+    return Boolean(result?.shown);
+  } catch (error) {
+    console.warn("KAILA native incoming call notification failed:", error);
     return false;
   }
 }
