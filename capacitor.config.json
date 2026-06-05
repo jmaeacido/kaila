@@ -10,6 +10,12 @@
       "launchShowDuration": 1200,
       "backgroundColor": "#0f3e46",
       "showSpinner": false
+    },
+    "LocalNotifications": {
+      "smallIcon": "kaila_notification_icon",
+      "iconColor": "#0B4552",
+      "sound": "kaila_notification.wav",
+      "presentationOptions": ["badge", "sound", "banner", "list"]
     }
   }
 }

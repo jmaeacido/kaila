@@ -30,6 +30,11 @@ const APP_TIME_ZONE = "Asia/Manila";
 const NATIVE_SOCKET_URL = "https://kaila-app.duckdns.org/kaila-api";
 const CALL_RING_TIMEOUT_MS = 60000;
 const URGENT_ATTENTION_MS = 18000;
+const NATIVE_NOTIFICATION_CHANNELS = {
+  updates: "kaila-updates",
+  urgent: "kaila-urgent",
+  calls: "kaila-calls",
+};
 const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
 const GEOGRAPHY_SOURCE = "assets/Gingoog City PSGC.xlsx";
 const FALLBACK_GEOGRAPHY = {
@@ -66,6 +71,8 @@ const state = {
   directConversationDraftVersion: 0,
   messageSummarySyncing: false,
   notificationSummarySyncing: false,
+  nativeNotificationsReady: false,
+  nativeNotificationListenersBound: false,
   validationSyncing: false,
   typingTimer: null,
   typingSent: false,
@@ -87,9 +94,11 @@ async function init() {
   loadAttentionBadgesForSession();
   registerServiceWorker();
   setupAttentionNotifications();
+  setupNativeNotifications();
   setupOfflineSync();
   initializeTheme();
   bindEvents();
+  hydrateLoginCredentials();
   initializeSocketUrl();
   await loadGeography();
   renderRegisterAddress();
@@ -117,6 +126,7 @@ function setupAttentionNotifications() {
     if ("Notification" in window && Notification.permission === "default") {
       Notification.requestPermission().catch(() => {});
     }
+    ensureNativeNotificationPermission();
     resumeAttentionAudio();
   };
   ["pointerdown", "keydown", "touchstart"].forEach((eventName) => {
@@ -129,17 +139,98 @@ function setupAttentionNotifications() {
   });
 }
 
+async function setupNativeNotifications() {
+  const notifications = nativeLocalNotifications();
+  if (!notifications) return;
+  try {
+    await notifications.createChannel({
+      id: NATIVE_NOTIFICATION_CHANNELS.updates,
+      name: "KAILA updates",
+      description: "Job, message, and marketplace updates.",
+      importance: 4,
+      visibility: 1,
+      lights: true,
+      lightColor: "#0B4552",
+      vibration: true,
+      sound: "kaila_notification.wav",
+    });
+    await notifications.createChannel({
+      id: NATIVE_NOTIFICATION_CHANNELS.urgent,
+      name: "KAILA urgent alerts",
+      description: "Urgent job and support alerts.",
+      importance: 5,
+      visibility: 1,
+      lights: true,
+      lightColor: "#F2C66D",
+      vibration: true,
+      sound: "kaila_notification.wav",
+    });
+    await notifications.createChannel({
+      id: NATIVE_NOTIFICATION_CHANNELS.calls,
+      name: "KAILA calls",
+      description: "Incoming KAILA audio and video calls.",
+      importance: 5,
+      visibility: 1,
+      lights: true,
+      lightColor: "#F2C66D",
+      vibration: true,
+      sound: "kaila_call.wav",
+    });
+    await notifications.registerActionTypes({
+      types: [
+        { id: "kaila-call", actions: [{ id: "open-call", title: "Open KAILA" }] },
+        { id: "kaila-open", actions: [{ id: "open-notifications", title: "Open KAILA" }] },
+      ],
+    });
+    if (!state.nativeNotificationListenersBound) {
+      state.nativeNotificationListenersBound = true;
+      notifications.addListener("localNotificationActionPerformed", (event) => {
+        handleAttentionAction(event.actionId || event.notification?.extra?.action || "open-notifications");
+      }).catch(() => {});
+    }
+    state.nativeNotificationsReady = true;
+  } catch (error) {
+    console.warn("KAILA native notification setup failed:", error);
+  }
+}
+
+async function ensureNativeNotificationPermission() {
+  const notifications = nativeLocalNotifications();
+  if (!notifications) return false;
+  try {
+    const current = await notifications.checkPermissions();
+    if (current.display === "granted") return true;
+    const requested = await notifications.requestPermissions();
+    return requested.display === "granted";
+  } catch {
+    return false;
+  }
+}
+
+function nativeLocalNotifications() {
+  if (!isNativeApp()) return null;
+  return window.Capacitor?.Plugins?.LocalNotifications || null;
+}
+
+function isNativeApp() {
+  return Boolean(window.Capacitor?.isNativePlatform?.() || window.Capacitor?.getPlatform?.() === "android" || window.Capacitor?.getPlatform?.() === "ios");
+}
+
+function handleAttentionAction(action) {
+  if (action === "open-call" && state.call?.status === "incoming") {
+    route("app");
+    setCallMinimized(false);
+    return;
+  }
+  if (action === "open-notifications") openNotificationBell();
+}
+
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   if (!state.notificationClicksBound) {
     state.notificationClicksBound = true;
     navigator.serviceWorker.addEventListener("message", (event) => {
-      const action = event.data?.action;
-      if (action === "open-call" && state.call?.status === "incoming") {
-        route("app");
-        setCallMinimized(false);
-      }
-      if (action === "open-notifications") openNotificationBell();
+      handleAttentionAction(event.data?.action);
     });
   }
   let refreshing = false;
@@ -410,6 +501,7 @@ async function register(event) {
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   loadAttentionBadgesForSession();
   await rememberOfflineLogin(data.username, data.password, payload.user);
+  await offerPasswordSave(data.username, data.password, payload.user);
   syncSocketIdentity();
   safeApplyState(payload.state);
   await syncUnreadNotificationSummaries();
@@ -441,12 +533,38 @@ async function login(event) {
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   loadAttentionBadgesForSession();
   await rememberOfflineLogin(data.username, data.password, payload.user);
+  await offerPasswordSave(data.username, data.password, payload.user);
   syncSocketIdentity();
   safeApplyState(payload.state);
   await syncUnreadNotificationSummaries();
   await syncUnreadMessageSummaries();
   form.reset();
   await successRedirect("Logged in", `Welcome back, ${state.session.name}.`);
+}
+
+async function hydrateLoginCredentials() {
+  if (!navigator.credentials?.get || !window.PasswordCredential) return;
+  const form = $("[data-login-form]");
+  if (!form) return;
+  try {
+    const credential = await navigator.credentials.get({ password: true, mediation: "optional" });
+    if (!credential || credential.type !== "password") return;
+    if (form.elements.username && !form.elements.username.value) form.elements.username.value = credential.id || "";
+    if (form.elements.password && !form.elements.password.value) form.elements.password.value = credential.password || "";
+  } catch {}
+}
+
+async function offerPasswordSave(username, password, user = {}) {
+  if (!navigator.credentials?.store || !window.PasswordCredential || !username || !password) return;
+  try {
+    const credential = new window.PasswordCredential({
+      id: String(username),
+      password: String(password),
+      name: user.name || String(username),
+      iconURL: new URL("assets/android-chrome-192x192.png", window.location.href).href,
+    });
+    await navigator.credentials.store(credential);
+  } catch {}
 }
 
 async function openForgotPasswordModal() {
@@ -3772,6 +3890,7 @@ async function renegotiateCall() {
 function endAudioCall(notifyOther = true) {
   if (!state.call) return;
   state.call.ending = true;
+  clearNativeCallNotification(state.call.callId);
   if (notifyOther) emitCallSignal("hangup");
   clearTimeout(state.call.ringingTimer);
   clearTimeout(state.call.cameraRecoveryTimer);
@@ -3785,6 +3904,14 @@ function endAudioCall(notifyOther = true) {
   callClockTimer = null;
   stopCallQualityMonitor();
   renderCallPanel();
+}
+
+function clearNativeCallNotification(callId) {
+  const notifications = nativeLocalNotifications();
+  if (!notifications || !callId) return;
+  const descriptor = { id: nativeNotificationId(`kaila-call-${callId}`) };
+  notifications.cancel({ notifications: [descriptor] }).catch(() => {});
+  notifications.removeDeliveredNotifications?.({ notifications: [descriptor] }).catch(() => {});
 }
 
 function emitCallSignal(type, extra = {}) {
@@ -5348,6 +5475,7 @@ function resumeAttentionAudio() {
 }
 
 async function showSystemNotification(title, options = {}) {
+  if (await showNativeNotification(title, options)) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   const actions = Array.isArray(options.actions) ? options.actions : [];
   const payload = {
@@ -5378,6 +5506,55 @@ async function showSystemNotification(title, options = {}) {
   try {
     new Notification(title, simplePayload);
   } catch {}
+}
+
+async function showNativeNotification(title, options = {}) {
+  const notifications = nativeLocalNotifications();
+  if (!notifications) return false;
+  if (!state.nativeNotificationsReady) await setupNativeNotifications();
+  const permitted = await ensureNativeNotificationPermission();
+  if (!permitted) return false;
+  const urgency = options.urgency || "update";
+  const channelId = urgency === "call"
+    ? NATIVE_NOTIFICATION_CHANNELS.calls
+    : urgency === "urgent"
+      ? NATIVE_NOTIFICATION_CHANNELS.urgent
+      : NATIVE_NOTIFICATION_CHANNELS.updates;
+  const action = options.data?.action || (urgency === "call" ? "open-call" : "open-notifications");
+  try {
+    await notifications.schedule({
+      notifications: [{
+        id: nativeNotificationId(options.tag || `${title}:${Date.now()}`),
+        title,
+        body: options.body || "",
+        largeBody: options.body || "",
+        summaryText: "KAILA",
+        channelId,
+        actionTypeId: urgency === "call" ? "kaila-call" : "kaila-open",
+        extra: { action },
+        smallIcon: "kaila_notification_icon",
+        iconColor: "#0B4552",
+        sound: urgency === "call" ? "kaila_call.wav" : "kaila_notification.wav",
+        ongoing: urgency === "call",
+        autoCancel: urgency !== "call",
+        group: urgency === "call" ? "kaila-calls" : "kaila-alerts",
+        interruptionLevel: urgency === "call" || urgency === "urgent" ? "timeSensitive" : "active",
+      }],
+    });
+    return true;
+  } catch (error) {
+    console.warn("KAILA native notification failed:", error);
+    return false;
+  }
+}
+
+function nativeNotificationId(value) {
+  const text = String(value || Date.now());
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash) || Math.floor(Date.now() % 2147483647);
 }
 
 async function requestCallWakeLock() {
