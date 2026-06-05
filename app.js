@@ -613,14 +613,10 @@ async function register(event) {
   state.session = payload.user;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   loadAttentionBadgesForSession();
-  await rememberOfflineLogin(data.username, data.password, payload.user);
-  await offerPasswordSave(data.username, data.password, payload.user);
-  await registerPushToken(state.pushToken);
   syncSocketIdentity();
   safeApplyState(payload.state);
-  await syncUnreadNotificationSummaries();
-  await syncUnreadMessageSummaries();
   form.reset();
+  runPostAuthTasks(data.username, data.password, payload.user);
   await successRedirect("Account created", "Welcome to KAILA.");
 }
 
@@ -646,15 +642,25 @@ async function login(event) {
   state.session = payload.user;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   loadAttentionBadgesForSession();
-  await rememberOfflineLogin(data.username, data.password, payload.user);
-  await offerPasswordSave(data.username, data.password, payload.user);
-  await registerPushToken(state.pushToken);
   syncSocketIdentity();
   safeApplyState(payload.state);
-  await syncUnreadNotificationSummaries();
-  await syncUnreadMessageSummaries();
   form.reset();
+  runPostAuthTasks(data.username, data.password, payload.user);
   await successRedirect("Logged in", `Welcome back, ${state.session.name}.`);
+}
+
+function runPostAuthTasks(username, password, user) {
+  Promise.allSettled([
+    rememberOfflineLogin(username, password, user),
+    offerPasswordSave(username, password, user),
+    registerPushToken(state.pushToken),
+    syncUnreadNotificationSummaries(),
+    syncUnreadMessageSummaries(),
+  ]).then((results) => {
+    results.forEach((result) => {
+      if (result.status === "rejected") console.warn("KAILA post-login task failed:", result.reason);
+    });
+  });
 }
 
 async function hydrateLoginCredentials() {
@@ -6232,7 +6238,7 @@ async function tryOfflineLogin(data = {}) {
   state.session = stored.user;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   loadAttentionBadgesForSession();
-  await registerPushToken(state.pushToken);
+  registerPushToken(state.pushToken).catch((error) => console.warn("KAILA push token registration failed:", error));
   syncSocketIdentity();
   const cached = readJson(STORAGE.stateSnapshot, null);
   if (cached) applyServerState(cached, { fromCache: true });
