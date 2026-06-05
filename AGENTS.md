@@ -26,9 +26,12 @@ plain JavaScript and `data-*` selector patterns unless a broader rewrite is
 explicitly requested.
 
 For native Android packaging, run `npm run native:sync` after frontend changes.
-The Android app defaults to `https://kaila-app.duckdns.org/kaila-api` when
-loaded from the Capacitor origin, while the browser PWA keeps its existing
-same-host HTTP/HTTPS defaults.
+Plain `npx cap sync android` can package stale files if ignored `native-www/`
+was not refreshed first. The Android Gradle build also runs
+`scripts/prepare-capacitor-web.js` before packaging as a final guard. The Android
+app defaults to `https://kaila-app.duckdns.org/kaila-api` when loaded from the
+Capacitor origin, while the browser PWA keeps its existing same-host HTTP/HTTPS
+defaults.
 
 ## Backend Service
 

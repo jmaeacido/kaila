@@ -75,6 +75,10 @@ npm install
 npm run native:sync
 ```
 
+Use `npm run native:sync` after frontend changes. Plain `npx cap sync android`
+copies the already-prepared `native-www/` folder and can package stale web
+files if `native-www/` was not refreshed first.
+
 Open the project in Android Studio:
 
 ```bash
@@ -84,9 +88,13 @@ npm run native:android
 Build a debug APK from the command line:
 
 ```bash
+npm run native:sync
 cd android
 ./gradlew assembleDebug
 ```
+
+The Gradle build also runs `scripts/prepare-capacitor-web.js` before packaging,
+so `./gradlew assembleDebug` refreshes Android web assets as a final guard.
 
 The generated APK is written to
 `android/app/build/outputs/apk/debug/app-debug.apk`.

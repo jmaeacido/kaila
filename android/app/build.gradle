@@ -1,5 +1,19 @@
 apply plugin: 'com.android.application'
 
+def kailaRootDir = rootProject.projectDir.parentFile
+def prepareKailaWebAssets = tasks.register('prepareKailaWebAssets', Exec) {
+    workingDir kailaRootDir
+    if (System.getProperty('os.name').toLowerCase().contains('windows')) {
+        commandLine 'cmd', '/c', 'node', 'scripts\\prepare-capacitor-web.js'
+    } else {
+        commandLine 'node', 'scripts/prepare-capacitor-web.js'
+    }
+}
+
+tasks.named('preBuild') {
+    dependsOn prepareKailaWebAssets
+}
+
 android {
     namespace = "com.kaila.marketplace"
     compileSdk = rootProject.ext.compileSdkVersion
