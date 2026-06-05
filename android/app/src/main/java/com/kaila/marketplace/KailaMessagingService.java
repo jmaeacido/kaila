@@ -23,7 +23,7 @@ import java.util.Map;
 
 public class KailaMessagingService extends FirebaseMessagingService {
     private static final String CALL_CHANNEL_ID = "kaila-native-calls";
-    private static final String JOB_CHANNEL_ID = "kaila-job-alerts-v2";
+    private static final String JOB_CHANNEL_ID = "kaila-job-alerts-v3";
     private static final String ALERT_CHANNEL_ID = "kaila-push-alerts";
     private static final int CALL_NOTIFICATION_ID = 7001;
 
@@ -135,7 +135,7 @@ public class KailaMessagingService extends FirebaseMessagingService {
             channel.enableVibration(true);
             channel.setVibrationPattern(new long[] { 0, 700, 180, 700, 180, 900 });
             channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
-            channel.setSound(rawSound("kaila_call"), new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
+            channel.setSound(rawSound("kaila_job_alert"), new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
             manager.createNotificationChannel(channel);
         }
     }

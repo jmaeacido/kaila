@@ -37,7 +37,7 @@ const URGENT_ATTENTION_MS = 18000;
 const NATIVE_NOTIFICATION_CHANNELS = {
   updates: "kaila-updates",
   urgent: "kaila-urgent",
-  jobs: "kaila-job-alerts-v2",
+  jobs: "kaila-job-alerts-v3",
   calls: "kaila-calls",
 };
 const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
@@ -61,6 +61,7 @@ const state = {
   socketIdentityUserId: "",
   pendingNativeCallAction: "",
   pendingNativeCallId: "",
+  lastStateRefreshAt: 0,
   userInteracted: false,
   attentionQueue: [],
   unreadNotifications: 0,
@@ -160,6 +161,13 @@ function handleAppResumed() {
   else syncSocketIdentity();
   syncUnreadNotificationSummaries();
   syncUnreadMessageSummaries();
+  refreshStateAfterResume();
+}
+
+function refreshStateAfterResume() {
+  if (!state.session) return;
+  if (Date.now() - state.lastStateRefreshAt < 2500) return;
+  loadState({ silent: true }).catch(() => {});
 }
 
 async function setupNativeNotifications() {
@@ -197,7 +205,7 @@ async function setupNativeNotifications() {
       lights: true,
       lightColor: "#F2C66D",
       vibration: true,
-      sound: "kaila_call.wav",
+      sound: "kaila_job_alert.wav",
     });
     await notifications.createChannel({
       id: NATIVE_NOTIFICATION_CHANNELS.jobs,
@@ -368,7 +376,7 @@ function handlePushNotification(notification = {}) {
   }
 }
 
-function handlePushAction(data = {}) {
+async function handlePushAction(data = {}) {
   const action = data.action || data.type;
   if (["answer-call", "decline-call"].includes(action)) {
     handleNativeCallAction(data);
@@ -382,12 +390,23 @@ function handlePushAction(data = {}) {
   }
   if (action === "message" || action === "direct-message") openMessageBell();
   else if (action === "request" || action === "job-request" || action === "offer" || action === "job") {
-    route("app");
-    activateTab("#requests-pane");
-    if (data.requestId || data.id) setTimeout(() => focusRequestCard(data.requestId || data.id), 500);
+    await openRequestFromNotification(data);
   } else {
     openNotificationBell();
   }
+}
+
+async function openRequestFromNotification(data = {}) {
+  const requestId = data.requestId || data.id || "";
+  route("app");
+  activateTab("#requests-pane");
+  await loadState({ silent: true });
+  if (requestId && state.requests.some((request) => request.id === requestId)) {
+    focusRequestCard(requestId, data.offerId || "");
+    return;
+  }
+  renderRequests();
+  if (requestId) notify("Job request", "This request is no longer available or no longer matches your provider profile.", "info");
 }
 
 function handleNativeCallAction(data = {}) {
@@ -564,6 +583,7 @@ async function apiFetch(path, options = {}) {
 async function loadState(options = {}) {
   try {
     const payload = await apiFetch("/api/state", { method: "GET" });
+    state.lastStateRefreshAt = Date.now();
     applyServerState(payload);
     if (state.session && !state.users.some((user) => user.id === state.session.id)) {
       localStorage.removeItem(STORAGE.session);
@@ -905,9 +925,12 @@ function fallbackDashboardTab() {
 function focusRequestCard(requestId, offerId = "") {
   route("app");
   activateTab("#requests-pane");
-  requestAnimationFrame(() => {
+  const focus = (attempt = 0) => {
     const card = $(`[data-request-card="${escapeCssIdentifier(requestId)}"]`);
-    if (!card) return;
+    if (!card) {
+      if (attempt < 5) setTimeout(() => focus(attempt + 1), 120);
+      return;
+    }
     card.scrollIntoView({ behavior: "smooth", block: "center" });
     card.classList.add("request-card-focus");
     setTimeout(() => card.classList.remove("request-card-focus"), 2200);
@@ -916,7 +939,8 @@ function focusRequestCard(requestId, offerId = "") {
       offerCard?.classList.add("request-card-focus");
       setTimeout(() => offerCard?.classList.remove("request-card-focus"), 2200);
     }
-  });
+  };
+  requestAnimationFrame(() => focus());
 }
 
 function renderActions() {
@@ -5033,11 +5057,20 @@ function stopRealtimePolling() {
   state.realtimePollTimer = null;
 }
 
+function upsertRequest(request = {}) {
+  if (!request?.id) return;
+  const index = state.requests.findIndex((item) => item.id === request.id);
+  if (index >= 0) state.requests[index] = { ...state.requests[index], ...request };
+  else state.requests = [request, ...state.requests];
+  render();
+}
+
 function handleRequestCreated({ request } = {}) {
-  loadState();
   if (!request || !state.session || request.clientId === state.session.id) return;
   if (state.session.role !== "provider") return;
   if (state.session.role === "provider" && !providerMatchesRequest(request)) return;
+  upsertRequest(request);
+  loadState({ silent: true }).catch(() => {});
   const client = userProfile(request.clientId);
   announceJobRequestAttention(request);
 
@@ -5335,7 +5368,11 @@ async function handleRequestConfirmed({ requestId, actorId } = {}) {
 }
 
 async function handleRequestAction({ requestId, action, status, actorId } = {}) {
-  await loadState();
+  const existing = state.requests.find((item) => item.id === requestId);
+  if (existing && status) {
+    upsertRequest({ id: requestId, status });
+  }
+  await loadState({ silent: true });
   const request = state.requests.find((item) => item.id === requestId);
   if (!request || !isRequestParty(request) || actorId === state.session?.id) return;
   const titles = {
@@ -5844,7 +5881,7 @@ async function showNativeNotification(title, options = {}) {
         extra: { ...(options.data || {}), action },
         smallIcon: "kaila_notification_icon",
         iconColor: "#0B4552",
-        sound: urgency === "call" || isJobRequest ? "kaila_call.wav" : "kaila_notification.wav",
+        sound: urgency === "call" ? "kaila_call.wav" : isJobRequest ? "kaila_job_alert.wav" : "kaila_notification.wav",
         ongoing: urgency === "call" || isJobRequest,
         autoCancel: urgency !== "call" && !isJobRequest,
         group: urgency === "call" ? "kaila-calls" : isJobRequest ? "kaila-job-requests" : "kaila-alerts",
