@@ -1,4 +1,7 @@
-const CACHE_NAME = "kaila-pwa-v126";
+const CACHE_NAME = "kaila-pwa-v127";
+const IS_NATIVE_WEBVIEW = self.location.protocol === "https:"
+  && ["localhost", "127.0.0.1", "::1"].includes(self.location.hostname)
+  && /\bwv\b/i.test(navigator.userAgent || "");
 const APP_PATH = new URL("./", self.location.href).pathname;
 const APP_SHELL = [
   "./",
@@ -19,6 +22,10 @@ const APP_SHELL = [
 ];
 
 self.addEventListener("install", (event) => {
+  if (IS_NATIVE_WEBVIEW) {
+    event.waitUntil(self.skipWaiting());
+    return;
+  }
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => cache.addAll(APP_SHELL))
@@ -27,6 +34,15 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
+  if (IS_NATIVE_WEBVIEW) {
+    event.waitUntil(
+      caches.keys()
+        .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+        .then(() => self.registration.unregister())
+        .then(() => self.clients.claim())
+    );
+    return;
+  }
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
@@ -35,6 +51,7 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
+  if (IS_NATIVE_WEBVIEW) return;
   if (event.request.method !== "GET") return;
   const requestUrl = new URL(event.request.url);
 

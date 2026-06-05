@@ -426,6 +426,17 @@ function handleNativeCallAction(data = {}) {
 
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
+  if (isNativeAppOrigin()) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.getRegistrations?.()
+        .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+        .catch(() => {});
+      window.caches?.keys?.()
+        .then((keys) => Promise.all(keys.map((key) => window.caches.delete(key))))
+        .catch(() => {});
+    });
+    return;
+  }
   if (!state.notificationClicksBound) {
     state.notificationClicksBound = true;
     navigator.serviceWorker.addEventListener("message", (event) => {
