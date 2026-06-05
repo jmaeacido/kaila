@@ -20,6 +20,7 @@ Current MVP screens:
 - Login page
 - Authenticated compact dashboard
 - Admin-created Customer Service role with a support desk, client/provider direct messaging, and request triage visibility
+- In-app Privacy Policy, Terms of Service, Contact Support, report user/job, block user, and account deletion controls
 
 Real-time MVP events:
 
@@ -44,6 +45,10 @@ Real-time MVP events:
 - Provider profile saved
 - Team activity note
 - Customer Service direct support for clients and providers
+- Safety reports for users and jobs
+- User blocks that disable direct messages and calls
+- Self-service client/provider account deletion with profile/contact anonymization
+- Native Android push notifications for job, offer, message, missed-call, and incoming-call events
 
 Run the web app locally:
 

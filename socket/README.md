@@ -19,6 +19,10 @@ Job-message content is encrypted at rest with AES-256-GCM. Set `KAILA_MESSAGE_EN
 
 Public registration creates only Client and Provider accounts. Admin can also create Ops and Customer Service accounts. Customer Service accounts can view support context, message clients/providers directly, and join accepted job conversations for assistance without receiving client/provider job-action permissions.
 
+## Safety, Reports, and Account Deletion
+
+The service stores user and job reports in `moderation_reports` for Admin and Customer Service review. User blocks are stored in `user_blocks`; blocked pairs cannot open direct messages or direct calls. Clients and providers can delete their own accounts through `/api/account`, which removes login access, push tokens, and profile/contact details while retaining operational job, message, report, and rating history.
+
 ## Media Uploads
 
 Service requests and provider completion proofs accept optional JPG, PNG, WebP, MP4, or WebM attachments. The server stores up to 3 files per stage with a 10 MB limit per file in `socket/uploads` and serves them through opaque `/media/:id` URLs.

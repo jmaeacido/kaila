@@ -36,7 +36,7 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
-  <link rel="stylesheet" href="style.css?v=20260605-offer-review-action">
+  <link rel="stylesheet" href="style.css?v=20260605-safety-legal">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -118,6 +118,11 @@
             <div class="hero-actions">
               <button class="btn btn-primary btn-login" type="button" data-route="login">Login</button>
               <button class="btn btn-register" type="button" data-route="register">Create Account</button>
+            </div>
+            <div class="legal-link-row">
+              <button type="button" data-route="privacy">Privacy Policy</button>
+              <button type="button" data-route="terms">Terms</button>
+              <button type="button" data-route="support">Contact Support</button>
             </div>
             <div class="hero-points" aria-label="KAILA highlights">
               <span>Real-time offers</span>
@@ -247,11 +252,94 @@
               <label class="consent-line"><input type="checkbox" name="consentRatings" value="yes"> I agree to receive ratings.</label>
               <label class="consent-line"><input type="checkbox" name="rulesAgreement" value="yes"> I understand and agree to provider rules.</label>
             </div>
-            <label class="consent-line"><input type="checkbox" name="dataPrivacyConsent" value="yes" required> I allow KAILA to use my submitted details for pilot matching.</label>
+            <label class="consent-line"><input type="checkbox" name="dataPrivacyConsent" value="yes" required> I allow KAILA to use my submitted details for pilot matching and agree to the <button class="inline-link" type="button" data-route="privacy">Privacy Policy</button> and <button class="inline-link" type="button" data-route="terms">Terms</button>.</label>
             <p class="small text-muted mb-0">Create a KAILA pilot account only. Do not use your Google, Facebook, banking, or email password.</p>
             <button class="btn btn-primary w-100" type="submit">Create Account</button>
           </form>
         </div>
+      </div>
+    </section>
+
+    <section class="view" data-view="privacy">
+      <div class="container-fluid px-3 py-3">
+        <article class="legal-page">
+          <div class="d-flex justify-content-between align-items-start gap-2 mb-3">
+            <div>
+              <p class="eyebrow mb-1">KAILA pilot policy</p>
+              <h1>Privacy Policy</h1>
+              <p>Last updated June 5, 2026</p>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-route="landing">Back</button>
+          </div>
+          <h2>What We Collect</h2>
+          <p>KAILA collects account details, contact preferences, service request information, offers, messages, uploaded media, ratings, reports, blocks, device push tokens, and operational logs needed to run the pilot marketplace.</p>
+          <h2>How We Use Data</h2>
+          <p>We use data to match clients and providers, operate chat and calls, send notifications, support disputes, protect users, improve local service quality, and measure pilot performance.</p>
+          <h2>Sharing</h2>
+          <p>Contact details are shared only when needed for accepted jobs, support handling, or safety review. KAILA does not sell pilot user data.</p>
+          <h2>Messages, Media, Reports, And Ratings</h2>
+          <p>Job messages and direct support messages may be reviewed by authorized staff for support, safety, dispute handling, and abuse prevention. Ratings are shown after both sides rate or the rating window closes.</p>
+          <h2>Your Choices</h2>
+          <p>You can update profile details, block users, report users or jobs, contact support, disable device notifications, and request account deletion from Settings.</p>
+          <h2>Retention</h2>
+          <p>Account deletion removes login access and anonymizes profile/contact details. Job, rating, report, and message history may be retained where needed for safety, dispute, legal, or operational records.</p>
+          <h2>Contact</h2>
+          <p>Use Contact Support in the app for privacy questions, account help, or safety concerns.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="view" data-view="terms">
+      <div class="container-fluid px-3 py-3">
+        <article class="legal-page">
+          <div class="d-flex justify-content-between align-items-start gap-2 mb-3">
+            <div>
+              <p class="eyebrow mb-1">KAILA pilot rules</p>
+              <h1>Terms of Service</h1>
+              <p>Last updated June 5, 2026</p>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-route="landing">Back</button>
+          </div>
+          <h2>Marketplace Role</h2>
+          <p>KAILA helps clients and providers find each other, compare offers, coordinate work, and keep job records. Providers are independent service providers, not KAILA employees.</p>
+          <h2>User Responsibilities</h2>
+          <p>Use accurate information, communicate respectfully, honor accepted offers, avoid unsafe or illegal work, and do not use KAILA to harass, scam, spam, impersonate, or mislead others.</p>
+          <h2>Jobs, Offers, And Completion</h2>
+          <p>Clients choose providers from submitted offers. Providers should state price, schedule, and scope clearly. Completion, revision, dispute, and rating flows must be used honestly.</p>
+          <h2>Safety And Moderation</h2>
+          <p>KAILA may review reports, block abusive behavior, restrict accounts, remove unsafe content, or preserve records needed to investigate disputes and protect users.</p>
+          <h2>Ratings</h2>
+          <p>Ratings should describe real job experiences. False, abusive, or retaliatory reviews may be investigated by support.</p>
+          <h2>Limitations</h2>
+          <p>The pilot is provided as-is and may change as KAILA validates local marketplace operations. KAILA is not responsible for independent provider workmanship, pricing, or offline conduct, but support will help document and triage disputes.</p>
+          <h2>Account Changes</h2>
+          <p>KAILA may suspend or remove accounts that violate these terms. Users may delete their account from Settings, subject to safety and operational record retention.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="view" data-view="support">
+      <div class="container-fluid px-3 py-3">
+        <article class="legal-page">
+          <div class="d-flex justify-content-between align-items-start gap-2 mb-3">
+            <div>
+              <p class="eyebrow mb-1">Help desk</p>
+              <h1>Contact Support</h1>
+              <p>Use the in-app support desk after login for the fastest response.</p>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-route="landing">Back</button>
+          </div>
+          <h2>When To Contact Support</h2>
+          <p>Contact support for account access, job coordination, unsafe behavior, reports, blocked users, disputes, ratings concerns, privacy questions, or provider/client guidance.</p>
+          <h2>Inside The App</h2>
+          <p>After login, open Customer Service from Quick actions or the Support tab to message an official KAILA support account.</p>
+          <h2>What To Include</h2>
+          <p>Include the job category, area, usernames involved, what happened, screenshots or media when useful, and what outcome you need.</p>
+          <div class="card-actions">
+            <button class="btn btn-primary" type="button" data-route="login">Login For Support</button>
+            <button class="btn btn-outline-secondary" type="button" data-route="privacy">Privacy Policy</button>
+          </div>
+        </article>
       </div>
     </section>
 
@@ -399,6 +487,6 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260605-validation-offline-edit"></script>
+  <script src="app.js?v=20260605-safety-legal"></script>
 </body>
 </html>

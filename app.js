@@ -53,6 +53,8 @@ const state = {
   users: [],
   requests: [],
   providers: [],
+  reports: [],
+  blocks: [],
   validationEntries: [],
   activity: [],
   missedCalls: [],
@@ -609,6 +611,8 @@ function applyServerState(payload = {}, options = {}) {
   state.users = payload.users || state.users || [];
   state.providers = payload.providers || [];
   state.requests = payload.requests || [];
+  state.reports = payload.reports || [];
+  state.blocks = payload.blocks || [];
   if ("validationEntries" in payload) state.validationEntries = mergeQueuedValidationEntries(payload.validationEntries || []);
   else state.validationEntries = mergeQueuedValidationEntries(state.validationEntries || []);
   state.activity = payload.activities || state.activity || [];
@@ -1168,6 +1172,7 @@ function renderRequestCard(request) {
         ${canPass(request) ? `<button class="btn btn-sm btn-outline-secondary" data-pass="${request.id}">Decline/Pass</button>` : ""}
         ${canViewConversation(request) ? `<button class="btn btn-sm btn-outline-primary" data-conversation="${request.id}">Messages</button>` : ""}
         ${jobActionButtons(request)}
+        ${canReportJob(request) ? `<button class="btn btn-sm btn-outline-warning" data-report-job="${request.id}"><i class="fa-solid fa-flag"></i> Report Job</button>` : ""}
       </div>
     </article>
   `;
@@ -1247,6 +1252,7 @@ function bindRequestCardActions(host) {
   $$("[data-media-open]", host).forEach((button) => button.addEventListener("click", () => openMediaViewer(button.dataset.requestId, button.dataset.mediaStage, Number(button.dataset.mediaIndex))));
   $$("[data-conversation]", host).forEach((button) => button.addEventListener("click", () => openConversation(button.dataset.conversation)));
   $$("[data-job-action]", host).forEach((button) => button.addEventListener("click", () => openJobAction(button.dataset.requestId, button.dataset.jobAction)));
+  $$("[data-report-job]", host).forEach((button) => button.addEventListener("click", () => openReportJobModal(button.dataset.reportJob)));
 }
 
 function renderOffers(request) {
@@ -1433,7 +1439,8 @@ function displayReputationForUser(user = {}) {
 }
 
 function canDirectContact(target = {}) {
-  if (!state.session || !target.id || target.id === state.session.id) return false;
+  if (!state.session || !target.id || target.id === state.session.id || target.deletedAt) return false;
+  if (isBlockedUser(target.id)) return false;
   if (state.session.role === "admin") return ["admin", "ops", SUPPORT_ROLE, "provider", "client"].includes(target.role);
   if (state.session.role === SUPPORT_ROLE) return ["admin", SUPPORT_ROLE, "provider", "client"].includes(target.role);
   if (target.role === SUPPORT_ROLE) return ["provider", "client"].includes(state.session.role);
@@ -1442,16 +1449,25 @@ function canDirectContact(target = {}) {
 
 function canViewDirectContact(target = {}) {
   if (canDirectContact(target)) return true;
-  if (!state.session || !target.id || target.id === state.session.id) return false;
+  if (!state.session || !target.id || target.id === state.session.id || target.deletedAt) return false;
   return ["admin", SUPPORT_ROLE].includes(target.role) && ["admin", "ops", SUPPORT_ROLE, "provider", "client"].includes(state.session.role);
 }
 
 function canDirectCall(target = {}) {
-  if (!state.session || !target.id || target.id === state.session.id) return false;
+  if (!state.session || !target.id || target.id === state.session.id || target.deletedAt) return false;
+  if (isBlockedUser(target.id)) return false;
   if (state.session.role === SUPPORT_ROLE) return ["client", "provider"].includes(target.role);
   if (target.role === SUPPORT_ROLE) return ["client", "provider"].includes(state.session.role);
   if (state.session.role === "ops") return target.role === "admin";
   return state.session.role === "admin" && ["admin", "ops", SUPPORT_ROLE].includes(target.role);
+}
+
+function isBlockedUser(userId) {
+  return Boolean((state.blocks || []).some((block) => block.blocked_id === userId || block.blockedId === userId));
+}
+
+function canModerateUser(target = {}) {
+  return Boolean(state.session && target.id && target.id !== state.session.id && !target.deletedAt && ["client", "provider"].includes(target.role));
 }
 
 function directConversationDisplayTarget(target = {}) {
@@ -1484,14 +1500,24 @@ function directConversationTopicHtml(request = {}) {
 
 function directContactButtons(userId) {
   const target = userProfile(userId);
-  if (!canDirectContact(target)) return "";
+  const actions = [];
+  if (canDirectContact(target)) {
+    actions.push(`<button class="btn btn-sm btn-outline-primary" type="button" data-direct-chat="${target.id}"><i class="fa-solid fa-message"></i> Message</button>`);
+    if (canDirectCall(target)) {
+      actions.push(`<button class="btn btn-sm btn-outline-primary" type="button" data-direct-audio-call="${target.id}"><i class="fa-solid fa-phone"></i> Audio</button>`);
+      actions.push(`<button class="btn btn-sm btn-outline-primary" type="button" data-direct-video-call="${target.id}"><i class="fa-solid fa-video"></i> Video</button>`);
+    }
+  }
+  if (canModerateUser(target)) {
+    actions.push(`<button class="btn btn-sm btn-outline-warning" type="button" data-report-user="${target.id}"><i class="fa-solid fa-flag"></i> Report</button>`);
+    actions.push(isBlockedUser(target.id)
+      ? `<button class="btn btn-sm btn-outline-secondary" type="button" data-unblock-user="${target.id}"><i class="fa-solid fa-user-check"></i> Unblock</button>`
+      : `<button class="btn btn-sm btn-outline-danger" type="button" data-block-user="${target.id}"><i class="fa-solid fa-user-slash"></i> Block</button>`);
+  }
+  if (!actions.length) return "";
   return `
     <div class="card-actions">
-      <button class="btn btn-sm btn-outline-primary" type="button" data-direct-chat="${target.id}"><i class="fa-solid fa-message"></i> Message</button>
-      ${canDirectCall(target) ? `
-        <button class="btn btn-sm btn-outline-primary" type="button" data-direct-audio-call="${target.id}"><i class="fa-solid fa-phone"></i> Audio</button>
-        <button class="btn btn-sm btn-outline-primary" type="button" data-direct-video-call="${target.id}"><i class="fa-solid fa-video"></i> Video</button>
-      ` : ""}
+      ${actions.join("")}
     </div>
   `;
 }
@@ -1500,6 +1526,9 @@ function bindDirectContactActions() {
   $$("[data-direct-chat]").forEach((button) => button.addEventListener("click", () => openDirectConversation(button.dataset.directChat, button.dataset.directRequestId || "")));
   $$("[data-direct-audio-call]").forEach((button) => button.addEventListener("click", () => startDirectAudioCall(button.dataset.directAudioCall)));
   $$("[data-direct-video-call]").forEach((button) => button.addEventListener("click", () => startDirectVideoCall(button.dataset.directVideoCall)));
+  $$("[data-report-user]").forEach((button) => button.addEventListener("click", () => openReportUserModal(button.dataset.reportUser)));
+  $$("[data-block-user]").forEach((button) => button.addEventListener("click", () => blockUser(button.dataset.blockUser)));
+  $$("[data-unblock-user]").forEach((button) => button.addEventListener("click", () => unblockUser(button.dataset.unblockUser)));
 }
 
 function renderProviders() {
@@ -1510,6 +1539,7 @@ function renderProviders() {
     return;
   }
   let providers = state.providers;
+  if (state.session?.role === "client") providers = providers.filter((provider) => !isBlockedUser(provider.userId));
   if (state.session?.role === "admin") providers = adminMetricProviders(providers);
   const adminPanel = state.session?.role === "admin" ? adminProviderMetricPanel() : "";
   if (!providers.length) {
@@ -1671,8 +1701,9 @@ function renderCustomerService() {
     host.innerHTML = `
       <article class="k-card admin-metric-panel">
         <h3>Customer Service Desk</h3>
-        <p>${activeRequests.length} active requests | ${disputedRequests.length} disputes | ${state.users.filter((user) => user.role === "client").length} clients | ${state.providers.length} providers</p>
+        <p>${activeRequests.length} active requests | ${disputedRequests.length} disputes | ${(state.reports || []).filter((report) => report.status === "Open").length} reports | ${state.users.filter((user) => user.role === "client").length} clients | ${state.providers.length} providers</p>
       </article>
+      ${renderModerationReports()}
       ${waitingRequests.length ? waitingRequests.slice(0, 8).map(renderSupportRequestSummary).join("") : emptyCard("No support queue", "Active jobs that need attention will appear here.")}
     `;
     bindCustomerServiceActions(host);
@@ -1687,6 +1718,7 @@ function renderCustomerService() {
   const primarySupport = supportUsers[0];
   const supportContact = { ...primarySupport, name: "KAILA Customer Service", role: SUPPORT_ROLE, photoUrl: SUPPORT_AVATAR };
   host.innerHTML = `
+    ${state.session.role === "admin" ? renderModerationReports() : ""}
     <article class="k-card admin-metric-panel">
       <h3>Customer Service</h3>
       <p>Message support for account help, request questions, provider coordination, or dispute guidance.</p>
@@ -1703,6 +1735,34 @@ function renderCustomerService() {
         <button class="btn btn-sm btn-outline-primary" type="button" data-direct-chat="${escapeAttribute(primarySupport.id)}"><i class="fa-solid fa-message"></i> Message Support</button>
       </div>
     </article>
+  `;
+}
+
+function renderModerationReports() {
+  const reports = state.reports || [];
+  if (!reports.length) return "";
+  return `
+    <article class="k-card admin-metric-panel">
+      <h3>Safety reports</h3>
+      <p>${reports.filter((report) => report.status === "Open").length} open report${reports.filter((report) => report.status === "Open").length === 1 ? "" : "s"} from users.</p>
+    </article>
+    ${reports.slice(0, 12).map((report) => `
+      <article class="k-card">
+        <div class="d-flex justify-content-between gap-2">
+          <div>
+            <h3>${report.type === "job" ? "Job report" : "User report"}: ${escapeHtml(report.reason)}</h3>
+            <p>${escapeHtml(report.details || "No extra details")}</p>
+          </div>
+          <span class="badge text-bg-${report.status === "Open" ? "warning" : "secondary"} align-self-start">${escapeHtml(report.status)}</span>
+        </div>
+        <div class="meta">
+          <span>From ${escapeHtml(report.reporterName || "User")}</span>
+          ${report.reportedUserName ? `<span>About ${escapeHtml(report.reportedUserName)}</span>` : ""}
+          ${report.requestCategory ? `<span>${escapeHtml(report.requestCategory)}</span>` : ""}
+          <span>${formatDateTime(report.createdAt)}</span>
+        </div>
+      </article>
+    `).join("")}
   `;
 }
 
@@ -2000,14 +2060,95 @@ function renderSettings() {
       <div class="upload-preview settings-preview" data-settings-photo-preview></div>
       <button class="btn btn-primary" type="submit">Save Settings</button>
     </form>
+    ${renderSafetySettings()}
   `;
     $("[data-settings-form]")?.addEventListener("submit", saveSettings);
+    $("[data-delete-account]")?.addEventListener("click", deleteAccount);
+    $("[data-settings-support]")?.addEventListener("click", openCustomerServicePlatform);
+    $$("[data-route]", host).forEach((button) => button.addEventListener("click", () => route(button.dataset.route)));
+    $$("[data-unblock-settings]").forEach((button) => button.addEventListener("click", () => unblockUser(button.dataset.unblockSettings)));
     bindCategoryChips("settings-category");
     bindAddressGroup("settings-address");
     bindAttachmentPreview("[data-settings-form] [name='photo']", "[data-settings-photo-preview]", 1);
   } catch (error) {
     console.error("Settings render failed:", error);
     host.innerHTML = emptyCard("Settings unavailable", "Refresh the app and try again.");
+  }
+}
+
+function renderSafetySettings() {
+  const blocked = (state.blocks || []).map((block) => {
+    const userId = block.blocked_id || block.blockedId;
+    const user = userProfile(userId);
+    return { userId, name: displayUserName(user), role: roleLabel(user.role || "user") };
+  });
+  return `
+    <section class="settings-card">
+      <div class="settings-head">
+        <div class="profile-photo safety-icon"><i class="fa-solid fa-shield-halved"></i></div>
+        <div>
+          <h3>Safety, legal, and support</h3>
+          <p>Review KAILA rules, contact support, manage blocked users, or delete your account.</p>
+        </div>
+      </div>
+      <div class="card-actions">
+        <button class="btn btn-sm btn-outline-primary" type="button" data-route="privacy"><i class="fa-solid fa-lock"></i> Privacy Policy</button>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-route="terms"><i class="fa-solid fa-file-contract"></i> Terms</button>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-settings-support><i class="fa-solid fa-headset"></i> Contact Support</button>
+      </div>
+      ${blocked.length ? `
+        <div class="offer mt-2">
+          <strong>Blocked users</strong>
+          ${blocked.map((item) => `
+            <div class="d-flex justify-content-between align-items-center gap-2 mt-2">
+              <span>${escapeHtml(item.name)} <small>${escapeHtml(item.role)}</small></span>
+              <button class="btn btn-sm btn-outline-secondary" type="button" data-unblock-settings="${escapeAttribute(item.userId)}">Unblock</button>
+            </div>
+          `).join("")}
+        </div>
+      ` : `<div class="offer mt-2"><strong>Blocked users</strong><div>No blocked users.</div></div>`}
+      ${["client", "provider"].includes(state.session.role) ? `
+        <div class="offer mt-2">
+          <strong>Account deletion</strong>
+          <div>Delete your login and anonymize profile/contact details while retaining operational job records.</div>
+          <button class="btn btn-sm btn-outline-danger mt-2" type="button" data-delete-account><i class="fa-solid fa-trash"></i> Delete Account</button>
+        </div>
+      ` : ""}
+    </section>
+  `;
+}
+
+async function deleteAccount() {
+  const result = await modal({
+    title: "Delete account?",
+    icon: "warning",
+    html: `
+      <div class="text-start">
+        <p>This removes login access and anonymizes your profile and contact details. Job, message, report, and rating records may remain for safety and dispute history.</p>
+        <label class="w-100">Type DELETE to confirm<input id="delete-account-confirmation" class="form-control mt-1" autocomplete="off"></label>
+      </div>
+    `,
+    showCancelButton: true,
+    confirmButtonText: "Delete Account",
+    confirmButtonColor: "#dc3545",
+    preConfirm: () => {
+      const confirmation = $("#delete-account-confirmation")?.value || "";
+      if (confirmation.trim().toUpperCase() !== "DELETE") {
+        window.Swal.showValidationMessage("Type DELETE to confirm.");
+        return false;
+      }
+      return { confirmation };
+    },
+  });
+  if (!result.isConfirmed) return;
+  try {
+    await apiFetch("/api/account", { method: "DELETE", body: JSON.stringify(result.value) });
+    localStorage.removeItem(STORAGE.session);
+    state.session = null;
+    route("landing");
+    notify("Account deleted", "Your account login has been removed.", "success");
+  } catch (error) {
+    notify("Deletion failed", error.message, "error");
   }
 }
 
@@ -2263,6 +2404,8 @@ function cacheStateSnapshot() {
     users: state.users,
     providers: state.providers,
     requests: state.requests,
+    reports: state.reports,
+    blocks: state.blocks,
     validationEntries: (state.validationEntries || []).filter((entry) => !entry.pendingSync),
     activities: state.activity,
     cachedAt: new Date().toISOString(),
@@ -6222,6 +6365,108 @@ function canViewConversation(request) {
   if (!state.session || !request.acceptedProviderId) return false;
   if (state.session.role === SUPPORT_ROLE) return true;
   return request.clientId === state.session.id || request.acceptedProviderId === state.session.id;
+}
+
+function canReportJob(request = {}) {
+  if (!state.session || !request.id) return false;
+  if (["admin", SUPPORT_ROLE].includes(state.session.role)) return true;
+  if (request.clientId === state.session.id || request.acceptedProviderId === state.session.id) return true;
+  return state.session.role === "provider" && providerMatchesRequest(request);
+}
+
+async function openReportUserModal(userId) {
+  const target = userProfile(userId);
+  if (!canModerateUser(target)) return;
+  const result = await modal({
+    title: `Report ${displayUserName(target)}`,
+    html: `
+      <div class="swal-form">
+        <label>Reason${select("report-user-reason", ["Harassment or abuse", "Scam or fraud", "Unsafe behavior", "Fake or misleading profile", "Spam", "Other"], "", "Choose reason")}</label>
+        <label>Details<textarea id="report-user-details" class="form-control" rows="4" maxlength="2000" placeholder="What happened? Include job context if useful."></textarea></label>
+      </div>
+    `,
+    confirmButtonText: "Submit Report",
+    preConfirm: () => {
+      const reason = $("#report-user-reason")?.value || "";
+      const details = $("#report-user-details")?.value || "";
+      if (!reason) {
+        window.Swal.showValidationMessage("Choose a report reason.");
+        return false;
+      }
+      return { reportedUserId: userId, reason, details };
+    },
+  });
+  if (!result.isConfirmed) return;
+  try {
+    const response = await apiFetch("/api/reports/user", { method: "POST", body: JSON.stringify(result.value) });
+    safeApplyState(response.state);
+    notify("Report submitted", "KAILA support can review this report.", "success");
+  } catch (error) {
+    notify("Report failed", error.message, "error");
+  }
+}
+
+async function openReportJobModal(requestId) {
+  const request = state.requests.find((item) => item.id === requestId);
+  if (!canReportJob(request)) return;
+  const result = await modal({
+    title: "Report Job",
+    html: `
+      <div class="swal-form">
+        <label>Reason${select("report-job-reason", ["Unsafe or illegal request", "Harassment or abuse", "Suspicious payment or scam", "Wrong category or misleading details", "No-show or bad faith", "Other"], "", "Choose reason")}</label>
+        <label>Details<textarea id="report-job-details" class="form-control" rows="4" maxlength="2000" placeholder="Tell support what needs review."></textarea></label>
+      </div>
+    `,
+    confirmButtonText: "Submit Report",
+    preConfirm: () => {
+      const reason = $("#report-job-reason")?.value || "";
+      const details = $("#report-job-details")?.value || "";
+      if (!reason) {
+        window.Swal.showValidationMessage("Choose a report reason.");
+        return false;
+      }
+      return { requestId, reason, details };
+    },
+  });
+  if (!result.isConfirmed) return;
+  try {
+    const response = await apiFetch("/api/reports/job", { method: "POST", body: JSON.stringify(result.value) });
+    safeApplyState(response.state);
+    notify("Job reported", "KAILA support can review this job.", "success");
+  } catch (error) {
+    notify("Report failed", error.message, "error");
+  }
+}
+
+async function blockUser(userId) {
+  const target = userProfile(userId);
+  if (!canModerateUser(target)) return;
+  const result = await modal({
+    title: `Block ${displayUserName(target)}?`,
+    text: "Direct messages and calls with this user will be disabled for you.",
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonText: "Block User",
+    confirmButtonColor: "#dc3545",
+  });
+  if (!result.isConfirmed) return;
+  try {
+    const response = await apiFetch(`/api/blocks/${encodeURIComponent(userId)}`, { method: "POST", body: "{}" });
+    safeApplyState(response.state);
+    notify("User blocked", "You can unblock them from Settings.", "success");
+  } catch (error) {
+    notify("Block failed", error.message, "error");
+  }
+}
+
+async function unblockUser(userId) {
+  try {
+    const response = await apiFetch(`/api/blocks/${encodeURIComponent(userId)}`, { method: "DELETE" });
+    safeApplyState(response.state);
+    notify("User unblocked", "", "success");
+  } catch (error) {
+    notify("Unblock failed", error.message, "error");
+  }
 }
 
 function jobActionButtons(request) {

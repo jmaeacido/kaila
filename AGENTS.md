@@ -47,6 +47,13 @@ Public registration is limited to `client` and `provider`. Admin-created staff
 roles include `ops` for validation work and `customer_service` for support desk
 triage and direct client/provider assistance.
 
+Safety and legal controls are part of the runtime MVP. The frontend includes
+Privacy Policy, Terms of Service, Contact Support, report user/job, block user,
+and account deletion controls. The backend persists reports in
+`moderation_reports`, blocks in `user_blocks`, and account deletion as a soft
+delete/anonymization on `users.deleted_at` so operational job history remains
+available for disputes, ratings, and safety review.
+
 Important environment settings:
 
 - `PORT` defaults to `6002`.

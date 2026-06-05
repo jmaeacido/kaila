@@ -436,6 +436,7 @@ async function initializeDatabase() {
       preferred_contact_channel VARCHAR(80) NULL,
       best_contact_time VARCHAR(120) NULL,
       data_privacy_consent TINYINT(1) NOT NULL DEFAULT 0,
+      deleted_at DATETIME NULL,
       created_at DATETIME NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
@@ -447,6 +448,7 @@ async function initializeDatabase() {
   await ensureColumn("users", "preferred_contact_channel", "VARCHAR(80) NULL");
   await ensureColumn("users", "best_contact_time", "VARCHAR(120) NULL");
   await ensureColumn("users", "data_privacy_consent", "TINYINT(1) NOT NULL DEFAULT 0");
+  await ensureColumn("users", "deleted_at", "DATETIME NULL");
   await pool.query("ALTER TABLE users MODIFY COLUMN role ENUM('client','provider','admin','ops','customer_service') NOT NULL");
   await pool.query("ALTER TABLE users MODIFY COLUMN category VARCHAR(255) NULL");
   await backfillUsernames();
@@ -597,6 +599,37 @@ async function initializeDatabase() {
   await ensureColumn("push_tokens", "platform", "VARCHAR(40) NOT NULL DEFAULT 'android'");
   await ensureColumn("push_tokens", "device_id", "VARCHAR(120) NULL");
   await ensureIndex("push_tokens", "push_tokens_hash_unique", "token_hash", true);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_blocks (
+      blocker_id VARCHAR(64) NOT NULL,
+      blocked_id VARCHAR(64) NOT NULL,
+      reason TEXT NULL,
+      created_at DATETIME NOT NULL,
+      PRIMARY KEY (blocker_id, blocked_id),
+      INDEX user_blocks_blocked_idx (blocked_id),
+      CONSTRAINT user_blocks_blocker_fk FOREIGN KEY (blocker_id) REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT user_blocks_blocked_fk FOREIGN KEY (blocked_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS moderation_reports (
+      id VARCHAR(64) PRIMARY KEY,
+      reporter_id VARCHAR(64) NOT NULL,
+      reported_user_id VARCHAR(64) NULL,
+      request_id VARCHAR(64) NULL,
+      type ENUM('user','job') NOT NULL,
+      reason VARCHAR(160) NOT NULL,
+      details TEXT NULL,
+      status VARCHAR(40) NOT NULL DEFAULT 'Open',
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      INDEX moderation_reports_status_idx (status, created_at),
+      INDEX moderation_reports_reporter_idx (reporter_id, created_at),
+      CONSTRAINT moderation_reports_reporter_fk FOREIGN KEY (reporter_id) REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT moderation_reports_user_fk FOREIGN KEY (reported_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      CONSTRAINT moderation_reports_request_fk FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS request_attachments (
       id VARCHAR(64) PRIMARY KEY,
@@ -827,6 +860,7 @@ function mapUser(row, reputation = emptyReputation()) {
     dataPrivacyConsent: Boolean(row.data_privacy_consent),
     photoUrl: row.photo_file ? `/profile-media/${encodeURIComponent(row.id)}?v=${photoVersion}` : "",
     reputation: staffRole ? emptyReputation() : reputation,
+    deletedAt: row.deleted_at || null,
     createdAt: row.created_at,
   };
 }
@@ -1311,12 +1345,14 @@ async function directConversationHasMessages(leftUserId, rightUserId, requestId 
 
 async function canOpenDirectConversation(user, target, requestId = "") {
   if (!canReadDirectConversation(user, target)) return false;
+  if (await isBlockedBetween(user.id, target.id)) return false;
   if (canInitiateDirectInteraction(user, target)) return true;
   return directConversationHasMessages(user.id, target.id, requestId);
 }
 
 async function canWriteDirectConversation(user, target, requestId = "") {
   if (!canReadDirectConversation(user, target)) return false;
+  if (await isBlockedBetween(user.id, target.id)) return false;
   if (canInitiateDirectInteraction(user, target)) return true;
   return directConversationHasMessages(user.id, target.id, requestId);
 }
@@ -1476,6 +1512,35 @@ async function getState(viewer = null) {
   const [validationRows] = ["admin", "ops"].includes(viewer?.role)
     ? await pool.query("SELECT entry.*, operator.role AS operator_role FROM validation_entries AS entry LEFT JOIN users AS operator ON operator.id = entry.operator_id ORDER BY entry.created_at DESC LIMIT 200")
     : [[]];
+  const [blockRows] = viewer
+    ? await pool.query("SELECT blocker_id, blocked_id, reason, created_at FROM user_blocks WHERE blocker_id = ? ORDER BY created_at DESC", [viewer.id])
+    : [[]];
+  const [reportRows] = ["admin", "customer_service"].includes(viewer?.role)
+    ? await pool.query(`
+      SELECT report.*, reporter.name AS reporter_name, reporter.role AS reporter_role,
+        reported.name AS reported_name, reported.role AS reported_role,
+        request.category AS request_category
+      FROM moderation_reports AS report
+      JOIN users AS reporter ON reporter.id = report.reporter_id
+      LEFT JOIN users AS reported ON reported.id = report.reported_user_id
+      LEFT JOIN requests AS request ON request.id = report.request_id
+      ORDER BY report.created_at DESC
+      LIMIT 200
+    `)
+    : viewer
+      ? await pool.query(`
+        SELECT report.*, reporter.name AS reporter_name, reporter.role AS reporter_role,
+          reported.name AS reported_name, reported.role AS reported_role,
+          request.category AS request_category
+        FROM moderation_reports AS report
+        JOIN users AS reporter ON reporter.id = report.reporter_id
+        LEFT JOIN users AS reported ON reported.id = report.reported_user_id
+        LEFT JOIN requests AS request ON request.id = report.request_id
+        WHERE report.reporter_id = ?
+        ORDER BY report.created_at DESC
+        LIMIT 50
+      `, [viewer.id])
+      : [[]];
   const reputations = buildReputations(requestRows);
   const profiles = new Map(userRows.map((row) => [row.id, mapUser(row, reputations.get(row.id) || emptyReputation())]));
   if (viewer?.role === "ops") {
@@ -1485,6 +1550,8 @@ async function getState(viewer = null) {
       requests: [],
       activities: [],
       validationEntries: validationRows.map(mapValidationEntry),
+      blocks: blockRows,
+      reports: reportRows.map(mapReport),
     };
   }
 
@@ -1516,6 +1583,8 @@ async function getState(viewer = null) {
     providers: providerRows.map((row) => mapProvider(row, reputations.get(row.user_id) || emptyReputation(), profiles.get(row.user_id)?.photoUrl || "")),
     requests: requestRows.map((row) => mapRequest(row, offersByRequest.get(row.id) || [], passesByRequest.get(row.id) || [], attachmentsByRequest.get(row.id) || [], reputations, profiles)),
     activities: activityRows.map(mapActivity),
+    blocks: blockRows,
+    reports: reportRows.map(mapReport),
     ...(["admin", "ops"].includes(viewer?.role) ? { validationEntries: validationRows.map(mapValidationEntry) } : {}),
   };
 }
@@ -1809,8 +1878,35 @@ async function autoConfirmExpiredJobs() {
 }
 
 async function getUser(id) {
-  const [rows] = await pool.query("SELECT * FROM users WHERE id = ? LIMIT 1", [id]);
+  const [rows] = await pool.query("SELECT * FROM users WHERE id = ? AND deleted_at IS NULL LIMIT 1", [id]);
   return mapUser(rows[0]);
+}
+
+async function isBlockedBetween(leftUserId, rightUserId) {
+  if (!leftUserId || !rightUserId) return false;
+  const [rows] = await pool.query(
+    "SELECT blocker_id FROM user_blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1",
+    [leftUserId, rightUserId, rightUserId, leftUserId]
+  );
+  return Boolean(rows.length);
+}
+
+function mapReport(row) {
+  return {
+    id: row.id,
+    reporterId: row.reporter_id,
+    reporterName: isStaffRole(row.reporter_role) ? staffDisplayName(row.reporter_role) : row.reporter_name,
+    reportedUserId: row.reported_user_id || "",
+    reportedUserName: row.reported_user_id ? (isStaffRole(row.reported_role) ? staffDisplayName(row.reported_role) : row.reported_name) : "",
+    requestId: row.request_id || "",
+    requestCategory: row.request_category || "",
+    type: row.type,
+    reason: row.reason,
+    details: row.details || "",
+    status: row.status || "Open",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 async function addActivity(title, detail) {
@@ -2048,7 +2144,7 @@ app.post("/api/register", async (req, res) => {
 app.post("/api/login", async (req, res) => {
   const username = String(req.body?.username || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
-  const [rows] = await pool.query("SELECT * FROM users WHERE username = ? LIMIT 1", [username]);
+  const [rows] = await pool.query("SELECT * FROM users WHERE username = ? AND deleted_at IS NULL LIMIT 1", [username]);
   const user = mapUser(rows[0]);
   if (!user || !verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Invalid username or password" });
   res.json({ user: publicUser(user), state: await getStateFor(user) });
@@ -2111,6 +2207,93 @@ app.post("/api/profile", requireUser, async (req, res) => {
     console.error("Profile update failed:", error);
     res.status(400).json({ error: error.message || "Profile update failed" });
   }
+});
+
+app.delete("/api/account", requireUser, async (req, res) => {
+  if (isStaffRole(req.user.role)) return res.status(403).json({ error: "Staff accounts must be removed by another administrator" });
+  const confirmation = String(req.body?.confirmation || "").trim().toUpperCase();
+  if (confirmation !== "DELETE") return res.status(400).json({ error: "Type DELETE to confirm account deletion" });
+  const timestamp = nowMysql();
+  const deletedName = `Deleted ${req.user.role}`;
+  await pool.query("DELETE FROM push_tokens WHERE user_id = ?", [req.user.id]);
+  await pool.query("DELETE FROM user_blocks WHERE blocker_id = ? OR blocked_id = ?", [req.user.id, req.user.id]);
+  await pool.query("UPDATE providers SET status = 'Deleted', updated_at = ? WHERE user_id = ?", [timestamp, req.user.id]);
+  await pool.query(
+    `UPDATE users
+     SET name = ?, username = ?, email = NULL, password_hash = ?, area = 'Deleted account', category = NULL,
+       contact_number = NULL, messenger_link = NULL, preferred_contact_channel = NULL, best_contact_time = NULL,
+       data_privacy_consent = 0, photo_file = NULL, photo_mime_type = NULL, deleted_at = ?
+     WHERE id = ?`,
+    [deletedName, `deleted_${req.user.id.slice(0, 16)}`, passwordHash(crypto.randomBytes(24).toString("hex")), timestamp, req.user.id]
+  );
+  await addActivity("Account deleted", `${deletedName} removed their account`);
+  broadcast("kaila.state.updated", await getState());
+  res.json({ ok: true });
+});
+
+app.post("/api/reports/user", requireUser, async (req, res) => {
+  const reportedUserId = String(req.body?.reportedUserId || "").trim();
+  const reason = String(req.body?.reason || "").trim().slice(0, 160);
+  const details = String(req.body?.details || "").trim().slice(0, 2000);
+  const target = await getUser(reportedUserId);
+  if (!target) return res.status(404).json({ error: "User not found" });
+  if (target.id === req.user.id) return res.status(400).json({ error: "You cannot report your own account" });
+  if (!reason) return res.status(400).json({ error: "Report reason is required" });
+  const timestamp = nowMysql();
+  const reportId = createId();
+  await pool.query(
+    "INSERT INTO moderation_reports (id, reporter_id, reported_user_id, request_id, type, reason, details, status, created_at, updated_at) VALUES (?, ?, ?, NULL, 'user', ?, ?, 'Open', ?, ?)",
+    [reportId, req.user.id, target.id, reason, details, timestamp, timestamp]
+  );
+  await addActivity("User reported", `${displayNameForUser(req.user)} reported ${displayNameForUser(target)}: ${reason}`);
+  const state = await getStateFor(req.user);
+  broadcast("kaila.moderation.reported", { reportId, type: "user" });
+  res.status(201).json({ state });
+});
+
+app.post("/api/reports/job", requireUser, async (req, res) => {
+  const requestId = String(req.body?.requestId || "").trim();
+  const reason = String(req.body?.reason || "").trim().slice(0, 160);
+  const details = String(req.body?.details || "").trim().slice(0, 2000);
+  const [rows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
+  if (!rows.length) return res.status(404).json({ error: "Request not found" });
+  const request = rows[0];
+  const involved = request.client_id === req.user.id || request.accepted_provider_id === req.user.id || ["admin", "customer_service"].includes(req.user.role);
+  const matchingProvider = req.user.role === "provider" && hasCategory(req.user.category, request.category);
+  if (!involved && !matchingProvider) return res.status(403).json({ error: "You cannot report this job" });
+  if (!reason) return res.status(400).json({ error: "Report reason is required" });
+  const timestamp = nowMysql();
+  const reportId = createId();
+  await pool.query(
+    "INSERT INTO moderation_reports (id, reporter_id, reported_user_id, request_id, type, reason, details, status, created_at, updated_at) VALUES (?, ?, NULL, ?, 'job', ?, ?, 'Open', ?, ?)",
+    [reportId, req.user.id, request.id, reason, details, timestamp, timestamp]
+  );
+  await addActivity("Job reported", `${displayNameForUser(req.user)} reported ${request.category}: ${reason}`);
+  const state = await getStateFor(req.user);
+  broadcast("kaila.moderation.reported", { reportId, type: "job", requestId: request.id });
+  res.status(201).json({ state });
+});
+
+app.post("/api/blocks/:userId", requireUser, async (req, res) => {
+  const target = await getUser(req.params.userId);
+  if (!target) return res.status(404).json({ error: "User not found" });
+  if (target.id === req.user.id) return res.status(400).json({ error: "You cannot block your own account" });
+  if (isStaffRole(target.role)) return res.status(400).json({ error: "Official KAILA support accounts cannot be blocked" });
+  const reason = String(req.body?.reason || "").trim().slice(0, 1000);
+  const timestamp = nowMysql();
+  await pool.query(
+    `INSERT INTO user_blocks (blocker_id, blocked_id, reason, created_at)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE reason = VALUES(reason), created_at = VALUES(created_at)`,
+    [req.user.id, target.id, reason, timestamp]
+  );
+  await addActivity("User blocked", `${displayNameForUser(req.user)} blocked ${displayNameForUser(target)}`);
+  res.json({ state: await getStateFor(req.user) });
+});
+
+app.delete("/api/blocks/:userId", requireUser, async (req, res) => {
+  await pool.query("DELETE FROM user_blocks WHERE blocker_id = ? AND blocked_id = ?", [req.user.id, req.params.userId]);
+  res.json({ state: await getStateFor(req.user) });
 });
 
 app.post("/api/providers", requireUser, async (req, res) => {
@@ -2895,6 +3078,7 @@ socketServer.on("connection", (socket) => {
         if (!target || !canInitiateDirectCall(user, target)) {
           throw new Error("Only Customer Service staff can call clients or providers");
         }
+        if (await isBlockedBetween(user.id, target.id)) throw new Error("Calls are blocked between these accounts");
         const online = Boolean(await userSocketCount(target.id));
         return acknowledge({ ok: online });
       }
@@ -2932,6 +3116,7 @@ socketServer.on("connection", (socket) => {
           if (!canInitiateDirectCall(user, target)) {
             throw new Error("Only Customer Service staff can call clients or providers");
           }
+          if (await isBlockedBetween(user.id, target.id)) throw new Error("Calls are blocked between these accounts");
           contextTitle = target.name;
           targetUserId = target.id;
         } else {
