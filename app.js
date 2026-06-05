@@ -136,7 +136,17 @@ function setupAttentionNotifications() {
     if (document.visibilityState === "visible" && state.call && ["incoming", "ringing", "connected", "reconnecting"].includes(state.call.status)) {
       requestCallWakeLock();
     }
+    if (document.visibilityState === "visible") handleAppResumed();
   });
+  window.addEventListener("focus", handleAppResumed);
+}
+
+function handleAppResumed() {
+  if (!state.session) return;
+  if (!state.socket || !state.connected) connectSocket(!state.socket);
+  else syncSocketIdentity();
+  syncUnreadNotificationSummaries();
+  syncUnreadMessageSummaries();
 }
 
 async function setupNativeNotifications() {
@@ -3069,6 +3079,7 @@ let callClockTimer = null;
 let callQualityTimer = null;
 let attentionTone = null;
 let callWakeLock = null;
+let socketDisconnectCallTimer = null;
 
 function callSupported() {
   return Boolean(window.RTCPeerConnection && navigator.mediaDevices?.getUserMedia);
@@ -3108,9 +3119,6 @@ async function startCall(requestId, withVideo = false) {
   const request = state.requests.find((item) => item.id === requestId);
   if (!request || !canViewConversation(request)) return;
   try {
-    if (!await callRecipientIsOnline(requestId, withVideo)) {
-      return notify("Audio call", "The other party is offline.", "info");
-    }
     const call = createCallState(requestId, createBrowserId(), "outgoing", conversationOtherPartyName(request), conversationOtherPartyPhoto(request), withVideo);
     state.call = call;
     renderCallPanel();
@@ -3151,9 +3159,6 @@ async function startDirectCall(userId, withVideo = false) {
   if (!state.connected || !state.socket) return notify("Audio call unavailable", "Live socket is still offline. Reload the page and try again.", "warning");
   if (state.call) return notify("Call already active", "End the current call before starting another.", "warning");
   try {
-    if (!await directCallRecipientIsOnline(userId, withVideo)) {
-      return notify("Audio call", "The other party is offline.", "info");
-    }
     const call = createCallState("", createBrowserId(), "outgoing", target.name, target.photoUrl, withVideo, { directUserId: userId });
     state.call = call;
     renderCallPanel();
@@ -3181,18 +3186,6 @@ async function startDirectCall(userId, withVideo = false) {
     endAudioCall(false);
     notify("Call failed", microphoneErrorText(error), "error");
   }
-}
-
-function callRecipientIsOnline(requestId, withVideo = false) {
-  return new Promise((resolve) => {
-    state.socket.timeout(4000).emit("kaila.call.check", { requestId, withVideo }, (error, response = {}) => resolve(!error && response.ok));
-  });
-}
-
-function directCallRecipientIsOnline(userId, withVideo = false) {
-  return new Promise((resolve) => {
-    state.socket.timeout(4000).emit("kaila.call.check", { directUserId: userId, withVideo }, (error, response = {}) => resolve(!error && response.ok));
-  });
 }
 
 function createCallState(requestId, callId, direction, otherName, otherPhotoUrl = "", withVideo = false, extra = {}) {
@@ -4635,10 +4628,15 @@ function connectSocket(force = false) {
       path: socketIoPath(socketUrl),
       transports: ["polling", "websocket"],
       timeout: 12000,
-      reconnectionAttempts: 8,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 8000,
     });
     state.socket.on("connect", () => {
       state.connected = true;
+      clearTimeout(socketDisconnectCallTimer);
+      socketDisconnectCallTimer = null;
       updateSocketStatus("connected");
       stopRealtimePolling();
       state.socket.emit("subscribe", CHANNEL);
@@ -4650,8 +4648,14 @@ function connectSocket(force = false) {
       updateSocketStatus("offline");
       startRealtimePolling();
       if (state.call) {
-        endAudioCall(false);
-        notify("Audio call", "The live connection was lost.", "warning");
+        state.call.status = "reconnecting";
+        renderCallPanel();
+        clearTimeout(socketDisconnectCallTimer);
+        socketDisconnectCallTimer = setTimeout(() => {
+          if (state.connected || !state.call) return;
+          endAudioCall(false);
+          notify("Audio call", "The live connection was lost.", "warning");
+        }, 15000);
       }
     });
     state.socket.on("connect_error", (error) => {

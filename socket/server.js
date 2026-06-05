@@ -31,6 +31,7 @@ const SOCKET_TOKEN = sanitizeToken(process.env.KAILA_SOCKET_BEARER_TOKEN || "kai
 const MESSAGE_ENCRYPTION_KEY = parseMessageEncryptionKey(process.env.KAILA_MESSAGE_ENCRYPTION_KEY);
 const AUTO_CONFIRM_HOURS = Number(process.env.KAILA_AUTO_CONFIRM_HOURS || 48);
 const RATING_WINDOW_DAYS = Number(process.env.KAILA_RATING_WINDOW_DAYS || 7);
+const CALL_DISCONNECT_GRACE_MS = Number(process.env.KAILA_CALL_DISCONNECT_GRACE_MS || 20000);
 const GROQ_API_KEY = sanitizeToken(process.env.GROQ_API_KEY || "");
 const GROQ_MODEL = sanitizeToken(process.env.GROQ_MODEL || "llama-3.1-8b-instant");
 const UPLOAD_DIR = path.resolve(__dirname, "..", "uploads");
@@ -1279,6 +1280,13 @@ async function endDisconnectedUserCalls(userId) {
     });
     activeCalls.delete(callId);
   }
+}
+
+function scheduleDisconnectedUserCallCleanup(userId) {
+  if (!userId) return;
+  setTimeout(() => endDisconnectedUserCalls(userId).catch((error) => {
+    console.error("Call disconnect cleanup failed:", error);
+  }), CALL_DISCONNECT_GRACE_MS);
 }
 
 function activeConversationUserIds(requestId) {
@@ -2613,15 +2621,6 @@ socketServer.on("connection", (socket) => {
           throw new Error("Only Customer Service staff can call clients or providers");
         }
         const online = Boolean(await userSocketCount(target.id));
-        if (!online) {
-          await recordMissedCallForBoth({
-            caller: user,
-            targetUserId: target.id,
-            directUserId: target.id,
-            callType: payload.withVideo ? "video" : "audio",
-            contextTitle: target.name,
-          });
-        }
         return acknowledge({ ok: online });
       }
       const requestId = String(payload.requestId || "");
@@ -2631,15 +2630,6 @@ socketServer.on("connection", (socket) => {
       }
       const targetUserId = otherConversationUserId(requestRows[0], user.id);
       const online = Boolean(targetUserId && await userSocketCount(targetUserId));
-      if (!online && targetUserId) {
-        await recordMissedCallForBoth({
-          caller: user,
-          targetUserId,
-          requestId,
-          callType: payload.withVideo ? "video" : "audio",
-          contextTitle: requestRows[0].category,
-        });
-      }
       acknowledge({ ok: online });
     } catch (error) {
       acknowledge({ ok: false, error: error.message || "Could not check call availability" });
@@ -2688,6 +2678,16 @@ socketServer.on("connection", (socket) => {
       if (!targetUserId) throw new Error("Call recipient not found");
       if (!await userSocketCount(targetUserId)) {
         activeCalls.delete(callId);
+        if (type === "offer") {
+          await recordMissedCallForBoth({
+            caller: user,
+            targetUserId,
+            requestId,
+            directUserId: directUserId || "",
+            callType: payload.withVideo ? "video" : "audio",
+            contextTitle,
+          });
+        }
         return acknowledge({ ok: false, code: "recipient_offline", error: "The other party is offline" });
       }
       if (type === "offer") {
@@ -2788,7 +2788,7 @@ socketServer.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     const userId = socket.data.userId;
-    setTimeout(() => endDisconnectedUserCalls(userId).catch((error) => console.error("Call disconnect cleanup failed:", error)), 0);
+    scheduleDisconnectedUserCallCleanup(userId);
   });
 });
 }
