@@ -4129,6 +4129,11 @@ async function sendCallSignal(signal, retried = false) {
       return;
     }
     if (response.ok || !state.call) return;
+    if (response.code === "call_expired") {
+      endAudioCall(false);
+      notify("Audio call", response.error || "This call already ended. Ask the caller to try again.", "warning");
+      return;
+    }
     endAudioCall(false);
     notify("Audio call", response.code === "recipient_offline" ? "The other party is offline." : response.error || "Could not reach the other party.", response.code === "recipient_offline" ? "info" : "error");
   });

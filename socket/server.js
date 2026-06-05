@@ -2922,8 +2922,10 @@ socketServer.on("connection", (socket) => {
           contextTitle = target.name;
           targetUserId = target.id;
         } else {
-          if (!activeCall?.userIds.includes(user.id) || (directUserId && !activeCall.userIds.includes(directUserId))) {
-            throw new Error("Direct call is no longer active");
+          if (!activeCall?.userIds.includes(user.id)) {
+            const staleTypes = new Set(["candidate", "video-stalled", "hangup", "reject", "busy"]);
+            if (staleTypes.has(type)) return acknowledge({ ok: true, code: "call_expired" });
+            return acknowledge({ ok: false, code: "call_expired", error: "This call already ended. Ask the caller to try again." });
           }
           targetUserId = activeCall.userIds.find((item) => item !== user.id) || "";
           const target = await getUser(targetUserId);
