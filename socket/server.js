@@ -1381,10 +1381,12 @@ function relayDirectEvent(userIds, event, payload) {
   });
 }
 
-async function endDisconnectedUserCalls(userId) {
+async function endDisconnectedUserCalls(userId, disconnectedAt = 0) {
   if (!userId || await userSocketCount(userId)) return;
   for (const [callId, call] of activeCalls) {
     if (!call.userIds.includes(userId)) continue;
+    // A stale disconnect timer must not kill a push-notified call created after the app was closed.
+    if (disconnectedAt && call.startedAtMs && call.startedAtMs > disconnectedAt) continue;
     const targetUserId = call.userIds.find((id) => id !== userId);
     if (call.answeredByUserId) {
       await recordEndedCall(call);
@@ -1416,7 +1418,8 @@ async function endDisconnectedUserCalls(userId) {
 
 function scheduleDisconnectedUserCallCleanup(userId) {
   if (!userId) return;
-  setTimeout(() => endDisconnectedUserCalls(userId).catch((error) => {
+  const disconnectedAt = Date.now();
+  setTimeout(() => endDisconnectedUserCalls(userId, disconnectedAt).catch((error) => {
     console.error("Call disconnect cleanup failed:", error);
   }), CALL_DISCONNECT_GRACE_MS);
 }
@@ -2770,6 +2773,7 @@ app.put("/api/validation/:id", requireUser, async (req, res) => {
   if (!["admin", "ops"].includes(req.user.role)) return res.status(403).json({ error: "Admin or ops only" });
   const [rows] = await pool.query("SELECT * FROM validation_entries WHERE id = ? LIMIT 1", [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: "Validation entry not found" });
+  if (rows[0].operator_id !== req.user.id) return res.status(403).json({ error: "Only the user who conducted this entry can edit it" });
   let payload;
   try {
     payload = validationPayload(req.body);
@@ -2789,9 +2793,10 @@ app.put("/api/validation/:id", requireUser, async (req, res) => {
 });
 
 app.delete("/api/validation/:id", requireUser, async (req, res) => {
-  if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+  if (!["admin", "ops"].includes(req.user.role)) return res.status(403).json({ error: "Admin or ops only" });
   const [rows] = await pool.query("SELECT * FROM validation_entries WHERE id = ? LIMIT 1", [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: "Validation entry not found" });
+  if (rows[0].operator_id !== req.user.id) return res.status(403).json({ error: "Only the user who conducted this entry can delete it" });
   const entry = mapValidationEntry(rows[0]);
   await pool.query("DELETE FROM validation_entries WHERE id = ?", [req.params.id]);
   await addActivity(entry.type === "client_survey" ? "Client survey deleted" : "Provider interview deleted", `${displayNameForUser(req.user)}: ${entry.subjectName || "Validation entry"}`);
@@ -2961,6 +2966,7 @@ socketServer.on("connection", (socket) => {
           withVideo: Boolean(payload.withVideo),
           callerName,
           userIds: [user.id, targetUserId],
+          startedAtMs: Date.now(),
           startedAt: nowMysql(),
           answeredAt: 0,
           answeredAtMysql: "",

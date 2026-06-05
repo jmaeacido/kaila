@@ -1891,11 +1891,11 @@ function validationOperatorName(entry = {}) {
 }
 
 function canEditValidationEntry(entry = {}) {
-  return Boolean(!entry.pendingSync && ["admin", "ops"].includes(state.session?.role));
+  return Boolean(["admin", "ops"].includes(state.session?.role) && entry.operatorId === state.session?.id);
 }
 
 function canDeleteValidationEntry(entry = {}) {
-  return Boolean(!entry.pendingSync && state.session?.role === "admin");
+  return canEditValidationEntry(entry);
 }
 
 function bindValidationEntryActions() {
@@ -2189,6 +2189,17 @@ function openValidationEditModal(entry) {
 }
 
 async function updateValidationEntry(entryId, payload, title) {
+  const entry = state.validationEntries.find((item) => item.id === entryId);
+  if (!canEditValidationEntry(entry)) {
+    notify("Validation update failed", "Only the user who conducted this entry can edit it.", "warning");
+    return false;
+  }
+  if (entry.pendingSync) {
+    updateQueuedValidationEntry(entryId, payload);
+    activateTab("#validation-pane");
+    notify(title, "Offline changes are stored on this device and will sync automatically when online.", "info");
+    return true;
+  }
   try {
     const response = await apiFetch(`/api/validation/${encodeURIComponent(entryId)}`, { method: "PUT", body: JSON.stringify(payload) });
     safeApplyState(response.state);
@@ -2196,15 +2207,24 @@ async function updateValidationEntry(entryId, payload, title) {
     notify(title, "Validation evidence has been updated.", "success");
     return true;
   } catch (error) {
+    if (error.offline) {
+      queueValidationUpdate(entry, payload);
+      activateTab("#validation-pane");
+      notify("Saved offline", "This edit is stored on this device and will sync automatically when online.", "info");
+      return true;
+    }
     notify("Validation update failed", error.message, "error");
     return false;
   }
 }
 
 async function deleteValidationEntry(entryId) {
-  if (state.session?.role !== "admin") return;
   const entry = state.validationEntries.find((item) => item.id === entryId);
   if (!entry) return;
+  if (!canDeleteValidationEntry(entry)) {
+    notify("Delete failed", "Only the user who conducted this entry can delete it.", "warning");
+    return;
+  }
   const result = await window.Swal.fire({
     customClass: { popup: "kaila-popup" },
     icon: "warning",
@@ -2216,12 +2236,24 @@ async function deleteValidationEntry(entryId) {
     reverseButtons: true,
   });
   if (!result.isConfirmed) return;
+  if (entry.pendingSync) {
+    queueValidationDelete(entry);
+    activateTab("#validation-pane");
+    notify("Deleted offline", "This entry was removed locally. The deletion will sync automatically when online.", "info");
+    return;
+  }
   try {
     const response = await apiFetch(`/api/validation/${encodeURIComponent(entryId)}`, { method: "DELETE" });
     safeApplyState(response.state);
     activateTab("#validation-pane");
     notify("Validation entry deleted", "The entry was removed from the Ops tracker.", "success");
   } catch (error) {
+    if (error.offline) {
+      queueValidationDelete(entry);
+      activateTab("#validation-pane");
+      notify("Deleted offline", "This deletion is stored on this device and will sync automatically when online.", "info");
+      return;
+    }
     notify("Delete failed", error.message, "error");
   }
 }
@@ -2241,7 +2273,7 @@ function cacheStateSnapshot() {
 function currentValidationQueue() {
   const queue = readJson(STORAGE.validationQueue, []);
   if (!Array.isArray(queue)) return [];
-  return queue.filter((item) => item?.payload && item?.clientId);
+  return queue.filter((item) => validationQueueOperation(item) && item?.clientId);
 }
 
 function writeValidationQueue(queue) {
@@ -2261,6 +2293,7 @@ function offlineQueueSummary() {
 
 function queueValidationEntry(payload) {
   const item = {
+    operation: "create",
     clientId: `offline-validation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     userId: state.session?.id || null,
     operatorName: displayUserName(state.session) || "KAILA Ops",
@@ -2276,29 +2309,100 @@ function queueValidationEntry(payload) {
 }
 
 function mergeQueuedValidationEntries(entries = []) {
-  const serverEntries = (entries || []).filter((entry) => !entry.pendingSync);
-  const queuedEntries = currentValidationQueue()
-    .filter((item) => !state.session?.id || item.userId === state.session.id)
-    .map(queuedValidationEntry);
+  const currentUserQueue = currentValidationQueue().filter((item) => !state.session?.id || item.userId === state.session.id);
+  const deletedIds = new Set(currentUserQueue.filter((item) => validationQueueOperation(item) === "delete").map((item) => item.entryId));
+  const updatesById = new Map(currentUserQueue.filter((item) => validationQueueOperation(item) === "update").map((item) => [item.entryId, item]));
+  const serverEntries = (entries || [])
+    .filter((entry) => !entry.pendingSync && !deletedIds.has(entry.id))
+    .map((entry) => updatesById.has(entry.id) ? queuedValidationEntry(updatesById.get(entry.id), entry) : entry);
+  const queuedEntries = currentUserQueue
+    .filter((item) => validationQueueOperation(item) === "create")
+    .map((item) => queuedValidationEntry(item));
   return [...queuedEntries, ...serverEntries];
 }
 
-function queuedValidationEntry(item) {
+function queuedValidationEntry(item, baseEntry = {}) {
   const payload = item.payload || {};
   return {
-    id: item.clientId,
-    type: payload.type,
-    operatorId: item.userId,
+    ...baseEntry,
+    id: item.entryId || item.clientId,
+    type: payload.type || baseEntry.type,
+    operatorId: item.userId || baseEntry.operatorId,
     operatorName: item.operatorName || "KAILA Ops",
-    subjectName: payload.subjectName || "Unsynced entry",
+    subjectName: payload.subjectName || baseEntry.subjectName || "Unsynced entry",
     area: payload.area || "",
     category: payload.category || "",
     decisionSignal: payload.decisionSignal || "",
     responses: payload.responses || {},
     notes: payload.notes || "",
-    createdAt: item.createdAt,
+    createdAt: baseEntry.createdAt || item.createdAt,
     pendingSync: true,
+    pendingAction: validationQueueOperation(item),
   };
+}
+
+function validationQueueOperation(item = {}) {
+  const operation = item.operation || "create";
+  if (operation === "create") return item.payload ? "create" : "";
+  if (operation === "update") return item.entryId && item.payload ? "update" : "";
+  if (operation === "delete") return item.entryId ? "delete" : "";
+  return "";
+}
+
+function refreshQueuedValidationState() {
+  state.validationEntries = mergeQueuedValidationEntries((state.validationEntries || []).filter((entry) => !entry.pendingSync));
+  renderConnectivity();
+  renderValidation();
+  renderOps();
+}
+
+function updateQueuedValidationEntry(entryId, payload) {
+  const queue = currentValidationQueue();
+  const item = queue.find((queued) => (queued.entryId || queued.clientId) === entryId);
+  if (!item) return;
+  item.payload = payload;
+  item.updatedAt = new Date().toISOString();
+  writeValidationQueue(queue);
+  refreshQueuedValidationState();
+}
+
+function queueValidationUpdate(entry, payload) {
+  const queue = currentValidationQueue();
+  const existing = queue.find((item) => item.entryId === entry.id && item.userId === state.session?.id);
+  const item = existing || {
+    operation: "update",
+    clientId: `offline-validation-update-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    entryId: entry.id,
+    userId: state.session?.id,
+    operatorName: displayUserName(state.session) || entry.operatorName || "KAILA Ops",
+    createdAt: new Date().toISOString(),
+  };
+  item.operation = "update";
+  item.payload = payload;
+  item.updatedAt = new Date().toISOString();
+  writeValidationQueue(existing ? queue : [...queue, item]);
+  refreshQueuedValidationState();
+}
+
+function queueValidationDelete(entry) {
+  let queue = currentValidationQueue();
+  const queuedCreate = queue.find((item) => validationQueueOperation(item) === "create" && item.clientId === entry.id);
+  if (queuedCreate) {
+    writeValidationQueue(queue.filter((item) => item.clientId !== entry.id));
+    refreshQueuedValidationState();
+    return;
+  }
+  queue = queue.filter((item) => !(item.entryId === entry.id && item.userId === state.session?.id));
+  queue.push({
+    operation: "delete",
+    clientId: `offline-validation-delete-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    entryId: entry.id,
+    userId: state.session?.id,
+    operatorName: displayUserName(state.session) || entry.operatorName || "KAILA Ops",
+    createdAt: new Date().toISOString(),
+  });
+  writeValidationQueue(queue);
+  refreshQueuedValidationState();
 }
 
 async function syncQueuedValidationEntries() {
@@ -2311,7 +2415,15 @@ async function syncQueuedValidationEntries() {
   let synced = 0;
   for (const item of currentUserQueue) {
     try {
-      const response = await apiFetch("/api/validation", { method: "POST", body: JSON.stringify(item.payload) });
+      const operation = validationQueueOperation(item);
+      let response;
+      if (operation === "update") {
+        response = await apiFetch(`/api/validation/${encodeURIComponent(item.entryId)}`, { method: "PUT", body: JSON.stringify(item.payload) });
+      } else if (operation === "delete") {
+        response = await apiFetch(`/api/validation/${encodeURIComponent(item.entryId)}`, { method: "DELETE" });
+      } else {
+        response = await apiFetch("/api/validation", { method: "POST", body: JSON.stringify(item.payload) });
+      }
       queue = queue.filter((queued) => queued.clientId !== item.clientId);
       writeValidationQueue(queue);
       synced += 1;
