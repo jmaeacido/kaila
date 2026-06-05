@@ -5152,8 +5152,8 @@ async function handleOfferSaved({ requestId, offer } = {}) {
   queueAttentionModal({
     customClass: { popup: "kaila-popup attention-request-popup" },
     title: isCounter ? "New counter-offer" : "New offer received",
-    confirmButtonText: "View request",
-    onConfirm: () => focusRequestCard(request.id),
+    confirmButtonText: "Review offer",
+    onConfirm: () => focusRequestCard(request.id, enrichedOffer.id || offer.id),
     didOpen: () => {
       state.activeOfferPromptRequestId = request.id;
     },
@@ -5189,7 +5189,7 @@ function compactOfferAttentionOptions(request, isCounter = false) {
   return {
     customClass: { popup: "kaila-popup attention-request-popup compact-offers-popup" },
     title: isCounter ? "Counter-offers updated" : "Offers received",
-    confirmButtonText: "View request",
+    confirmButtonText: "Review offers",
     onConfirm: () => focusRequestCard(request.id),
     didOpen: () => {
       state.activeOfferPromptRequestId = request.id;
@@ -5208,7 +5208,7 @@ function updateActiveOfferPrompt(request, isCounter = false) {
   window.Swal.update({
     title: isCounter ? "Counter-offers updated" : "Offers received",
     html: renderCompactOffersPrompt(request),
-    confirmButtonText: "View request",
+    confirmButtonText: "Review offers",
     showDenyButton: false,
     showCancelButton: false,
   });
