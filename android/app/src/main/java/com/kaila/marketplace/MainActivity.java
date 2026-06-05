@@ -7,12 +7,17 @@ import android.view.View;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 
+import androidx.core.app.NotificationManagerCompat;
+
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+    private static final int INCOMING_CALL_NOTIFICATION_ID = 7001;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(KailaNativePlugin.class);
+        clearCallNotificationForAction(getIntent());
         KailaNativePlugin.captureLaunchIntent(getIntent());
         super.onCreate(savedInstanceState);
 
@@ -31,6 +36,14 @@ public class MainActivity extends BridgeActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        clearCallNotificationForAction(intent);
         KailaNativePlugin.captureLaunchIntent(intent);
+    }
+
+    private void clearCallNotificationForAction(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getStringExtra("kailaAction");
+        if (!"answer-call".equals(action) && !"decline-call".equals(action) && !"open-call".equals(action)) return;
+        NotificationManagerCompat.from(this).cancel(INCOMING_CALL_NOTIFICATION_ID);
     }
 }

@@ -23,6 +23,7 @@ import java.util.Map;
 
 public class KailaMessagingService extends FirebaseMessagingService {
     private static final String CALL_CHANNEL_ID = "kaila-native-calls";
+    private static final String JOB_CHANNEL_ID = "kaila-job-alerts";
     private static final String ALERT_CHANNEL_ID = "kaila-push-alerts";
     private static final int CALL_NOTIFICATION_ID = 7001;
 
@@ -38,8 +39,11 @@ public class KailaMessagingService extends FirebaseMessagingService {
     private void showIncomingCall(Map<String, String> data) {
         String callerName = value(data.get("callerName"), "KAILA contact");
         String callType = value(data.get("callType"), "audio");
+        String callId = data.get("callId");
         boolean ordinary = isPhoneAlreadyInCall();
-        PendingIntent contentIntent = appIntent("open-call", data.get("callId"), 7101);
+        PendingIntent contentIntent = appIntent("open-call", callId, 7101);
+        PendingIntent answerIntent = appIntent("answer-call", callId, 7102);
+        PendingIntent declineIntent = appIntent("decline-call", callId, 7103);
         Person caller = new Person.Builder().setName(callerName).setImportant(true).build();
         String title = "Incoming KAILA " + ("video".equals(callType) ? "video call" : "audio call");
 
@@ -47,7 +51,7 @@ public class KailaMessagingService extends FirebaseMessagingService {
             .setSmallIcon(R.drawable.kaila_notification_icon)
             .setContentTitle(title)
             .setContentText(callerName + " is calling.")
-            .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, contentIntent, contentIntent))
+            .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, declineIntent, answerIntent))
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -62,23 +66,26 @@ public class KailaMessagingService extends FirebaseMessagingService {
     }
 
     private void showAlert(Map<String, String> data) {
-        String title = value(data.get("title"), "KAILA");
+        String type = value(data.get("type"), "");
+        boolean jobRequest = "request".equals(type);
+        String title = value(data.get("title"), jobRequest ? "New KAILA job request" : "KAILA");
         String body = value(data.get("body"), "New KAILA update");
-        PendingIntent contentIntent = appIntent(value(data.get("action"), "open-notifications"), data.get("requestId"), 7201);
+        PendingIntent contentIntent = appIntent(jobRequest ? "job-request" : value(data.get("action"), "open-notifications"), data.get("requestId"), 7201);
         int notificationId = Math.abs(value(data.get("messageId"), title + body).hashCode());
 
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, jobRequest ? JOB_CHANNEL_ID : ALERT_CHANNEL_ID)
             .setSmallIcon(R.drawable.kaila_notification_icon)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setCategory(jobRequest ? NotificationCompat.CATEGORY_STATUS : NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(jobRequest ? NotificationCompat.PRIORITY_MAX : NotificationCompat.PRIORITY_HIGH)
+            .setVisibility(jobRequest ? NotificationCompat.VISIBILITY_PUBLIC : NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true)
             .setContentIntent(contentIntent)
             .setColor(ContextCompat.getColor(this, R.color.ic_launcher_background))
-            .setVibrate(new long[] { 0, 280, 90, 280 });
+            .setVibrate(jobRequest ? new long[] { 0, 500, 120, 500, 120, 700 } : new long[] { 0, 280, 90, 280 })
+            .addAction(R.drawable.kaila_notification_icon, jobRequest ? "View request" : "Open KAILA", contentIntent);
 
         NotificationManagerCompat.from(this).notify(notificationId, builder.build());
     }
@@ -89,6 +96,7 @@ public class KailaMessagingService extends FirebaseMessagingService {
         intent.addCategory(Intent.CATEGORY_LAUNCHER);
         intent.putExtra("kailaAction", action);
         intent.putExtra("kailaId", id);
+        intent.putExtra("kailaCallId", id);
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         return PendingIntent.getActivity(this, requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT | pendingIntentImmutableFlag());
     }
@@ -110,6 +118,15 @@ public class KailaMessagingService extends FirebaseMessagingService {
             NotificationChannel channel = new NotificationChannel(ALERT_CHANNEL_ID, "KAILA push alerts", NotificationManager.IMPORTANCE_HIGH);
             channel.setDescription("Messages, requests, offers, and job updates.");
             channel.enableVibration(true);
+            channel.setSound(rawSound("kaila_notification"), new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
+            manager.createNotificationChannel(channel);
+        }
+        if (manager.getNotificationChannel(JOB_CHANNEL_ID) == null) {
+            NotificationChannel channel = new NotificationChannel(JOB_CHANNEL_ID, "KAILA job requests", NotificationManager.IMPORTANCE_HIGH);
+            channel.setDescription("Urgent provider alerts for new matching job requests.");
+            channel.enableVibration(true);
+            channel.setVibrationPattern(new long[] { 0, 500, 120, 500, 120, 700 });
+            channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
             channel.setSound(rawSound("kaila_notification"), new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
             manager.createNotificationChannel(channel);
         }

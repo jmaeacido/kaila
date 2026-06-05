@@ -58,6 +58,8 @@ const state = {
   socket: null,
   connected: false,
   socketIdentityUserId: "",
+  pendingNativeCallAction: "",
+  pendingNativeCallId: "",
   userInteracted: false,
   attentionQueue: [],
   unreadNotifications: 0,
@@ -258,6 +260,10 @@ function isNativeApp() {
 }
 
 function handleAttentionAction(action) {
+  if (["answer-call", "decline-call"].includes(action)) {
+    handleNativeCallAction({ action });
+    return;
+  }
   if (action === "open-call" && state.call?.status === "incoming") {
     route("app");
     setCallMinimized(false);
@@ -275,7 +281,7 @@ async function consumeNativeLaunchAction() {
   if (!bridge?.consumeLaunchAction) return;
   try {
     const payload = await bridge.consumeLaunchAction();
-    if (payload?.action) handlePushAction({ action: payload.action, id: payload.id || "" });
+    if (payload?.action) handlePushAction({ action: payload.action, callId: payload.id || "", id: payload.id || "" });
   } catch (error) {
     console.warn("KAILA native launch action failed:", error);
   }
@@ -346,18 +352,36 @@ function handlePushNotification(notification = {}) {
 
 function handlePushAction(data = {}) {
   const action = data.action || data.type;
+  if (["answer-call", "decline-call"].includes(action)) {
+    handleNativeCallAction(data);
+    return;
+  }
   if (action === "call" || action === "open-call") {
+    state.pendingNativeCallId = data.callId || data.id || "";
     route("app");
     setCallMinimized(false);
     return;
   }
   if (action === "message" || action === "direct-message") openMessageBell();
-  else if (action === "request" || action === "offer" || action === "job") {
+  else if (action === "request" || action === "job-request" || action === "offer" || action === "job") {
     route("app");
     activateTab("#requests-pane");
+    if (data.requestId || data.id) setTimeout(() => focusRequestCard(data.requestId || data.id), 500);
   } else {
     openNotificationBell();
   }
+}
+
+function handleNativeCallAction(data = {}) {
+  const action = data.action || "";
+  const callId = data.callId || data.id || "";
+  state.pendingNativeCallAction = action;
+  state.pendingNativeCallId = callId;
+  route("app");
+  setCallMinimized(false);
+  if (!state.call || (callId && state.call.callId !== callId)) return;
+  if (action === "answer-call") acceptAudioCall();
+  if (action === "decline-call") declineAudioCall();
 }
 
 function registerServiceWorker() {
@@ -3825,6 +3849,9 @@ async function acceptAudioCall() {
   const call = state.call;
   if (!call || call.status !== "incoming") return;
   try {
+    clearNativeCallNotification(call.callId);
+    state.pendingNativeCallAction = "";
+    state.pendingNativeCallId = "";
     stopCallTone();
     call.status = "connecting";
     renderCallPanel();
@@ -3855,6 +3882,9 @@ async function acceptAudioCall() {
 
 function declineAudioCall() {
   if (!state.call) return;
+  clearNativeCallNotification(state.call.callId);
+  state.pendingNativeCallAction = "";
+  state.pendingNativeCallId = "";
   emitCallSignal("reject");
   endAudioCall(false);
 }
@@ -4120,6 +4150,14 @@ async function handleCallSignal(signal = {}) {
       notify("Audio call unavailable", audioCallUnavailableMessage(), "warning");
       return;
     }
+    if (state.call?.callId === signal.callId) {
+      if (signal.description && !state.call.remoteDescription) state.call.remoteDescription = signal.description;
+      route("app");
+      setCallMinimized(false);
+      if (state.pendingNativeCallAction === "answer-call") acceptAudioCall();
+      if (state.pendingNativeCallAction === "decline-call") declineAudioCall();
+      return;
+    }
     if (state.call) {
       state.socket?.emit("kaila.call.signal", { requestId: signal.requestId, directUserId: signal.directUserId || signal.senderId, callId: signal.callId, type: "busy" });
       return;
@@ -4136,6 +4174,10 @@ async function handleCallSignal(signal = {}) {
     requestCallWakeLock();
     startCallTone("incoming");
     notifyIncomingCall(senderName, state.call.requestedVideo);
+    if (!state.pendingNativeCallId || state.pendingNativeCallId === signal.callId) {
+      if (state.pendingNativeCallAction === "answer-call") acceptAudioCall();
+      if (state.pendingNativeCallAction === "decline-call") declineAudioCall();
+    }
     return;
   }
   if (!state.call || signal.callId !== state.call.callId) return;

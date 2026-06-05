@@ -52,19 +52,9 @@ public class KailaNativePlugin extends Plugin {
             return;
         }
 
-        Intent intent = new Intent(getContext(), MainActivity.class);
-        intent.setAction(Intent.ACTION_MAIN);
-        intent.addCategory(Intent.CATEGORY_LAUNCHER);
-        intent.putExtra("kailaAction", "open-call");
-        intent.putExtra("kailaCallId", callId);
-        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-
-        PendingIntent contentIntent = PendingIntent.getActivity(
-            getContext(),
-            7002,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT | pendingIntentImmutableFlag()
-        );
+        PendingIntent contentIntent = appIntent("open-call", callId, 7002);
+        PendingIntent answerIntent = appIntent("answer-call", callId, 7003);
+        PendingIntent declineIntent = appIntent("decline-call", callId, 7004);
 
         Person caller = new Person.Builder()
             .setName(callerName)
@@ -78,7 +68,7 @@ public class KailaNativePlugin extends Plugin {
             .setSmallIcon(R.drawable.kaila_notification_icon)
             .setContentTitle(title)
             .setContentText(text)
-            .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, contentIntent, contentIntent))
+            .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, declineIntent, answerIntent))
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -170,11 +160,26 @@ public class KailaNativePlugin extends Plugin {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0;
     }
 
+    private PendingIntent appIntent(String action, String callId, int requestCode) {
+        Intent intent = new Intent(getContext(), MainActivity.class);
+        intent.setAction(Intent.ACTION_MAIN);
+        intent.addCategory(Intent.CATEGORY_LAUNCHER);
+        intent.putExtra("kailaAction", action);
+        intent.putExtra("kailaCallId", callId);
+        intent.putExtra("kailaId", callId);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        return PendingIntent.getActivity(getContext(), requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT | pendingIntentImmutableFlag());
+    }
+
     static void captureLaunchIntent(Intent intent) {
         if (intent == null) return;
         String action = value(intent.getStringExtra("kailaAction"), "");
         String id = value(intent.getStringExtra("kailaCallId"), value(intent.getStringExtra("kailaId"), ""));
         if (action.isEmpty() && id.isEmpty()) return;
+        if ("answer-call".equals(action) || "decline-call".equals(action)) {
+            // Remove the native ringing notification immediately; the web call
+            // surface will finish answer/reject once the WebView is active.
+        }
         pendingLaunchAction = action;
         pendingLaunchId = id;
         pendingLaunchAt = System.currentTimeMillis();

@@ -2205,9 +2205,9 @@ app.post("/api/requests", requireUser, async (req, res) => {
   broadcast("kaila.request.created", { request });
   pushNotification(await providerUserIdsForRequestCategory(request.category), {
     type: "request",
-    title: "New KAILA request",
-    body: `${request.category} in ${request.area}`,
-    data: { requestId: request.id, category: request.category },
+    title: "New KAILA job request",
+    body: `${request.category} in ${request.area}${request.urgency ? ` - ${request.urgency}` : ""}`,
+    data: { action: "job-request", requestId: request.id, category: request.category, urgency: request.urgency },
   }).catch((error) => console.warn("Request push failed:", error.message));
   res.status(201).json({ request, state: await getStateFor(req.user) });
 });
