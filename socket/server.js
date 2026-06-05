@@ -369,7 +369,32 @@ function mysqlDateTime(date) {
 function publicUser(user) {
   if (!user) return null;
   const { password_hash, password, email, ...safe } = user;
-  return safe;
+  return maskStaffUser(safe);
+}
+
+function isStaffRole(role) {
+  return ["admin", "ops", "customer_service"].includes(role);
+}
+
+function staffDisplayName(role) {
+  if (role === "admin") return "KAILA Admin";
+  if (role === "ops") return "KAILA Ops";
+  if (role === "customer_service") return "KAILA Customer Service";
+  return "";
+}
+
+function maskStaffUser(user = {}) {
+  if (!isStaffRole(user.role)) return user;
+  return {
+    ...user,
+    name: staffDisplayName(user.role) || "KAILA Staff",
+    contactNumber: "",
+    messengerLink: "",
+    preferredContactChannel: "",
+    bestContactTime: "",
+    photoUrl: user.role === "customer_service" ? user.photoUrl : "",
+    reputation: emptyReputation(),
+  };
 }
 
 function decodeProfilePhoto(photo) {
@@ -785,10 +810,10 @@ function emptyReputation() {
 function mapUser(row, reputation = emptyReputation()) {
   if (!row) return null;
   const photoVersion = row.photo_file ? encodeURIComponent(row.photo_file) : "";
-  const staffRole = ["admin", "ops", "customer_service"].includes(row.role);
+  const staffRole = isStaffRole(row.role);
   return {
     id: row.id,
-    name: row.role === "admin" ? "Admin" : row.name,
+    name: staffRole ? staffDisplayName(row.role) : row.name,
     username: row.username,
     email: row.email,
     password_hash: row.password_hash,
@@ -807,8 +832,7 @@ function mapUser(row, reputation = emptyReputation()) {
 }
 
 function displayNameForUser(user = {}) {
-  if (user.role === "admin") return "Admin";
-  if (user.role === "customer_service") return "KAILA Customer Service";
+  if (isStaffRole(user.role)) return staffDisplayName(user.role);
   return user.name || "KAILA user";
 }
 
@@ -1133,7 +1157,7 @@ function mapValidationEntry(row) {
     id: row.id,
     type: row.type,
     operatorId: row.operator_id,
-    operatorName: row.operator_name,
+    operatorName: isStaffRole(row.operator_role) ? staffDisplayName(row.operator_role) : row.operator_name,
     subjectName: row.subject_name || "",
     area: row.area || "",
     category: row.category || "",
@@ -1171,10 +1195,11 @@ function validationPayload(input = {}) {
 }
 
 function mapMessage(row, reactions = []) {
+  const senderName = isStaffRole(row.sender_role) ? staffDisplayName(row.sender_role) : row.sender_name;
   return {
     id: row.id,
     senderId: row.sender_id,
-    senderName: row.sender_name,
+    senderName,
     detail: decryptMessage(row.detail, row.id),
     createdAt: row.created_at,
     kind: row.kind || "text",
@@ -1184,12 +1209,13 @@ function mapMessage(row, reactions = []) {
 }
 
 function mapDirectMessage(row) {
+  const senderName = isStaffRole(row.sender_role) ? staffDisplayName(row.sender_role) : row.sender_name;
   return {
     id: row.id,
     senderId: row.sender_id,
     recipientId: row.recipient_id,
     requestId: row.request_id || "",
-    senderName: row.sender_name,
+    senderName,
     detail: decryptMessage(row.detail, row.id),
     createdAt: row.created_at,
     kind: row.kind || "text",
@@ -1247,7 +1273,7 @@ function mapMissedCall(row) {
   return {
     id: row.id,
     callerId: row.caller_id,
-    callerName: row.caller_name,
+    callerName: isStaffRole(row.caller_role) ? staffDisplayName(row.caller_role) : row.caller_name,
     recipientId: row.recipient_id,
     requestId: row.request_id || "",
     directUserId: row.direct_user_id || "",
@@ -1298,6 +1324,7 @@ async function canWriteDirectConversation(user, target, requestId = "") {
 function canInitiateDirectCall(user, target) {
   if (!user || !target || user.id === target.id) return false;
   if (user.role === "customer_service") return ["client", "provider"].includes(target.role);
+  if (target.role === "customer_service") return ["client", "provider"].includes(user.role);
   if (user.role === "ops") return target.role === "admin";
   return user.role === "admin" && ["admin", "ops", "customer_service"].includes(target.role);
 }
@@ -1444,7 +1471,7 @@ async function getState(viewer = null) {
   const [passRows] = await pool.query("SELECT * FROM request_passes ORDER BY created_at ASC");
   const [activityRows] = await pool.query("SELECT * FROM activities ORDER BY created_at DESC LIMIT 80");
   const [validationRows] = ["admin", "ops"].includes(viewer?.role)
-    ? await pool.query("SELECT * FROM validation_entries ORDER BY created_at DESC LIMIT 200")
+    ? await pool.query("SELECT entry.*, operator.role AS operator_role FROM validation_entries AS entry LEFT JOIN users AS operator ON operator.id = entry.operator_id ORDER BY entry.created_at DESC LIMIT 200")
     : [[]];
   const reputations = buildReputations(requestRows);
   const profiles = new Map(userRows.map((row) => [row.id, mapUser(row, reputations.get(row.id) || emptyReputation())]));
@@ -1498,8 +1525,9 @@ async function messageSummaryFor(user) {
   if (!user) return { jobMessages: [], directMessages: [] };
   const [jobRows] = await pool.query(
     `
-      SELECT message.*, request.category
+      SELECT message.*, sender.role AS sender_role, request.category
       FROM job_messages AS message
+      JOIN users AS sender ON sender.id = message.sender_id
       JOIN requests AS request ON request.id = message.request_id
       JOIN (
         SELECT request_id, MAX(created_at) AS latest_at
@@ -1517,8 +1545,9 @@ async function messageSummaryFor(user) {
   );
   const [directRows] = await pool.query(
     `
-      SELECT message.*
+      SELECT message.*, sender.role AS sender_role
       FROM direct_messages AS message
+      JOIN users AS sender ON sender.id = message.sender_id
       JOIN (
         SELECT sender_id, MAX(created_at) AS latest_at
         FROM direct_messages
@@ -1533,14 +1562,20 @@ async function messageSummaryFor(user) {
   );
   return {
     jobMessages: jobRows.map((row) => ({ requestId: row.request_id, title: row.category, message: mapMessage(row) })),
-    directMessages: directRows.map((row) => ({ userId: row.sender_id, title: row.sender_name, message: mapDirectMessage(row) })),
+    directMessages: directRows.map((row) => {
+      const message = mapDirectMessage(row);
+      return { userId: row.sender_id, title: message.senderName, message };
+    }),
   };
 }
 
 async function notificationSummaryFor(user) {
   if (!user || user.role === "ops") return { activities: [], missedCalls: [] };
   const [activityRows] = user.role === "admin" ? await pool.query("SELECT * FROM activities ORDER BY created_at DESC LIMIT 80") : [[]];
-  const [missedCallRows] = await pool.query("SELECT * FROM missed_calls WHERE recipient_id = ? ORDER BY created_at DESC LIMIT 30", [user.id]);
+  const [missedCallRows] = await pool.query(
+    "SELECT call_log.*, caller.role AS caller_role FROM missed_calls AS call_log JOIN users AS caller ON caller.id = call_log.caller_id WHERE call_log.recipient_id = ? ORDER BY call_log.created_at DESC LIMIT 30",
+    [user.id]
+  );
   return {
     activities: activityRows.map(mapActivity),
     missedCalls: missedCallRows.map(mapMissedCall),
@@ -1590,6 +1625,51 @@ async function recordMissedCallForBoth({ caller, targetUserId, requestId = "", d
     durationSeconds: 0,
     contextTitle,
   });
+}
+
+function scheduleCallRingExpiry(callId) {
+  setTimeout(async () => {
+    try {
+      const call = activeCalls.get(callId);
+      if (!call || call.answeredByUserId) return;
+      const caller = await getUser(call.callerId);
+      if (caller) {
+        await recordMissedCallForBoth({
+          caller,
+          targetUserId: call.targetUserId,
+          requestId: call.requestId || "",
+          directUserId: call.directUserIds?.find((id) => id !== call.callerId) || "",
+          callType: call.callType || "audio",
+          contextTitle: call.contextTitle || "",
+        });
+      }
+      relayCallSignal(call.callerId, {
+        requestId: call.requestId || "",
+        directUserId: call.directUserIds?.find((id) => id !== call.callerId) || "",
+        callId,
+        type: "offline",
+        senderId: call.targetUserId,
+        senderName: "",
+        description: null,
+        candidate: null,
+        withVideo: call.callType === "video",
+      });
+      relayCallSignal(call.targetUserId, {
+        requestId: call.requestId || "",
+        directUserId: call.directUserIds?.find((id) => id !== call.targetUserId) || "",
+        callId,
+        type: "hangup",
+        senderId: call.callerId,
+        senderName: call.callerName || "",
+        description: null,
+        candidate: null,
+        withVideo: call.callType === "video",
+      });
+      activeCalls.delete(callId);
+    } catch (error) {
+      console.error("Call ring expiry failed:", error);
+    }
+  }, CALL_RING_TIMEOUT_MS + 1000);
 }
 
 function formatCallLogDuration(durationSeconds = 0) {
@@ -2360,7 +2440,10 @@ app.get("/api/requests/:id/messages", requireUser, async (req, res) => {
   if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
   const request = requestRows[0];
   if (!canReadConversation(request, req.user)) return res.status(403).json({ error: "Conversation is only available to the confirmed job parties" });
-  const [messageRows] = await pool.query("SELECT * FROM job_messages WHERE request_id = ? ORDER BY created_at ASC", [req.params.id]);
+  const [messageRows] = await pool.query(
+    "SELECT message.*, sender.role AS sender_role FROM job_messages AS message JOIN users AS sender ON sender.id = message.sender_id WHERE message.request_id = ? ORDER BY message.created_at ASC",
+    [req.params.id]
+  );
   const messageIds = messageRows.map((row) => row.id);
   const [attachmentRows] = messageIds.length
     ? await pool.query(`SELECT * FROM job_message_attachments WHERE message_id IN (${messageIds.map(() => "?").join(",")}) ORDER BY created_at ASC`, messageIds)
@@ -2436,7 +2519,7 @@ app.post("/api/requests/:id/typing", requireUser, async (req, res) => {
   broadcast("kaila.typing.changed", {
     requestId: req.params.id,
     senderId: req.user.id,
-    senderName: req.user.name,
+    senderName: displayNameForUser(req.user),
     typing: Boolean(req.body?.typing),
   });
   res.json({ ok: true });
@@ -2484,7 +2567,7 @@ app.get("/api/direct-conversations/:userId/messages", requireUser, async (req, r
   }
   if (!await canOpenDirectConversation(req.user, target, requestId)) return res.status(403).json({ error: "Direct chat is not available for these accounts" });
   const [messageRows] = await pool.query(
-    "SELECT * FROM direct_messages WHERE ((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)) AND (request_id <=> ?) ORDER BY created_at ASC",
+    "SELECT message.*, sender.role AS sender_role FROM direct_messages AS message JOIN users AS sender ON sender.id = message.sender_id WHERE ((message.sender_id = ? AND message.recipient_id = ?) OR (message.sender_id = ? AND message.recipient_id = ?)) AND (message.request_id <=> ?) ORDER BY message.created_at ASC",
     [req.user.id, target.id, target.id, req.user.id, requestId || null]
   );
   const messageIds = messageRows.map((row) => row.id);
@@ -2572,7 +2655,7 @@ app.post("/api/activity", requireUser, async (req, res) => {
   if (req.user.role === "ops") return res.status(403).json({ error: "Ops accounts are limited to validation work" });
   const detail = String(req.body?.detail || "").trim();
   if (!detail) return res.status(400).json({ error: "Message is required" });
-  const activity = await addActivity("Team note", `${req.user.name}: ${detail}`);
+  const activity = await addActivity("Team note", `${displayNameForUser(req.user)}: ${detail}`);
   res.status(201).json({ activity, state: await getStateFor(req.user) });
 });
 
@@ -2661,14 +2744,14 @@ app.post("/api/validation", requireUser, async (req, res) => {
     id: createId(),
     ...payload,
     operatorId: req.user.id,
-    operatorName: req.user.name,
+    operatorName: displayNameForUser(req.user),
     createdAt: nowMysql(),
   };
   await pool.query(
     "INSERT INTO validation_entries (id, type, operator_id, operator_name, subject_name, area, category, decision_signal, responses, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     [entry.id, entry.type, entry.operatorId, entry.operatorName, entry.subjectName, entry.area, entry.category, entry.decisionSignal, JSON.stringify(entry.responses), entry.notes, entry.createdAt]
   );
-  await addActivity(payload.type === "client_survey" ? "Client survey recorded" : "Provider interview recorded", `${req.user.name}: ${entry.subjectName} - ${entry.decisionSignal || "No decision signal"}`);
+  await addActivity(payload.type === "client_survey" ? "Client survey recorded" : "Provider interview recorded", `${displayNameForUser(req.user)}: ${entry.subjectName} - ${entry.decisionSignal || "No decision signal"}`);
   const state = await getStateFor(req.user);
   broadcast("kaila.state.updated", await getState());
   broadcast("kaila.validation.updated", { entryId: entry.id, action: "created" });
@@ -2689,7 +2772,7 @@ app.put("/api/validation/:id", requireUser, async (req, res) => {
     "UPDATE validation_entries SET type = ?, subject_name = ?, area = ?, category = ?, decision_signal = ?, responses = ?, notes = ? WHERE id = ?",
     [payload.type, payload.subjectName, payload.area, payload.category, payload.decisionSignal, JSON.stringify(payload.responses), payload.notes, req.params.id]
   );
-  await addActivity(payload.type === "client_survey" ? "Client survey edited" : "Provider interview edited", `${req.user.name}: ${payload.subjectName} - ${payload.decisionSignal || "No decision signal"}`);
+  await addActivity(payload.type === "client_survey" ? "Client survey edited" : "Provider interview edited", `${displayNameForUser(req.user)}: ${payload.subjectName} - ${payload.decisionSignal || "No decision signal"}`);
   const [updatedRows] = await pool.query("SELECT * FROM validation_entries WHERE id = ? LIMIT 1", [req.params.id]);
   const state = await getStateFor(req.user);
   broadcast("kaila.state.updated", await getState());
@@ -2703,7 +2786,7 @@ app.delete("/api/validation/:id", requireUser, async (req, res) => {
   if (!rows.length) return res.status(404).json({ error: "Validation entry not found" });
   const entry = mapValidationEntry(rows[0]);
   await pool.query("DELETE FROM validation_entries WHERE id = ?", [req.params.id]);
-  await addActivity(entry.type === "client_survey" ? "Client survey deleted" : "Provider interview deleted", `${req.user.name}: ${entry.subjectName || "Validation entry"}`);
+  await addActivity(entry.type === "client_survey" ? "Client survey deleted" : "Provider interview deleted", `${displayNameForUser(req.user)}: ${entry.subjectName || "Validation entry"}`);
   const state = await getStateFor(req.user);
   broadcast("kaila.state.updated", await getState());
   broadcast("kaila.validation.updated", { entryId: req.params.id, action: "deleted" });
@@ -2718,7 +2801,7 @@ app.post("/api/admin/users", requireUser, async (req, res) => {
   } catch (error) {
     return res.status(error.status || 400).json({ error: error.message || "Account creation failed" });
   }
-  await addActivity("Account created", `${req.user.name} created ${user.name} as ${user.role}`);
+  await addActivity("Account created", `${displayNameForUser(req.user)} created ${displayNameForUser(user)} as ${user.role}`);
   const state = await getStateFor(req.user);
   broadcast("kaila.state.updated", state);
   res.status(201).json({ user: publicUser(user), state });
@@ -2850,7 +2933,6 @@ socketServer.on("connection", (socket) => {
         targetUserId = otherConversationUserId(requestRows[0], user.id);
       }
       if (!targetUserId) throw new Error("Call recipient not found");
-      const targetSocketCount = await userSocketCount(targetUserId);
       if (type === "offer") {
         const callerName = displayNameForUser(user);
         activeCalls.set(callId, {
@@ -2872,22 +2954,21 @@ socketServer.on("connection", (socket) => {
           declinedSocketIds: new Set(),
           busySocketIds: new Set(),
         });
-        if (!targetSocketCount) {
-          pushNotification([targetUserId], {
-            type: "call",
-            title: `Incoming KAILA ${payload.withVideo ? "video call" : "audio call"}`,
-            body: `${callerName} is calling.`,
-            ttl: CALL_RING_TIMEOUT_MS,
-            data: {
-              callId,
-              callType: payload.withVideo ? "video" : "audio",
-              callerId: user.id,
-              callerName,
-              requestId,
-              directUserId: directUserId ? user.id : "",
-            },
-          }).catch((error) => console.warn("Incoming-call push failed:", error.message));
-        }
+        scheduleCallRingExpiry(callId);
+        pushNotification([targetUserId], {
+          type: "call",
+          title: `Incoming KAILA ${payload.withVideo ? "video call" : "audio call"}`,
+          body: `${callerName} is calling.`,
+          ttl: CALL_RING_TIMEOUT_MS,
+          data: {
+            callId,
+            callType: payload.withVideo ? "video" : "audio",
+            callerId: user.id,
+            callerName,
+            requestId,
+            directUserId: directUserId ? user.id : "",
+          },
+        }).catch((error) => console.warn("Incoming-call push failed:", error.message));
       }
       const activeCall = activeCalls.get(callId);
       if (type === "hangup" && activeCall && !activeCall.answeredByUserId) {

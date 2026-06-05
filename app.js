@@ -27,6 +27,7 @@ const DECISION_SIGNAL_OPTIONS = ["Strong positive", "Positive", "Neutral", "Conc
 const SUPPORT_ROLE = "customer_service";
 const SUPPORT_LABEL = "Customer Service";
 const SUPPORT_AVATAR = "assets/kaila-customer-service-avatar.png";
+const STAFF_ROLES = ["admin", "ops", SUPPORT_ROLE];
 const APP_TIME_ZONE = "Asia/Manila";
 const NATIVE_SOCKET_URL = "https://kaila-app.duckdns.org/kaila-api";
 const CALL_RING_TIMEOUT_MS = 60000;
@@ -646,7 +647,7 @@ async function login(event) {
   safeApplyState(payload.state);
   form.reset();
   runPostAuthTasks(data.username, data.password, payload.user);
-  await successRedirect("Logged in", `Welcome back, ${state.session.name}.`);
+  await successRedirect("Logged in", `Welcome back, ${displayUserName(state.session)}.`);
 }
 
 function runPostAuthTasks(username, password, user) {
@@ -683,7 +684,7 @@ async function offerPasswordSave(username, password, user = {}) {
     const credential = new window.PasswordCredential({
       id: String(username),
       password: String(password),
-      name: user.name || String(username),
+      name: displayUserName(user) || String(username),
       iconURL: new URL("assets/android-chrome-192x192.png", window.location.href).href,
     });
     await navigator.credentials.store(credential);
@@ -747,13 +748,13 @@ function renderNav() {
   $("[data-current-user]").classList.toggle("d-none", !signedIn);
   $("[data-app-link]").classList.toggle("d-none", !signedIn);
   $$("[data-notification-bell], [data-message-bell]").forEach((button) => button.classList.toggle("d-none", !signedIn));
-  if (signedIn) $("[data-current-user]").textContent = `${state.session.name} (${state.session.role})`;
+  if (signedIn) $("[data-current-user]").textContent = `${displayUserName(state.session)} (${roleLabel(state.session.role)})`;
   const summary = $("[data-current-user-summary]");
-  if (summary && signedIn) summary.textContent = `${state.session.name} - ${state.session.area || state.session.role}`;
+  if (summary && signedIn) summary.textContent = `${displayUserName(state.session)} - ${state.session.area || roleLabel(state.session.role)}`;
   const userPhoto = $("[data-app-user-photo]");
   if (userPhoto) {
     userPhoto.src = signedIn ? resolveMediaUrl(state.session.photoUrl) : "assets/android-chrome-192x192.png";
-    userPhoto.alt = signedIn ? `${state.session.name} photo` : "";
+    userPhoto.alt = signedIn ? `${displayUserName(state.session)} photo` : "";
   }
   renderAttentionBadges();
 }
@@ -1334,8 +1335,9 @@ function userProfile(userId) {
 }
 
 function displayUserName(user = {}) {
-  if (user.role === "admin") return "Admin";
-  if (user.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session?.role)) return "KAILA Customer Service";
+  if (user.role === "admin") return "KAILA Admin";
+  if (user.role === "ops") return "KAILA Ops";
+  if (user.role === SUPPORT_ROLE) return "KAILA Customer Service";
   return user.name || "KAILA user";
 }
 
@@ -1360,16 +1362,15 @@ function canViewDirectContact(target = {}) {
 function canDirectCall(target = {}) {
   if (!state.session || !target.id || target.id === state.session.id) return false;
   if (state.session.role === SUPPORT_ROLE) return ["client", "provider"].includes(target.role);
+  if (target.role === SUPPORT_ROLE) return ["client", "provider"].includes(state.session.role);
   if (state.session.role === "ops") return target.role === "admin";
   return state.session.role === "admin" && ["admin", "ops", SUPPORT_ROLE].includes(target.role);
 }
 
 function directConversationDisplayTarget(target = {}) {
-  if (target.role === "admin") return { ...target, name: "Admin", reputation: false };
-  if (["ops", SUPPORT_ROLE].includes(target.role)) return { ...target, reputation: false };
-  if (target.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session?.role)) {
-    return { ...target, name: "KAILA Customer Service", photoUrl: SUPPORT_AVATAR, reputation: false };
-  }
+  if (target.role === "admin") return { ...target, name: "KAILA Admin", reputation: false };
+  if (target.role === "ops") return { ...target, name: "KAILA Ops", reputation: false };
+  if (target.role === SUPPORT_ROLE) return { ...target, name: "KAILA Customer Service", photoUrl: SUPPORT_AVATAR, reputation: false };
   return target;
 }
 
@@ -1672,7 +1673,7 @@ function renderOps() {
       <article class="k-card">
         <div class="d-flex justify-content-between gap-2">
           <div>
-          ${renderIdentity("Admin", user.photoUrl, "Admin account", false)}
+          ${renderIdentity(displayUserName(user), user.photoUrl, "Admin account", false)}
             <p>${escapeHtml(user.username || "No username")} ${user.contactNumber ? `- ${escapeHtml(user.contactNumber)}` : ""}</p>
           </div>
           <span class="badge text-bg-light align-self-start">Admin</span>
@@ -1706,7 +1707,7 @@ function renderOps() {
       <article class="k-card">
         <div class="d-flex justify-content-between gap-2">
           <div>
-          ${renderIdentity(user.name, user.photoUrl, "Ops account", false)}
+          ${renderIdentity(displayUserName(user), user.photoUrl, "Ops account", false)}
             <p>${escapeHtml(user.username || "No username")} ${user.contactNumber ? `- ${escapeHtml(user.contactNumber)}` : ""}</p>
           </div>
           <span class="badge text-bg-light align-self-start">${entries.length} validation entr${entries.length === 1 ? "y" : "ies"}</span>
@@ -1780,7 +1781,7 @@ function renderValidationEntry(entry) {
         </div>
       ` : ""}
       <div class="meta">
-        <span>${escapeHtml(entry.operatorName || "Ops")}</span>
+        <span>${escapeHtml(validationOperatorName(entry))}</span>
         <span>${formatDateTime(entry.createdAt)}</span>
         ${entry.pendingSync ? "<span>Pending sync</span>" : ""}
       </div>
@@ -1790,6 +1791,16 @@ function renderValidationEntry(entry) {
       </div>
     </article>
   `;
+}
+
+function validationOperatorName(entry = {}) {
+  const operator = userProfile(entry.operatorId);
+  if (STAFF_ROLES.includes(operator.role)) return displayUserName(operator);
+  const name = String(entry.operatorName || "").trim();
+  if (!name || /^(admin|ops|customer service|support)$/i.test(name)) {
+    return entry.type === "provider_interview" || entry.type === "client_survey" ? "KAILA Ops" : "KAILA Staff";
+  }
+  return name;
 }
 
 function canEditValidationEntry(entry = {}) {
@@ -2165,7 +2176,7 @@ function queueValidationEntry(payload) {
   const item = {
     clientId: `offline-validation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     userId: state.session?.id || null,
-    operatorName: state.session?.name || "Ops",
+    operatorName: displayUserName(state.session) || "KAILA Ops",
     payload,
     attempts: 0,
     createdAt: new Date().toISOString(),
@@ -2191,7 +2202,7 @@ function queuedValidationEntry(item) {
     id: item.clientId,
     type: payload.type,
     operatorId: item.userId,
-    operatorName: item.operatorName || "Ops",
+    operatorName: item.operatorName || "KAILA Ops",
     subjectName: payload.subjectName || "Unsynced entry",
     area: payload.area || "",
     category: payload.category || "",
@@ -3284,7 +3295,8 @@ async function startDirectCall(userId, withVideo = false) {
   if (!state.connected || !state.socket) return notify("Audio call unavailable", "Live socket is still offline. Reload the page and try again.", "warning");
   if (state.call) return notify("Call already active", "End the current call before starting another.", "warning");
   try {
-    const call = createCallState("", createBrowserId(), "outgoing", target.name, target.photoUrl, withVideo, { directUserId: userId });
+    const displayTarget = directConversationDisplayTarget(target);
+    const call = createCallState("", createBrowserId(), "outgoing", displayTarget.name, displayTarget.photoUrl || target.photoUrl, withVideo, { directUserId: userId });
     state.call = call;
     renderCallPanel();
     requestCallWakeLock();
@@ -5087,15 +5099,16 @@ function handleMessageSaved({ requestId, message } = {}) {
     return;
   }
   if (message.senderId === state.session.id) return;
+  const senderName = chatMessageSenderName(message);
   addUnreadMessage({
     type: "job",
     id: requestId,
     title: request.category,
-    sender: message.senderName,
+    sender: senderName,
     detail: message.detail,
     createdAt: message.createdAt,
   });
-  announceAttentionEvent("New job message", `${message.senderName}: ${message.detail}`, "message");
+  announceAttentionEvent("New job message", `${senderName}: ${message.detail}`, "message");
 
   queueAttentionModal({
     icon: "info",
@@ -5104,7 +5117,7 @@ function handleMessageSaved({ requestId, message } = {}) {
     onConfirm: () => openConversation(requestId),
     html: `
       <div class="text-start">
-        <strong>${escapeHtml(message.senderName)}</strong>
+        <strong>${escapeHtml(senderName)}</strong>
         <p class="mb-0">${escapeHtml(message.detail)}</p>
       </div>
     `,
@@ -5128,7 +5141,7 @@ function handleDirectMessageSaved({ userIds = [], message } = {}) {
     id: directConversationMessageKey(otherUserId, requestId),
     userId: otherUserId,
     requestId,
-    title: sender.role === SUPPORT_ROLE && ["client", "provider"].includes(state.session.role) ? "KAILA Customer Service" : sender.name || message.senderName || "Direct message",
+    title: displayUserName(sender) || message.senderName || "Direct message",
     sender: senderName,
     detail: message.detail,
     createdAt: message.createdAt,
@@ -5423,7 +5436,7 @@ async function syncUnreadMessageSummaries() {
         type: "job",
         id: item.requestId,
         title: item.title || "Job message",
-        sender: message.senderName,
+        sender: chatMessageSenderName(message),
         detail: message.detail,
         createdAt: message.createdAt,
       });
@@ -5434,8 +5447,8 @@ async function syncUnreadMessageSummaries() {
       addUnreadMessage({
         type: "direct",
         id: item.userId,
-        title: item.title || message.senderName || "Direct message",
-        sender: message.senderName,
+        title: item.title || chatMessageSenderName(message) || "Direct message",
+        sender: chatMessageSenderName(message),
         detail: message.detail,
         createdAt: message.createdAt,
       });
@@ -6247,7 +6260,7 @@ async function tryOfflineLogin(data = {}) {
     render();
   }
   syncQueuedValidationEntries();
-  await successRedirect("Offline login", `Welcome back, ${state.session.name}. Saved entries will sync when online.`);
+  await successRedirect("Offline login", `Welcome back, ${displayUserName(state.session)}. Saved entries will sync when online.`);
   return true;
 }
 
