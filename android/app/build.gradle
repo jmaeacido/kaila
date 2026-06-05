@@ -3,12 +3,31 @@ apply plugin: 'com.android.application'
 android {
     namespace = "com.kaila.marketplace"
     compileSdk = rootProject.ext.compileSdkVersion
+
+    def kailaVersionCode = (findProperty("KAILA_VERSION_CODE") ?: System.getenv("KAILA_VERSION_CODE") ?: "1") as Integer
+    def kailaVersionName = findProperty("KAILA_VERSION_NAME") ?: System.getenv("KAILA_VERSION_NAME") ?: "1.0.0"
+    def kailaKeystorePath = findProperty("KAILA_RELEASE_STORE_FILE") ?: System.getenv("KAILA_RELEASE_STORE_FILE")
+    def kailaKeystorePassword = findProperty("KAILA_RELEASE_STORE_PASSWORD") ?: System.getenv("KAILA_RELEASE_STORE_PASSWORD")
+    def kailaKeyAlias = findProperty("KAILA_RELEASE_KEY_ALIAS") ?: System.getenv("KAILA_RELEASE_KEY_ALIAS")
+    def kailaKeyPassword = findProperty("KAILA_RELEASE_KEY_PASSWORD") ?: System.getenv("KAILA_RELEASE_KEY_PASSWORD")
+
+    signingConfigs {
+        release {
+            if (kailaKeystorePath && kailaKeystorePassword && kailaKeyAlias && kailaKeyPassword) {
+                storeFile file(kailaKeystorePath)
+                storePassword kailaKeystorePassword
+                keyAlias kailaKeyAlias
+                keyPassword kailaKeyPassword
+            }
+        }
+    }
+
     defaultConfig {
         applicationId "com.kaila.marketplace"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode kailaVersionCode
+        versionName kailaVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -18,6 +37,9 @@ android {
     }
     buildTypes {
         release {
+            if (kailaKeystorePath && kailaKeystorePassword && kailaKeyAlias && kailaKeyPassword) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
@@ -48,6 +70,25 @@ afterEvaluate {
 
         tasks.named("assemble${capitalizedVariantName}") {
             finalizedBy copyTaskName
+        }
+
+        def bundleTaskName = "bundle${capitalizedVariantName}"
+        if (tasks.findByName(bundleTaskName) != null) {
+            def bundleOutputDir = layout.buildDirectory.dir("outputs/bundle/${variantName}")
+            def bundleAliasDir = layout.buildDirectory.dir("outputs/bundle/kaila/${variantName}")
+            def copyBundleTaskName = "copy${capitalizedVariantName}Bundle"
+
+            tasks.register(copyBundleTaskName, Copy) {
+                from(bundleOutputDir) {
+                    include "*.aab"
+                    rename { "kaila-mobile-v${variant.versionName}-${variant.versionCode}-${variant.name}.aab" }
+                }
+                into bundleAliasDir
+            }
+
+            tasks.named(bundleTaskName) {
+                finalizedBy copyBundleTaskName
+            }
         }
     }
 }

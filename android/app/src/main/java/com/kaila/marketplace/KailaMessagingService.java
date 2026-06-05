@@ -83,9 +83,9 @@ public class KailaMessagingService extends FirebaseMessagingService {
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
-            .setCategory(jobRequest ? NotificationCompat.CATEGORY_ALARM : NotificationCompat.CATEGORY_MESSAGE)
-            .setPriority(jobRequest ? NotificationCompat.PRIORITY_MAX : NotificationCompat.PRIORITY_HIGH)
-            .setVisibility(jobRequest ? NotificationCompat.VISIBILITY_PUBLIC : NotificationCompat.VISIBILITY_PRIVATE)
+            .setCategory(jobRequest ? NotificationCompat.CATEGORY_REMINDER : NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setOngoing(jobRequest)
             .setAutoCancel(!jobRequest)
             .setContentIntent(contentIntent)
@@ -94,7 +94,6 @@ public class KailaMessagingService extends FirebaseMessagingService {
             .setVibrate(jobRequest ? new long[] { 0, 700, 180, 700, 180, 900 } : new long[] { 0, 280, 90, 280 })
             .addAction(R.drawable.kaila_notification_icon, jobRequest ? "View request" : "Open KAILA", contentIntent);
 
-        if (jobRequest) builder.setFullScreenIntent(contentIntent, true);
         NotificationManagerCompat.from(this).notify(notificationId, builder.build());
     }
 
@@ -131,10 +130,10 @@ public class KailaMessagingService extends FirebaseMessagingService {
         }
         if (manager.getNotificationChannel(JOB_CHANNEL_ID) == null) {
             NotificationChannel channel = new NotificationChannel(JOB_CHANNEL_ID, "KAILA job requests", NotificationManager.IMPORTANCE_HIGH);
-            channel.setDescription("Persistent provider alerts for new matching job requests.");
+            channel.setDescription("Provider alerts for new matching job requests.");
             channel.enableVibration(true);
             channel.setVibrationPattern(new long[] { 0, 700, 180, 700, 180, 900 });
-            channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
+            channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PRIVATE);
             channel.setSound(rawSound("kaila_job_alert"), new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
             manager.createNotificationChannel(channel);
         }

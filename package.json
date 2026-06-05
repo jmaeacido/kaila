@@ -2,7 +2,8 @@
   "scripts": {
     "native:prepare": "node scripts/prepare-capacitor-web.js",
     "native:sync": "npm run native:prepare && npx cap sync",
-    "native:android": "npm run native:prepare && npx cap open android"
+    "native:android": "npm run native:prepare && npx cap open android",
+    "native:bundle": "npm run native:prepare && cd android && ./gradlew bundleRelease"
   },
   "devDependencies": {
     "playwright": "^1.60.0"

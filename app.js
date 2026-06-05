@@ -24,6 +24,7 @@ const AVAILABLE_DAY_OPTIONS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Fr
 const AVAILABLE_TIME_OPTIONS = ["Any time", "Morning", "Afternoon", "Evening", "Business hours", "After hours", "By appointment"];
 const YES_NO_MAYBE_OPTIONS = ["Yes", "No", "Maybe"];
 const DECISION_SIGNAL_OPTIONS = ["Strong positive", "Positive", "Neutral", "Concern", "Blocker"];
+const APP_ROUTES = ["landing", "register", "login", "privacy", "terms", "support", "app"];
 const SUPPORT_ROLE = "customer_service";
 const SUPPORT_LABEL = "Customer Service";
 const SUPPORT_AVATAR = "assets/kaila-customer-service-avatar.png";
@@ -118,7 +119,7 @@ async function init() {
   renderRegisterAddress();
   await loadState();
   syncQueuedValidationEntries();
-  route(state.session ? "app" : "landing");
+  route(initialRoute());
   connectSocket();
   consumeNativeLaunchAction();
 }
@@ -636,12 +637,18 @@ function safeApplyState(payload = {}) {
 }
 
 function route(name) {
+  if (!APP_ROUTES.includes(name)) name = state.session ? "app" : "landing";
   if (name === "app" && !state.session) name = "login";
   if (state.session && ["landing", "login", "register"].includes(name)) name = "app";
   $$("[data-view]").forEach((view) => view.classList.toggle("active", view.dataset.view === name));
   document.body.classList.toggle("app-mode", name === "app");
   toggleProviderCategory();
   render();
+}
+
+function initialRoute() {
+  const requested = new URLSearchParams(window.location.search).get("route") || window.location.hash.replace(/^#\/?/, "");
+  return APP_ROUTES.includes(requested) ? requested : (state.session ? "app" : "landing");
 }
 
 function toggleProviderCategory() {

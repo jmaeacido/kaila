@@ -91,6 +91,57 @@ cd android
 The generated APK is written to
 `android/app/build/outputs/apk/debug/app-debug.apk`.
 
+Build a Play Store upload bundle:
+
+```bash
+KAILA_VERSION_CODE=1 KAILA_VERSION_NAME=1.0.0 npm run native:bundle
+```
+
+For a signed release bundle, provide the keystore values through environment
+variables or matching Gradle properties before running the bundle command:
+
+```bash
+export KAILA_RELEASE_STORE_FILE=/secure/path/kaila-release.keystore
+export KAILA_RELEASE_STORE_PASSWORD=...
+export KAILA_RELEASE_KEY_ALIAS=...
+export KAILA_RELEASE_KEY_PASSWORD=...
+KAILA_VERSION_CODE=1 KAILA_VERSION_NAME=1.0.0 npm run native:bundle
+```
+
+The Play-uploadable AAB is copied to
+`android/app/build/outputs/bundle/kaila/release/`.
+
+### Play Store Readiness
+
+Repository-side release hardening:
+
+- Android package id is `com.kaila.marketplace`.
+- Target SDK is 36 and minimum SDK is 24.
+- Android backup/device-transfer extraction is disabled for app data.
+- Camera and microphone are declared as optional hardware features.
+- Full-screen notification permission is reserved for incoming KAILA audio/video
+  calls; job alerts use high-priority notifications without full-screen launch.
+- Public legal pages are available at `https://kaila-app.duckdns.org/?route=privacy`,
+  `https://kaila-app.duckdns.org/?route=terms`, and
+  `https://kaila-app.duckdns.org/?route=support`.
+
+Play Console items still required outside this repository:
+
+- Create and securely store the upload keystore, or use Play App Signing with an
+  upload key.
+- Complete the Data safety form for account details, contact details, user
+  content/messages/media, ratings, reports/blocks, device identifiers/push
+  tokens, diagnostics, camera, microphone, and notifications.
+- Add the privacy-policy URL:
+  `https://kaila-app.duckdns.org/?route=privacy`.
+- Complete content rating and target audience declarations for a local-services
+  marketplace.
+- Complete the `USE_FULL_SCREEN_INTENT` declaration for incoming audio/video
+  calls if Google Play requests it.
+- Upload required store listing assets: app icon, feature graphic, phone
+  screenshots, short description, full description, support contact, and release
+  notes.
+
 Native packaging files:
 
 - `capacitor.config.json` - Capacitor app id, app name, and bundled web path.
