@@ -933,9 +933,27 @@ async function pushNotification(userIds, { type, title, body, data = {}, ttl } =
   });
 }
 
+function clearJobRequestNotification(userIds, requestId) {
+  return pushNotification(userIds, {
+    type: "request-clear",
+    title: "",
+    body: "",
+    ttl: 10 * 60 * 1000,
+    data: {
+      action: "clear-job-request",
+      requestId,
+    },
+  });
+}
+
 async function providerUserIdsForRequestCategory(category) {
   const [rows] = await pool.query("SELECT user_id, category FROM providers WHERE status = 'Active'");
   return rows.filter((row) => hasCategory(row.category, category)).map((row) => row.user_id);
+}
+
+async function requestAlertUserIds(request = {}) {
+  const providerIds = await providerUserIdsForRequestCategory(request.category);
+  return Array.from(new Set([...providerIds, request.accepted_provider_id].filter(Boolean)));
 }
 
 function mapProvider(row, reputation = emptyReputation(), photoUrl = "") {
@@ -2512,6 +2530,7 @@ app.post("/api/requests/:id/pass", requireUser, async (req, res) => {
     : "Posted";
   await pool.query("UPDATE requests SET status = ?, updated_at = ? WHERE id = ?", [nextStatus, timestamp, req.params.id]);
   broadcast("kaila.request.passed", { requestId: req.params.id, providerId: req.user.id });
+  clearJobRequestNotification([req.user.id], req.params.id).catch((error) => console.warn("Pass clear push failed:", error.message));
   res.json({ state: await getStateFor(req.user) });
 });
 
@@ -2530,6 +2549,7 @@ app.post("/api/requests/:id/confirm", requireUser, async (req, res) => {
   await pool.query("UPDATE requests SET status = 'Accepted', accepted_provider_id = ?, confirmed_at = ?, updated_at = ? WHERE id = ?", [offerRows[0].provider_id, timestamp, timestamp, req.params.id]);
   await addActivity("Offer accepted", `${request.category} for ${request.client_name}`);
   broadcast("kaila.request.confirmed", { requestId: req.params.id, actorId: req.user.id });
+  clearJobRequestNotification(await requestAlertUserIds(request), req.params.id).catch((error) => console.warn("Confirm clear push failed:", error.message));
   pushNotification([offerRows[0].provider_id], {
     type: "job",
     title: "Offer accepted",
@@ -2676,6 +2696,9 @@ app.post("/api/requests/:id/action", requireUser, async (req, res) => {
   );
   await addActivity(activityTitle, activityDetail);
   broadcast("kaila.request.action", { requestId: req.params.id, action, status: nextStatus, actorId: req.user.id });
+  if (["Cancelled", "Accepted", "In Progress", "Provider Marked Done", "Payment Released", "Rated / Closed", "Resolved"].includes(nextStatus)) {
+    clearJobRequestNotification(await requestAlertUserIds(request), req.params.id).catch((error) => console.warn("Action clear push failed:", error.message));
+  }
   res.json({ state: await getStateFor(req.user) });
 });
 

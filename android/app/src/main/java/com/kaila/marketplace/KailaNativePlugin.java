@@ -98,6 +98,13 @@ public class KailaNativePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void cancelJobNotification(PluginCall call) {
+        String requestId = call.getString("requestId", call.getString("id", ""));
+        NotificationManagerCompat.from(getContext()).cancel(KailaMessagingService.jobNotificationId(requestId));
+        call.resolve();
+    }
+
+    @PluginMethod
     public void consumeLaunchAction(PluginCall call) {
         JSObject result = new JSObject();
         result.put("action", pendingLaunchAction);

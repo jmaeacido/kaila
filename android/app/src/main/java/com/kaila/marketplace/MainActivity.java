@@ -52,7 +52,7 @@ public class MainActivity extends BridgeActivity {
     private void clearJobNotificationForAction(Intent intent) {
         if (intent == null) return;
         String action = intent.getStringExtra("kailaAction");
-        if (!"job-request".equals(action)) return;
+        if (!"job-request".equals(action) && !"clear-job-request".equals(action)) return;
         String requestId = intent.getStringExtra("kailaId");
         NotificationManagerCompat.from(this).cancel(KailaMessagingService.jobNotificationId(requestId));
     }

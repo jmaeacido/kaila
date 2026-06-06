@@ -30,8 +30,12 @@ public class KailaMessagingService extends FirebaseMessagingService {
     @Override
     public void onMessageReceived(RemoteMessage remoteMessage) {
         Map<String, String> data = remoteMessage.getData();
-        if (!notificationsAllowed()) return;
         createChannels();
+        if ("request-clear".equals(data.get("type")) || "clear-job-request".equals(data.get("action"))) {
+            NotificationManagerCompat.from(this).cancel(jobNotificationId(value(data.get("requestId"), "")));
+            return;
+        }
+        if (!notificationsAllowed()) return;
         if ("call".equals(data.get("type"))) showIncomingCall(data);
         else showAlert(data);
     }
@@ -86,8 +90,8 @@ public class KailaMessagingService extends FirebaseMessagingService {
             .setCategory(jobRequest ? NotificationCompat.CATEGORY_REMINDER : NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setOngoing(jobRequest)
-            .setAutoCancel(!jobRequest)
+            .setOngoing(false)
+            .setAutoCancel(true)
             .setContentIntent(contentIntent)
             .setColor(ContextCompat.getColor(this, R.color.ic_launcher_background))
             .setOnlyAlertOnce(false)

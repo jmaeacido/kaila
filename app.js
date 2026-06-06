@@ -415,7 +415,9 @@ function pushDeviceId() {
 
 function handlePushNotification(notification = {}) {
   const data = notification.data || notification;
-  if (data.type === "call") {
+  if (data.type === "request-clear" || data.action === "clear-job-request") {
+    clearJobRequestNotification(data.requestId || data.id || "");
+  } else if (data.type === "call") {
     showNativeIncomingCall(data.callerName || "Your job contact", data.callType || "audio").catch(() => {});
   } else if (data.type === "message" || data.action === "message") {
     addUnreadMessage({
@@ -447,6 +449,10 @@ async function handlePushAction(data = {}) {
   const action = data.action || data.type;
   if (["answer-call", "decline-call"].includes(action)) {
     handleNativeCallAction(data);
+    return;
+  }
+  if (action === "clear-job-request" || data.type === "request-clear") {
+    clearJobRequestNotification(data.requestId || data.id || "");
     return;
   }
   if (action === "call" || action === "open-call") {
@@ -498,6 +504,7 @@ async function openRequestFromNotification(data = {}) {
   const requestId = data.requestId || data.id || "";
   route("app");
   activateTab("#requests-pane");
+  clearJobRequestNotification(requestId);
   await loadState({ silent: true });
   if (requestId && state.requests.some((request) => request.id === requestId)) {
     focusRequestCard(requestId, data.offerId || "");
@@ -1032,6 +1039,7 @@ function activateTab(target) {
   });
   rememberDashboardTab(target);
   if (target === "#activity-pane") clearUnreadNotifications();
+  if (target === "#requests-pane") clearVisibleProviderJobNotifications();
 }
 
 function rememberDashboardTab(target) {
@@ -1049,6 +1057,7 @@ function fallbackDashboardTab() {
 function focusRequestCard(requestId, offerId = "") {
   route("app");
   activateTab("#requests-pane");
+  clearJobRequestNotification(requestId);
   const focus = (attempt = 0) => {
     const card = $(`[data-request-card="${escapeCssIdentifier(requestId)}"]`);
     if (!card) {
@@ -4800,6 +4809,14 @@ function clearNativeCallNotification(callId) {
   notifications.removeDeliveredNotifications?.({ notifications: [descriptor] }).catch(() => {});
 }
 
+function clearNativeJobRequestNotification(requestId) {
+  const notifications = nativeLocalNotifications();
+  if (!notifications || !requestId) return;
+  const descriptor = { id: nativeNotificationId(`kaila-job-request-${requestId}`) };
+  notifications.cancel({ notifications: [descriptor] }).catch(() => {});
+  notifications.removeDeliveredNotifications?.({ notifications: [descriptor] }).catch(() => {});
+}
+
 function emitCallSignal(type, extra = {}) {
   if (!state.call || !state.socket) return;
   const signal = {
@@ -5733,6 +5750,10 @@ function handleRequestCreated({ request } = {}) {
   if (state.session.role === "provider" && !providerMatchesRequest(request)) return;
   upsertRequest(request);
   loadState({ silent: true }).catch(() => {});
+  if ($("#requests-pane")?.classList.contains("active")) {
+    clearJobRequestNotification(request.id);
+    return;
+  }
   const client = userProfile(request.clientId);
   announceJobRequestAttention(request);
 
@@ -6036,6 +6057,7 @@ async function handleProviderSaved({ provider } = {}) {
 }
 
 async function handleRequestConfirmed({ requestId, actorId } = {}) {
+  clearJobRequestNotification(requestId);
   await loadState();
   const request = state.requests.find((item) => item.id === requestId);
   if (!request || !isRequestParty(request) || actorId === state.session?.id) return;
@@ -6043,6 +6065,9 @@ async function handleRequestConfirmed({ requestId, actorId } = {}) {
 }
 
 async function handleRequestAction({ requestId, action, status, actorId } = {}) {
+  if (["cancel", "support_cancel_request", "auto_confirm", "rating_window_closed"].includes(action) || ["Cancelled", "Accepted", "In Progress", "Provider Marked Done", "Payment Released", "Rated / Closed", "Resolved"].includes(status)) {
+    clearJobRequestNotification(requestId);
+  }
   const existing = state.requests.find((item) => item.id === requestId);
   if (existing && status) {
     upsertRequest({ id: requestId, status });
@@ -6560,8 +6585,8 @@ async function showNativeNotification(title, options = {}) {
         smallIcon: "kaila_notification_icon",
         iconColor: "#0B4552",
         sound: urgency === "call" ? "kaila_call.wav" : isJobRequest ? "kaila_job_alert.wav" : "kaila_notification.wav",
-        ongoing: urgency === "call" || isJobRequest,
-        autoCancel: urgency !== "call" && !isJobRequest,
+        ongoing: urgency === "call",
+        autoCancel: urgency !== "call",
         group: urgency === "call" ? "kaila-calls" : isJobRequest ? "kaila-job-requests" : "kaila-alerts",
         interruptionLevel: urgency === "call" || urgency === "urgent" || isJobRequest ? "timeSensitive" : "active",
       }],
@@ -6766,12 +6791,27 @@ async function passRequest(requestId) {
 
 async function persistPassRequest(requestId) {
   try {
+    clearJobRequestNotification(requestId);
     const payload = await apiFetch(`/api/requests/${requestId}/pass`, { method: "POST", body: "{}" });
     applyServerState(payload.state);
     notify("Request passed", "", "success");
   } catch (error) {
     notify("Pass failed", error.message, "error");
   }
+}
+
+function clearJobRequestNotification(requestId = "") {
+  if (!requestId) return;
+  stopPersistentAttention();
+  nativeKailaBridge()?.cancelJobNotification?.({ requestId, id: requestId }).catch(() => {});
+  clearNativeJobRequestNotification(requestId);
+}
+
+function clearVisibleProviderJobNotifications() {
+  if (state.session?.role !== "provider") return;
+  state.requests
+    .filter((request) => ["Posted", "Offers Received", "Countered"].includes(request.status) && providerMatchesRequest(request))
+    .forEach((request) => clearJobRequestNotification(request.id));
 }
 
 function canSelectOffer(request) {
@@ -6793,7 +6833,8 @@ function canViewConversation(request) {
 function canReportJob(request = {}) {
   if (!state.session || !request.id) return false;
   if (["admin", SUPPORT_ROLE].includes(state.session.role)) return true;
-  if (request.clientId === state.session.id || request.acceptedProviderId === state.session.id) return true;
+  if (request.clientId === state.session.id) return false;
+  if (request.acceptedProviderId === state.session.id) return true;
   return state.session.role === "provider" && providerMatchesRequest(request);
 }
 
