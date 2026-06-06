@@ -95,6 +95,7 @@ const state = {
   pushServerStatus: null,
   deviceLocation: null,
   deviceLocationCheckedAt: 0,
+  navigationWatchId: null,
   routeDistanceCache: new Map(),
   validationSyncing: false,
   typingTimer: null,
@@ -1259,8 +1260,13 @@ function adminPilotMetrics() {
 }
 
 function selectedOfferAmount(request) {
-  const offer = visibleOffers(request).find((item) => item.providerId === request.acceptedProviderId) || visibleOffers(request)[0];
+  const offer = acceptedOffer(request) || visibleOffers(request)[0];
   return currencyNumber(offer?.amount || request.budget);
+}
+
+function acceptedOffer(request = {}) {
+  if (!request?.acceptedProviderId) return null;
+  return visibleOffers(request).find((item) => item.providerId === request.acceptedProviderId) || null;
 }
 
 function openAdminMetric(metric) {
@@ -1376,6 +1382,7 @@ function renderRequestCard(request) {
       ${renderAdminRequestMetricDetail(request)}
       ${renderAcceptedProviderContact(request)}
       ${renderAcceptedClientContact(request)}
+      ${renderNavigationCard(request)}
       ${renderOffers(request)}
       ${renderAttachments("Request media", request.requestAttachments, request.id)}
       ${request.proofNote ? `<div class="offer"><strong>Proof / completion note</strong><div>${escapeHtml(request.proofNote)}</div></div>` : ""}
@@ -1389,6 +1396,7 @@ function renderRequestCard(request) {
         ${canEditRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-edit-request="${request.id}"><i class="fa-solid fa-pen"></i> Edit</button>` : ""}
         ${canAcceptClientPrice(request) ? `<button class="btn btn-sm btn-outline-success" data-accept-client-price="${request.id}">Accept Client Price</button>` : ""}
         ${canUpdateRequestDistance(request) ? `<button class="btn btn-sm btn-outline-secondary" data-update-request-distance="${request.id}"><i class="fa-solid fa-location-crosshairs"></i> Distance</button>` : ""}
+        ${navigationTargetForRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-navigate-request="${request.id}"><i class="fa-solid fa-diamond-turn-right"></i> Navigate</button>` : ""}
         ${canOffer(request) ? `<button class="btn btn-sm btn-outline-primary" data-offer="${request.id}">Offer</button>` : ""}
         ${canPass(request) ? `<button class="btn btn-sm btn-outline-secondary" data-pass="${request.id}">Decline/Pass</button>` : ""}
         ${canViewConversation(request) ? `<button class="btn btn-sm btn-outline-primary" data-conversation="${request.id}">Messages</button>` : ""}
@@ -1431,6 +1439,41 @@ function renderRequestDistanceMeta(request) {
 
 function canUpdateRequestDistance(request = {}) {
   return Boolean(state.session?.role === "provider" && request.jobLocation && !state.deviceLocation);
+}
+
+function navigationTargetForRequest(request = {}) {
+  if (!state.session || !request?.id) return null;
+  if (state.session.role === "provider" && request.acceptedProviderId === state.session.id) {
+    const destination = normalizeLocation(request.jobLocation);
+    if (!destination) return null;
+    return {
+      destination,
+      label: "Job site",
+      detail: request.exactLocationNotes || request.area || "",
+    };
+  }
+  if (state.session.role === "client" && request.clientId === state.session.id) {
+    const offer = acceptedOffer(request);
+    const destination = normalizeLocation(offer?.providerLocation);
+    if (!destination) return null;
+    return {
+      destination,
+      label: offer.providerName || "Selected provider",
+      detail: "Provider location from accepted offer",
+    };
+  }
+  return null;
+}
+
+function renderNavigationCard(request = {}) {
+  const target = navigationTargetForRequest(request);
+  if (!target) return "";
+  return `
+    <div class="offer navigation-card">
+      <strong><i class="fa-solid fa-route"></i> Navigation ready</strong>
+      <div>${escapeHtml(target.label)}${target.detail ? ` - ${escapeHtml(target.detail)}` : ""}</div>
+    </div>
+  `;
 }
 
 function renderAcceptedProviderContact(request) {
@@ -1485,6 +1528,7 @@ function renderAcceptedClientContact(request) {
 function bindRequestCardActions(host) {
   $$("[data-accept-client-price]", host).forEach((button) => button.addEventListener("click", () => acceptClientPrice(button.dataset.acceptClientPrice)));
   $$("[data-update-request-distance]", host).forEach((button) => button.addEventListener("click", () => updateRequestDistance(button.dataset.updateRequestDistance)));
+  $$("[data-navigate-request]", host).forEach((button) => button.addEventListener("click", () => openRequestNavigation(button.dataset.navigateRequest)));
   $$("[data-offer]", host).forEach((button) => button.addEventListener("click", () => openOfferModal(button.dataset.offer, "offer")));
   $$("[data-pass]", host).forEach((button) => button.addEventListener("click", () => passRequest(button.dataset.pass)));
   $$("[data-edit-request]", host).forEach((button) => button.addEventListener("click", () => openRequestModal(state.requests.find((request) => request.id === button.dataset.editRequest))));
@@ -1543,6 +1587,17 @@ async function updateRequestDistance(requestId) {
   const routeDistance = await routeDistanceKm(location, request.jobLocation);
   notify("Distance updated", routeDistance !== null ? `Route ${formatDistanceKm(routeDistance)} from the job site.` : "Route distance unavailable.", routeDistance !== null ? "success" : "warning");
   renderDashboard();
+}
+
+async function openRequestNavigation(requestId) {
+  const request = state.requests.find((item) => item.id === requestId);
+  const target = navigationTargetForRequest(request);
+  if (!target) {
+    notify("Navigation unavailable", "This request does not have a saved destination yet.", "warning");
+    return;
+  }
+  const origin = state.deviceLocation || await getDeviceLocation({ maximumAge: 30000, timeout: 8000, silent: true });
+  await openNavigationModal({ request, target, origin });
 }
 
 function renderAttachments(title, attachments = [], requestId) {
@@ -6618,6 +6673,7 @@ function renderAttentionBadges() {
   const messageButton = $("[data-message-bell]");
   const notificationCount = $("[data-notification-count]");
   const messageCount = $("[data-message-count]");
+  const inboxCount = $("[data-inbox-count]");
   const signedIn = Boolean(state.session);
   const notifications = signedIn ? unreadNotificationCount() : 0;
   const messages = signedIn ? state.unreadMessages.length : 0;
@@ -6631,6 +6687,7 @@ function renderAttentionBadges() {
   }
   setBellCount(notificationCount, notifications);
   setBellCount(messageCount, messages);
+  setBellCount(inboxCount, messages);
 }
 
 function setBellCount(element, count) {
@@ -6680,6 +6737,7 @@ function addUnreadMessage(message) {
   ].slice(0, 20);
   persistAttentionBadges();
   renderAttentionBadges();
+  renderInbox();
 }
 
 function clearUnreadMessage(type, id) {
@@ -6689,6 +6747,7 @@ function clearUnreadMessage(type, id) {
   state.unreadMessages = nextMessages;
   persistAttentionBadges();
   renderAttentionBadges();
+  renderInbox();
 }
 
 function clearUnreadMessages() {
@@ -6697,6 +6756,7 @@ function clearUnreadMessages() {
   state.unreadMessages = [];
   persistAttentionBadges();
   renderAttentionBadges();
+  renderInbox();
 }
 
 async function syncUnreadNotificationSummaries() {
@@ -7366,6 +7426,227 @@ async function fetchApiRouteDistanceKm(from, to) {
   const value = Number(payload.distanceKm);
   if (!Number.isFinite(value)) throw new Error("Route distance unavailable");
   return value;
+}
+
+async function fetchRouteGeometry(from, to) {
+  const start = normalizeLocation(from);
+  const end = normalizeLocation(to);
+  if (!start || !end) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 11000);
+  try {
+    const base = ROUTE_DISTANCE_DIRECT_URL.replace(/\/$/, "");
+    const response = await fetch(`${base}/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&alternatives=false&steps=true&geometries=geojson`, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.code !== "Ok" || !payload.routes?.length) throw new Error(payload.message || "Route unavailable");
+    const route = payload.routes[0];
+    const coordinates = Array.isArray(route.geometry?.coordinates)
+      ? route.geometry.coordinates.map(([lng, lat]) => normalizeLocation({ lat, lng })).filter(Boolean)
+      : [];
+    return {
+      distanceKm: Math.round((Number(route.distance) || 0) / 100) / 10,
+      durationMinutes: Math.max(1, Math.round((Number(route.duration) || 0) / 60)),
+      coordinates,
+      steps: (route.legs || []).flatMap((leg) => leg.steps || []).slice(0, 8).map((step) => ({
+        name: step.name || "",
+        instruction: routeStepInstruction(step),
+        distanceKm: Math.round((Number(step.distance) || 0) / 100) / 10,
+      })),
+    };
+  } catch (error) {
+    console.warn("KAILA route geometry failed:", error);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function routeStepInstruction(step = {}) {
+  const modifier = String(step.maneuver?.modifier || "").replace(/_/g, " ");
+  const type = String(step.maneuver?.type || "").replace(/_/g, " ");
+  const road = step.name ? ` onto ${step.name}` : "";
+  if (type === "depart") return `Start${road}`;
+  if (type === "arrive") return "Arrive at destination";
+  if (type === "turn" && modifier) return `Turn ${modifier}${road}`;
+  if (type === "new name") return `Continue${road}`;
+  if (type === "roundabout") return `Enter roundabout${road}`;
+  if (type) return `${capitalize(type)}${modifier ? ` ${modifier}` : ""}${road}`;
+  return road ? `Continue${road}` : "Continue";
+}
+
+async function openNavigationModal({ request = {}, target = {}, origin = null } = {}) {
+  const destination = normalizeLocation(target.destination);
+  if (!destination) return;
+  await modal({
+    width: "min(96vw, 960px)",
+    customClass: { popup: "kaila-popup navigation-popup" },
+    title: "",
+    html: `
+      <div class="navigation-shell">
+        <div class="navigation-head">
+          <div>
+            <h3>${escapeHtml(target.label || "Destination")}</h3>
+            <p>${escapeHtml(request.category || "KAILA route")}${target.detail ? ` - ${escapeHtml(target.detail)}` : ""}</p>
+          </div>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-navigation-external><i class="fa-solid fa-up-right-from-square"></i> Open Maps</button>
+        </div>
+        <div class="navigation-map-wrap">
+          <div class="navigation-map" data-navigation-map></div>
+          <div class="k-map-zoom navigation-zoom" aria-label="Map zoom controls">
+            <button type="button" data-navigation-zoom-in aria-label="Zoom in"><i class="fa-solid fa-plus"></i></button>
+            <button type="button" data-navigation-zoom-out aria-label="Zoom out"><i class="fa-solid fa-minus"></i></button>
+          </div>
+        </div>
+        <div class="navigation-panel">
+          <div class="navigation-stats" data-navigation-stats>
+            <span><i class="fa-solid fa-location-dot"></i> Destination pinned</span>
+            <span>${origin ? "Building route..." : "Allow location to build a route."}</span>
+          </div>
+          <div class="navigation-actions">
+            <button class="btn btn-sm btn-outline-primary" type="button" data-navigation-current><i class="fa-solid fa-location-crosshairs"></i> Use My Location</button>
+            <button class="btn btn-sm btn-primary" type="button" data-navigation-track><i class="fa-solid fa-location-arrow"></i> Track</button>
+          </div>
+          <div class="navigation-steps" data-navigation-steps></div>
+        </div>
+      </div>
+    `,
+    showConfirmButton: false,
+    showCloseButton: true,
+    didOpen: () => bindNavigationMap({ destination, origin, label: target.label || "Destination" }),
+    willClose: stopNavigationWatch,
+  });
+}
+
+function bindNavigationMap({ destination, origin = null, label = "Destination" } = {}) {
+  const popup = window.Swal.getPopup?.() || document;
+  const mapEl = $("[data-navigation-map]", popup);
+  const stats = $("[data-navigation-stats]", popup);
+  const steps = $("[data-navigation-steps]", popup);
+  const destinationLocation = normalizeLocation(destination);
+  let currentOrigin = normalizeLocation(origin);
+  let map = null;
+  let originMarker = null;
+  let routeLine = null;
+
+  const setStats = (route = null) => {
+    if (!stats) return;
+    stats.innerHTML = route
+      ? `<span><i class="fa-solid fa-route"></i> ${escapeHtml(formatDistanceKm(route.distanceKm))}</span><span><i class="fa-solid fa-clock"></i> About ${escapeHtml(route.durationMinutes)} min</span>`
+      : `<span><i class="fa-solid fa-location-dot"></i> Destination pinned</span><span>${currentOrigin ? "Route unavailable" : "Waiting for your location"}</span>`;
+  };
+  const setSteps = (route = null) => {
+    if (!steps) return;
+    if (!route?.steps?.length) {
+      steps.innerHTML = `<p>${currentOrigin ? "Turn details are unavailable for this route." : "Use your location to preview the route."}</p>`;
+      return;
+    }
+    steps.innerHTML = route.steps.map((step) => `
+      <div>
+        <i class="fa-solid fa-turn-up"></i>
+        <span>${escapeHtml(step.instruction)}${step.distanceKm ? ` · ${escapeHtml(formatDistanceKm(step.distanceKm))}` : ""}</span>
+      </div>
+    `).join("");
+  };
+  const ensureMap = () => {
+    if (!mapEl || !window.L || !destinationLocation) return null;
+    if (map) return map;
+    map = window.L.map(mapEl, { zoomControl: false, preferCanvas: true }).setView([destinationLocation.lat, destinationLocation.lng], 15);
+    window.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 20,
+      attribution: "&copy; OpenStreetMap",
+    }).addTo(map);
+    window.L.marker([destinationLocation.lat, destinationLocation.lng]).addTo(map).bindPopup(label);
+    setTimeout(() => map?.invalidateSize(), 80);
+    return map;
+  };
+  const renderRoute = async () => {
+    const activeMap = ensureMap();
+    if (!activeMap || !destinationLocation) return;
+    if (originMarker) originMarker.remove();
+    if (routeLine) routeLine.remove();
+    if (currentOrigin) {
+      originMarker = window.L.circleMarker([currentOrigin.lat, currentOrigin.lng], {
+        radius: 8,
+        color: "#0b4552",
+        fillColor: "#0f6b70",
+        fillOpacity: 0.9,
+        weight: 3,
+      }).addTo(activeMap).bindPopup("You");
+      const route = await fetchRouteGeometry(currentOrigin, destinationLocation);
+      if (route?.coordinates?.length) {
+        routeLine = window.L.polyline(route.coordinates.map((point) => [point.lat, point.lng]), {
+          color: "#0f6b70",
+          weight: 6,
+          opacity: 0.86,
+        }).addTo(activeMap);
+        activeMap.fitBounds(routeLine.getBounds(), { padding: [28, 28] });
+        setStats(route);
+        setSteps(route);
+        return;
+      }
+    }
+    activeMap.setView([destinationLocation.lat, destinationLocation.lng], Math.max(activeMap.getZoom(), 15));
+    setStats(null);
+    setSteps(null);
+  };
+
+  ensureMap();
+  renderRoute();
+  $("[data-navigation-zoom-in]", popup)?.addEventListener("click", () => map?.zoomIn());
+  $("[data-navigation-zoom-out]", popup)?.addEventListener("click", () => map?.zoomOut());
+  $("[data-navigation-external]", popup)?.addEventListener("click", () => launchExternalNavigation(destinationLocation, { origin: currentOrigin, label }));
+  $("[data-navigation-current]", popup)?.addEventListener("click", async () => {
+    const location = await getDeviceLocation({ maximumAge: 15000, timeout: 12000 });
+    if (!location) return;
+    currentOrigin = location;
+    renderRoute();
+  });
+  $("[data-navigation-track]", popup)?.addEventListener("click", () => startNavigationWatch((location) => {
+    currentOrigin = location;
+    renderRoute();
+  }));
+}
+
+function startNavigationWatch(onLocation) {
+  stopNavigationWatch();
+  if (!navigator.geolocation) {
+    notify("Tracking unavailable", "This device or browser does not expose GPS location.", "warning");
+    return;
+  }
+  state.navigationWatchId = navigator.geolocation.watchPosition(
+    (position) => {
+      const location = normalizeLocation({ lat: position.coords.latitude, lng: position.coords.longitude });
+      if (location) {
+        state.deviceLocation = location;
+        state.deviceLocationCheckedAt = Date.now();
+        onLocation(location);
+      }
+    },
+    () => notify("Tracking paused", "Allow location access to keep the KAILA route live.", "warning"),
+    { enableHighAccuracy: true, maximumAge: 8000, timeout: 15000 }
+  );
+  notify("Tracking started", "KAILA will update the route while this map is open.", "success");
+}
+
+function stopNavigationWatch() {
+  if (state.navigationWatchId && navigator.geolocation) navigator.geolocation.clearWatch(state.navigationWatchId);
+  state.navigationWatchId = null;
+}
+
+function launchExternalNavigation(destination, { origin = null, label = "" } = {}) {
+  const end = normalizeLocation(destination);
+  if (!end) return;
+  const start = normalizeLocation(origin);
+  const query = new URLSearchParams({
+    api: "1",
+    destination: `${end.lat},${end.lng}`,
+    travelmode: "driving",
+  });
+  if (start) query.set("origin", `${start.lat},${start.lng}`);
+  window.open(`https://www.google.com/maps/dir/?${query.toString()}`, "_blank", "noopener");
 }
 
 function hydrateOfferRouteDistances(host = document) {

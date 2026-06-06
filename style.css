@@ -1397,6 +1397,7 @@ select[multiple].form-select {
 
 .app-tabs .nav-link {
   overflow: hidden;
+  position: relative;
   min-width: 0;
   width: 100%;
   height: 100%;
@@ -1425,6 +1426,28 @@ select[multiple].form-select {
 .app-tabs .nav-link.active {
   background: var(--surface-2);
   color: var(--brand);
+}
+
+.tab-count {
+  position: absolute;
+  top: 0.2rem;
+  right: 0.3rem;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 0.24rem;
+  border-radius: 999px;
+  background: #d64045;
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.tab-count[hidden] {
+  display: none;
 }
 
 .inbox-summary {
@@ -1512,6 +1535,16 @@ select[multiple].form-select {
   height: 0.62rem;
   border-radius: 50%;
   background: var(--brand-2);
+}
+
+.navigation-card {
+  border-color: rgba(15, 107, 112, 0.28);
+  background: var(--brand-3);
+}
+
+.navigation-card strong {
+  display: block;
+  margin-bottom: 0.18rem;
 }
 
 @media (max-width: 380px) {
@@ -1885,6 +1918,106 @@ select[multiple].form-select {
 :root[data-theme="dark"] .k-map-zoom button:focus {
   background: #cce7e3;
   color: #0f2e35;
+}
+
+.swal2-popup.navigation-popup {
+  padding: 0;
+  overflow: hidden;
+}
+
+.navigation-shell {
+  display: grid;
+  text-align: left;
+}
+
+.navigation-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 0.75rem;
+  padding: 0.9rem;
+}
+
+.navigation-head h3,
+.navigation-head p {
+  margin: 0;
+}
+
+.navigation-head h3 {
+  color: var(--brand);
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.navigation-head p {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.navigation-map-wrap {
+  position: relative;
+  min-height: min(58vh, 28rem);
+  background: var(--surface-2);
+}
+
+.navigation-map {
+  width: 100%;
+  min-height: min(58vh, 28rem);
+}
+
+.navigation-zoom {
+  top: 0.75rem;
+  right: 0.75rem;
+  left: auto;
+}
+
+.navigation-panel {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.85rem;
+}
+
+.navigation-stats,
+.navigation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.navigation-stats span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.navigation-steps {
+  display: grid;
+  gap: 0.38rem;
+  max-height: 9.5rem;
+  overflow: auto;
+}
+
+.navigation-steps p,
+.navigation-steps div {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.navigation-steps div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.45rem;
+  align-items: start;
+  padding: 0.45rem 0;
+  border-top: 1px solid var(--line);
 }
 
 :root[data-theme="dark"] .offer-amount {
