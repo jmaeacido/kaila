@@ -1749,13 +1749,100 @@ select[multiple].form-select {
   gap: 0.45rem;
 }
 
-.job-map {
-  min-height: 18rem;
-  height: min(44vh, 24rem);
+.map-mode-toggle {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+  padding: 0.25rem;
+  border: 1px solid #c9dcd8;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.map-mode-toggle button {
+  min-height: 2.25rem;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.map-mode-toggle button.active {
+  background: #0f3e46;
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(15, 62, 70, 0.18);
+}
+
+.job-map-wrap {
+  position: relative;
   overflow: hidden;
   border: 1px solid #c9dcd8;
   border-radius: 8px;
   background: #dce8e5;
+}
+
+.job-map {
+  min-height: 18rem;
+  height: min(44vh, 24rem);
+  overflow: hidden;
+  background: #dce8e5;
+}
+
+.map-hint {
+  position: absolute;
+  right: 0.55rem;
+  bottom: 0.55rem;
+  left: 0.55rem;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  background: rgba(8, 32, 38, 0.82);
+  color: #fff;
+  font-size: 0.74rem;
+  font-weight: 900;
+  pointer-events: none;
+}
+
+.k-map-zoom {
+  position: absolute;
+  top: 0.65rem;
+  left: 0.65rem;
+  z-index: 650;
+  display: grid;
+  gap: 0.38rem;
+}
+
+.k-map-zoom button {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  border: 2px solid #fff;
+  border-radius: 12px;
+  background: #0f3e46;
+  color: #fff;
+  font-size: 1.25rem;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
+}
+
+.k-map-zoom button:hover,
+.k-map-zoom button:focus {
+  background: #17616d;
+  color: #fff;
+  outline: 3px solid rgba(143, 231, 239, 0.55);
+  outline-offset: 2px;
+}
+
+.location-picker .leaflet-control-attribution {
+  max-width: calc(100% - 1rem);
+  border-radius: 6px 0 0 0;
+  font-size: 0.66rem;
 }
 
 .location-note {
@@ -1767,8 +1854,25 @@ select[multiple].form-select {
   background: #10272c;
 }
 
-:root[data-theme="dark"] .job-map {
+:root[data-theme="dark"] .job-map-wrap {
   border-color: #2c4a52;
+}
+
+:root[data-theme="dark"] .map-mode-toggle {
+  border-color: #2c4a52;
+  background: rgba(9, 30, 35, 0.78);
+}
+
+:root[data-theme="dark"] .k-map-zoom button {
+  border-color: #0f2e35;
+  background: #f4fbfa;
+  color: #0f2e35;
+}
+
+:root[data-theme="dark"] .k-map-zoom button:hover,
+:root[data-theme="dark"] .k-map-zoom button:focus {
+  background: #cce7e3;
+  color: #0f2e35;
 }
 
 :root[data-theme="dark"] .offer-amount {

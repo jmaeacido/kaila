@@ -3235,11 +3235,17 @@ function bindJobLocationPicker({ initialLocation = null, getLocation, setLocatio
   if (!popup) return;
   const status = $("[data-location-status]", popup);
   const mapEl = $("[data-job-map]", popup);
+  const mapWrap = $("[data-job-map-wrap]", popup);
+  const mapModeToggle = $("[data-map-mode-toggle]", popup);
+  const zoomInButton = $("[data-map-zoom-in]", popup);
+  const zoomOutButton = $("[data-map-zoom-out]", popup);
   const currentButton = $("[data-use-current-location]", popup);
   const mapButton = $("[data-show-location-map]", popup);
   const clearButton = $("[data-clear-job-location]", popup);
   let map = null;
   let marker = null;
+  let activeBaseLayer = "street";
+  let mapLayers = {};
 
   const updateStatus = (source = "") => {
     const location = normalizeLocation(getLocation?.());
@@ -3274,30 +3280,85 @@ function bindJobLocationPicker({ initialLocation = null, getLocation, setLocatio
     updateStatus(source);
   };
 
-  const addTileLayer = () => {
-    const tileSources = [
-      "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-      "https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
-    ];
-    let tileIndex = 0;
+  const bindMapModeButtons = () => {
+    $$("[data-map-mode]", popup).forEach((button) => {
+      button.addEventListener("click", () => {
+        setMapMode(button.dataset.mapMode || "street");
+      });
+    });
+  };
+
+  const updateMapModeButtons = () => {
+    $$("[data-map-mode]", popup).forEach((button) => {
+      button.classList.toggle("active", button.dataset.mapMode === activeBaseLayer);
+    });
+  };
+
+  const setMapMode = (mode = "street") => {
+    if (!map || !mapLayers[mode]) return;
+    Object.values(mapLayers).forEach((layer) => {
+      if (map.hasLayer(layer)) map.removeLayer(layer);
+    });
+    mapLayers[mode].addTo(map);
+    activeBaseLayer = mode;
+    updateMapModeButtons();
+    setTimeout(() => map?.invalidateSize(), 80);
+  };
+
+  const createResilientTileLayer = (sources, options = {}) => {
+    const urls = Array.isArray(sources) ? sources : [sources];
+    let index = 0;
     let layer = null;
-    const attach = () => {
-      layer = window.L.tileLayer(tileSources[tileIndex], {
-        maxZoom: 19,
-        attribution: "&copy; OpenStreetMap",
+    const create = () => {
+      layer = window.L.tileLayer(urls[index], {
+        maxZoom: 20,
+        maxNativeZoom: 18,
         crossOrigin: true,
-      }).addTo(map);
+        ...options,
+      });
       layer.once("tileerror", () => {
-        if (tileIndex >= tileSources.length - 1) {
+        if (index >= urls.length - 1) {
           if (status) status.textContent = "Map tiles are not loading. You can still use GPS, or try again with internet.";
           return;
         }
-        tileIndex += 1;
-        layer.remove();
-        attach();
+        const wasVisible = map?.hasLayer(layer);
+        if (wasVisible) map.removeLayer(layer);
+        index += 1;
+        layer = create();
+        if (wasVisible) layer.addTo(map);
       });
+      return layer;
     };
-    attach();
+    return create();
+  };
+
+  const createMapLayers = () => {
+    const street = createResilientTileLayer([
+      "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      "https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+    ], { attribution: "&copy; OpenStreetMap", maxNativeZoom: 19 });
+    const satellite = createResilientTileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      attribution: "Tiles &copy; Esri",
+      maxNativeZoom: 17,
+    });
+    const satelliteBase = createResilientTileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      attribution: "Tiles &copy; Esri",
+      maxNativeZoom: 17,
+    });
+    const labels = createResilientTileLayer([
+      "https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
+      "https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png",
+    ], {
+      subdomains: "abcd",
+      attribution: "&copy; OpenStreetMap &copy; CARTO",
+      pane: "overlayPane",
+      maxNativeZoom: 18,
+    });
+    mapLayers = {
+      street,
+      satellite,
+      hybrid: window.L.layerGroup([satelliteBase, labels]),
+    };
   };
 
   const ensureMap = () => {
@@ -3305,18 +3366,20 @@ function bindJobLocationPicker({ initialLocation = null, getLocation, setLocatio
       notify("Map unavailable", "Check your internet connection, then try again.", "warning");
       return null;
     }
-    mapEl.classList.remove("d-none");
+    mapWrap?.classList.remove("d-none");
+    mapModeToggle?.classList.remove("d-none");
     if (!map) {
       const center = normalizeLocation(getLocation?.()) || state.deviceLocation || DEFAULT_MAP_CENTER;
-      map = window.L.map(mapEl, { zoomControl: true, preferCanvas: true }).setView([center.lat, center.lng], 14);
-      addTileLayer();
+      map = window.L.map(mapEl, { zoomControl: false, preferCanvas: true }).setView([center.lat, center.lng], 16);
+      createMapLayers();
+      setMapMode(activeBaseLayer);
       map.on("click", (event) => placeMarker(event.latlng, "map"));
       if (initialLocation) placeMarker(initialLocation, initialLocation.source || "map");
     }
     [80, 250, 700].forEach((delay) => setTimeout(() => {
       map?.invalidateSize();
       const center = normalizeLocation(getLocation?.()) || state.deviceLocation || DEFAULT_MAP_CENTER;
-      map?.setView([center.lat, center.lng], map.getZoom() || 14, { animate: false });
+      map?.setView([center.lat, center.lng], map.getZoom() || 16, { animate: false });
     }, delay));
     return map;
   };
@@ -3336,6 +3399,9 @@ function bindJobLocationPicker({ initialLocation = null, getLocation, setLocatio
     }
   });
 
+  zoomInButton?.addEventListener("click", () => map?.zoomIn());
+  zoomOutButton?.addEventListener("click", () => map?.zoomOut());
+
   mapButton?.addEventListener("click", async () => {
     if (!state.deviceLocation) await getDeviceLocation({ maximumAge: 60000, timeout: 5000, silent: true });
     ensureMap();
@@ -3351,6 +3417,8 @@ function bindJobLocationPicker({ initialLocation = null, getLocation, setLocatio
   });
 
   if (initialLocation) ensureMap();
+  bindMapModeButtons();
+  updateMapModeButtons();
   updateStatus(initialLocation?.source || "");
 }
 
@@ -3403,7 +3471,20 @@ async function openRequestModal(existing = null) {
             <button class="btn btn-sm btn-outline-secondary" type="button" data-show-location-map><i class="fa-solid fa-map-location-dot"></i> Pick on map</button>
             <button class="btn btn-sm btn-outline-danger ${selectedJobLocation ? "" : "d-none"}" type="button" data-clear-job-location><i class="fa-solid fa-xmark"></i> Clear</button>
           </div>
-          <div class="job-map ${selectedJobLocation ? "" : "d-none"}" data-job-map></div>
+          <div class="map-mode-toggle ${selectedJobLocation ? "" : "d-none"}" data-map-mode-toggle>
+            <button type="button" data-map-mode="street"><i class="fa-solid fa-road"></i> Street</button>
+            <button type="button" data-map-mode="satellite"><i class="fa-solid fa-earth-asia"></i> Satellite</button>
+            <button type="button" data-map-mode="hybrid"><i class="fa-solid fa-layer-group"></i> Hybrid</button>
+          </div>
+          <div class="job-map-wrap ${selectedJobLocation ? "" : "d-none"}" data-job-map-wrap>
+            <div class="job-map" data-job-map></div>
+            <div class="k-map-zoom" aria-label="Map zoom controls">
+              <button type="button" data-map-zoom-in aria-label="Zoom in"><i class="fa-solid fa-plus"></i></button>
+              <button type="button" data-map-zoom-out aria-label="Zoom out"><i class="fa-solid fa-minus"></i></button>
+            </div>
+            <div class="map-hint"><i class="fa-solid fa-hand-pointer"></i> Tap map to move pin. Drag pin for finer placement.</div>
+          </div>
+          <small class="location-note">Satellite photos and labels may be older or incomplete in some areas. The pin is what KAILA uses for provider distance.</small>
           <small class="location-note">If the request is for your house but you are somewhere else, pick the house/job site on the map instead of using current location.</small>
         </div>
         <label class="wide"><span>Details</span><textarea id="request-details" class="form-control" rows="3">${escapeHtml(existing?.details || "")}</textarea></label>
