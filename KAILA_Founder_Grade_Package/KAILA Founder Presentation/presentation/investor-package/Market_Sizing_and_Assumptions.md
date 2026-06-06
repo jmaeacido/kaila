@@ -4,7 +4,7 @@ KAILA should present the Philippines as the long-term opportunity and Gingoog Ci
 
 TAM: Philippine local services spend. Planning estimate: PHP 250B+ annual addressable household and small-business service activity.
 
-SAM: Digitally reachable early categories. Planning estimate: PHP 25B-50B across appliance repair, plumbing, electrical, computer repair, home maintenance, cleaning, digital services, and similar skilled local work.
+SAM: Digitally reachable early categories. Planning estimate: PHP 25B-50B across appliance repair, plumbing, electrical, computer repair, cellphone repair, home maintenance, cleaning, digital services, and similar skilled local work.
 
 SOM: Realistic 3-year capture. Planning estimate: PHP 20M-60M GMV if Gingoog validates and the playbook expands to more local markets.
 
@@ -18,7 +18,7 @@ Pilot assumptions:
 - Client survey target: 100 responses
 - Real request target: 30
 - Completed or strongly matched jobs: 15+
-- Starting categories: 5-8
+- Starting categories: 9, including cellphone repair
 
 Source anchors:
 

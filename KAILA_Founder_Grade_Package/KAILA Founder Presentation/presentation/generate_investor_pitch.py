@@ -95,12 +95,12 @@ SLIDES = [
     {
         "type": "demo",
         "kicker": "Product Demo",
-        "title": "Early mockups show the core marketplace workflow before full app build.",
+        "title": "The browser MVP and native wrapper now show the core marketplace workflow.",
         "bullets": [
             "Request board for client needs and provider offers",
             "Provider directory with categories, areas, and trust signals",
             "Admin-style dashboard for pilot operations and manual matching",
-            "Mobile-first experience planned for clients and providers",
+            "Browser PWA and native Android wrapper available for pilot testing",
         ],
     },
     {
@@ -146,18 +146,18 @@ SLIDES = [
         "title": "Start narrow in Gingoog City, prove density, then replicate the playbook.",
         "demand": ["Facebook groups", "Barangay partnerships", "Local ads and referrals", "Small business outreach"],
         "supply": ["Skilled workers", "Freelancers", "Tradespeople", "Repair shops and service microbusinesses"],
-        "pilot": ["Recruit providers first", "Run concierge matching", "Measure response and completion", "Convert proof into MVP scope"],
+        "pilot": ["Recruit providers first", "Run concierge matching", "Measure response and completion", "Convert proof into MVP improvements"],
     },
     {
         "type": "traction",
         "kicker": "Traction",
-        "title": "Current stage: founder-grade package, prototype mockups, and Gingoog validation plan.",
+        "title": "Current stage: founder-grade package, browser MVP, native wrapper, and Gingoog validation plan.",
         "metrics": [
             ("50", "Target providers"),
             ("100", "Client survey responses"),
             ("30", "Real service requests"),
             ("15+", "Completed or strongly matched jobs"),
-            ("5-8", "Starting service categories"),
+            ("9", "Starting service categories incl. cellphone repair"),
             ("30-45", "Active pilot days"),
         ],
         "note": "If actual interviews, waitlist, survey results, or pilot jobs are added, this becomes the strongest investor proof slide.",
@@ -165,29 +165,29 @@ SLIDES = [
     {
         "type": "financial",
         "kicker": "Financial Projections",
-        "title": "3-year model: realistic ramp from concierge pilot to paid marketplace.",
+        "title": "Lean 3-year model: founder-led pilot before paid marketplace.",
         "headers": ["Metric", "Year 1", "Year 2", "Year 3"],
         "rows": [
             ("Active providers", "150", "600", "1,800"),
             ("Completed jobs", "900", "7,200", "32,400"),
             ("GMV", "PHP 0.9M", "PHP 8.6M", "PHP 48.6M"),
             ("Revenue", "PHP 0.2M", "PHP 1.7M", "PHP 7.3M"),
-            ("Expenses", "PHP 1.8M", "PHP 3.6M", "PHP 7.2M"),
-            ("Profit / Loss", "(PHP 1.6M)", "(PHP 1.9M)", "PHP 0.1M"),
+            ("Expenses", "PHP 0.3M", "PHP 0.9M", "PHP 1.8M"),
+            ("Profit / Loss", "(PHP 0.1M)", "PHP 0.8M", "PHP 5.5M"),
         ],
         "note": "Assumptions are included in the investor package workbook and should be updated after the Gingoog pilot.",
     },
     {
         "type": "funding",
         "kicker": "Funding Ask",
-        "title": "Raising PHP 2,000,000 to validate Gingoog City and build the first focused MVP.",
+        "title": "Seeking lean pilot support after building the first browser MVP and native wrapper.",
         "metrics": [
-            ("40%", "Development", "PHP 800,000"),
-            ("35%", "Marketing", "PHP 700,000"),
-            ("15%", "Operations", "PHP 300,000"),
-            ("10%", "Legal/Admin", "PHP 200,000"),
+            ("20%", "MVP polish", "PHP 100,000"),
+            ("35%", "Local marketing", "PHP 175,000"),
+            ("30%", "Operations", "PHP 150,000"),
+            ("15%", "Legal/Admin", "PHP 75,000"),
         ],
-        "note": "Scenario options in the package show lean, base, and accelerated funding paths.",
+        "note": "Use free resources first; paid spend should support only field validation, page growth, support, and essential app polish.",
     },
     {
         "type": "team",
@@ -209,7 +209,7 @@ SLIDES = [
         "bullets": [
             "Start with one disciplined pilot in Gingoog City.",
             "Prove matching, trust, ratings, and provider value manually.",
-            "Build the MVP around the proven workflow.",
+            "Improve the MVP around the proven workflow.",
             "Expand city-by-city with a repeatable local operations playbook.",
         ],
     },
@@ -507,7 +507,7 @@ KAILA should present the Philippines as the long-term opportunity and Gingoog Ci
 
 TAM: Philippine local services spend. Planning estimate: PHP 250B+ annual addressable household and small-business service activity.
 
-SAM: Digitally reachable early categories. Planning estimate: PHP 25B-50B across appliance repair, plumbing, electrical, computer repair, home maintenance, cleaning, digital services, and similar skilled local work.
+SAM: Digitally reachable early categories. Planning estimate: PHP 25B-50B across appliance repair, plumbing, electrical, computer repair, cellphone repair, home maintenance, cleaning, digital services, and similar skilled local work.
 
 SOM: Realistic 3-year capture. Planning estimate: PHP 20M-60M GMV if Gingoog validates and the playbook expands to more local markets.
 
@@ -521,7 +521,7 @@ Pilot assumptions:
 - Client survey target: 100 responses
 - Real request target: 30
 - Completed or strongly matched jobs: 15+
-- Starting categories: 5-8
+- Starting categories: 9, including cellphone repair
 
 Source anchors:
 
@@ -615,28 +615,28 @@ Operations:
         PACKAGE_DIR / "Funding_Scenarios.md",
         "Funding Scenarios",
         """
-Lean validation: PHP 500,000
+Lean validation: PHP 50,000-150,000
 
 - Manual Gingoog City pilot
 - Provider recruitment and verification
 - Survey work and field operations
-- Low-code/manual MVP support
+- Existing browser MVP/native wrapper support and light polish
 
-Base raise: PHP 2,000,000
+Base support: PHP 300,000-500,000
 
-- 40% development
-- 35% marketing
-- 15% operations
-- 10% legal/admin
+- 20% MVP polish
+- 35% local marketing
+- 30% operations
+- 15% legal/admin
 
-Accelerated pilot-to-MVP: PHP 5,000,000
+Accelerated city rollout: PHP 1,000,000-2,000,000
 
-- Full MVP build
+- Wider app rollout and reliability work
 - Stronger local marketing
 - Dedicated operations support
 - More categories and adjacent-area testing
 
-Recommended current ask: PHP 2,000,000, subject to investor conversation and founder dilution targets.
+Recommended current approach: spend very lean during validation because the MVP, survey, and interview forms already exist.
 """,
     )
 
@@ -648,7 +648,7 @@ def build_financial_model():
     ws.title = "Assumptions"
     data = [
         ("Pilot city", PILOT_CITY),
-        ("Raise target", 2000000),
+        ("Lean pilot support target", 500000),
         ("Starting active providers", 50),
         ("Year 1 active providers", 150),
         ("Year 2 active providers", 600),
@@ -674,8 +674,8 @@ def build_financial_model():
         ("Completed jobs", 900, 7200, 32400),
         ("GMV", 900000, 8640000, 48600000),
         ("Revenue", 180000, 1728000, 7290000),
-        ("Expenses", 1800000, 3600000, 7200000),
-        ("Profit / Loss", -1620000, -1872000, 90000),
+        ("Expenses", 300000, 900000, 1800000),
+        ("Profit / Loss", -120000, 828000, 5490000),
     ]
     for row in summary_rows:
         summary.append(row)

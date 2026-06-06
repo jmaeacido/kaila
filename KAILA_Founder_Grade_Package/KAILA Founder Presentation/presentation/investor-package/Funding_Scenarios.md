@@ -1,24 +1,24 @@
 # Funding Scenarios
 
-Lean validation: PHP 500,000
+Lean validation: PHP 50,000-150,000
 
 - Manual Gingoog City pilot
 - Provider recruitment and verification
 - Survey work and field operations
-- Low-code/manual MVP support
+- Existing browser MVP/native wrapper support and light polish
 
-Base raise: PHP 2,000,000
+Base support: PHP 300,000-500,000
 
-- 40% development
-- 35% marketing
-- 15% operations
-- 10% legal/admin
+- 20% MVP polish
+- 35% local marketing
+- 30% operations
+- 15% legal/admin
 
-Accelerated pilot-to-MVP: PHP 5,000,000
+Accelerated city rollout: PHP 1,000,000-2,000,000
 
-- Full MVP build
+- Wider app rollout and reliability work
 - Stronger local marketing
 - Dedicated operations support
 - More categories and adjacent-area testing
 
-Recommended current ask: PHP 2,000,000, subject to investor conversation and founder dilution targets.
+Recommended current approach: spend very lean during validation because the MVP, survey, and interview forms already exist.
