@@ -43,6 +43,7 @@ const NATIVE_NOTIFICATION_CHANNELS = {
 };
 const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
 const GEOGRAPHY_SOURCE = "assets/Gingoog City PSGC.xlsx";
+const DEFAULT_MAP_CENTER = { lat: 8.826, lng: 125.117 };
 const FALLBACK_GEOGRAPHY = {
   region: "Region X (Northern Mindanao)",
   city: "City of Gingoog",
@@ -90,6 +91,8 @@ const state = {
   pushStatus: "",
   pushError: "",
   pushServerStatus: null,
+  deviceLocation: null,
+  deviceLocationCheckedAt: 0,
   validationSyncing: false,
   typingTimer: null,
   typingSent: false,
@@ -1356,6 +1359,7 @@ function renderRequestCard(request) {
         <span>${escapeHtml(request.urgency)}</span>
         ${request.preferredSchedule ? `<span>${escapeHtml(request.preferredSchedule)}</span>` : ""}
         <span>${escapeHtml(formatCurrency(request.budget))}</span>
+        ${renderRequestDistanceMeta(request)}
       </div>
       ${["admin", "ops", SUPPORT_ROLE].includes(state.session?.role) ? `
         <div class="offer">
@@ -1379,6 +1383,7 @@ function renderRequestCard(request) {
       <div class="card-actions">
         ${canEditRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-edit-request="${request.id}"><i class="fa-solid fa-pen"></i> Edit</button>` : ""}
         ${canAcceptClientPrice(request) ? `<button class="btn btn-sm btn-outline-success" data-accept-client-price="${request.id}">Accept Client Price</button>` : ""}
+        ${canUpdateRequestDistance(request) ? `<button class="btn btn-sm btn-outline-secondary" data-update-request-distance="${request.id}"><i class="fa-solid fa-location-crosshairs"></i> Distance</button>` : ""}
         ${canOffer(request) ? `<button class="btn btn-sm btn-outline-primary" data-offer="${request.id}">Offer</button>` : ""}
         ${canPass(request) ? `<button class="btn btn-sm btn-outline-secondary" data-pass="${request.id}">Decline/Pass</button>` : ""}
         ${canViewConversation(request) ? `<button class="btn btn-sm btn-outline-primary" data-conversation="${request.id}">Messages</button>` : ""}
@@ -1404,6 +1409,22 @@ function renderAdminRequestMetricDetail(request) {
     return `<div class="offer"><strong>Dispute tracking</strong><div>${escapeHtml(request.disputeNote || request.status)}</div></div>`;
   }
   return "";
+}
+
+function renderRequestDistanceMeta(request) {
+  if (state.session?.role === "provider") {
+    const distance = distanceKm(state.deviceLocation, request.jobLocation);
+    if (distance !== null) return `<span><i class="fa-solid fa-route"></i> ${escapeHtml(formatDistanceKm(distance))}</span>`;
+    if (request.jobLocation) return `<span><i class="fa-solid fa-location-dot"></i> Job site pinned</span>`;
+  }
+  if (state.session?.role === "client" && request.clientId === state.session.id && request.jobLocation) {
+    return `<span><i class="fa-solid fa-location-dot"></i> Job site pinned</span>`;
+  }
+  return "";
+}
+
+function canUpdateRequestDistance(request = {}) {
+  return Boolean(state.session?.role === "provider" && request.jobLocation && !state.deviceLocation);
 }
 
 function renderAcceptedProviderContact(request) {
@@ -1457,6 +1478,7 @@ function renderAcceptedClientContact(request) {
 
 function bindRequestCardActions(host) {
   $$("[data-accept-client-price]", host).forEach((button) => button.addEventListener("click", () => acceptClientPrice(button.dataset.acceptClientPrice)));
+  $$("[data-update-request-distance]", host).forEach((button) => button.addEventListener("click", () => updateRequestDistance(button.dataset.updateRequestDistance)));
   $$("[data-offer]", host).forEach((button) => button.addEventListener("click", () => openOfferModal(button.dataset.offer, "offer")));
   $$("[data-pass]", host).forEach((button) => button.addEventListener("click", () => passRequest(button.dataset.pass)));
   $$("[data-edit-request]", host).forEach((button) => button.addEventListener("click", () => openRequestModal(state.requests.find((request) => request.id === button.dataset.editRequest))));
@@ -1485,6 +1507,8 @@ function renderOffers(request) {
 }
 
 function renderOffer(offer, requestId, selectable) {
+  const request = state.requests.find((item) => item.id === requestId);
+  const offerDistance = request?.jobLocation && offer.providerLocation ? distanceKm(request.jobLocation, offer.providerLocation) : null;
   return `
     <article class="offer-card" data-offer-card="${escapeAttribute(offer.id)}">
       <div class="offer-card-head">
@@ -1493,10 +1517,20 @@ function renderOffer(offer, requestId, selectable) {
       ${renderIdentity(offer.providerName, offer.providerPhotoUrl, "Provider reputation", offerProviderReputation(offer), "compact")}
       <div class="offer-amount">${escapeHtml(formatCurrency(offer.amount))}</div>
       <div class="offer-schedule">${escapeHtml(offer.schedule || "Schedule TBD")}</div>
+      ${offerDistance !== null ? `<div class="offer-distance"><i class="fa-solid fa-route"></i> Approx. ${escapeHtml(formatDistanceKm(offerDistance))} from job site</div>` : ""}
       ${offer.notes ? `<p>${escapeHtml(offer.notes)}</p>` : ""}
       ${selectable ? `<button class="btn btn-sm btn-success w-100" type="button" data-request-id="${requestId}" data-select-offer="${offer.id}">Select Offer</button>` : ""}
     </article>
   `;
+}
+
+async function updateRequestDistance(requestId) {
+  const request = state.requests.find((item) => item.id === requestId);
+  if (!request?.jobLocation) return;
+  const location = await getDeviceLocation({ maximumAge: 30000, timeout: 12000 });
+  if (!location) return;
+  notify("Distance updated", `Approx. ${formatDistanceKm(distanceKm(location, request.jobLocation))} from the job site.`, "success");
+  renderDashboard();
 }
 
 function renderAttachments(title, attachments = [], requestId) {
@@ -3196,9 +3230,109 @@ function placeQuestionGuide(button) {
   button.dataset.vertical = rect.top - 96 < bounds.top + 16 ? "below" : "above";
 }
 
+function bindJobLocationPicker({ initialLocation = null, getLocation, setLocation }) {
+  const popup = document.querySelector(".swal2-popup");
+  if (!popup) return;
+  const status = $("[data-location-status]", popup);
+  const mapEl = $("[data-job-map]", popup);
+  const currentButton = $("[data-use-current-location]", popup);
+  const mapButton = $("[data-show-location-map]", popup);
+  const clearButton = $("[data-clear-job-location]", popup);
+  let map = null;
+  let marker = null;
+
+  const updateStatus = (source = "") => {
+    const location = normalizeLocation(getLocation?.());
+    clearButton?.classList.toggle("d-none", !location);
+    if (!status) return;
+    if (!location) {
+      status.textContent = "No pin yet. Distance will use address text only.";
+      return;
+    }
+    status.textContent = source === "current"
+      ? "Using your current GPS as the job site."
+      : "Map pin saved as the job site.";
+  };
+
+  const placeMarker = (location, source = "map") => {
+    const clean = normalizeLocation(location);
+    if (!clean) return;
+    setLocation(clean, source);
+    if (map && window.L) {
+      if (!marker) {
+        marker = window.L.marker([clean.lat, clean.lng], { draggable: true }).addTo(map);
+        marker.on("dragend", () => {
+          const next = marker.getLatLng();
+          setLocation({ lat: next.lat, lng: next.lng }, "map");
+          updateStatus("map");
+        });
+      } else {
+        marker.setLatLng([clean.lat, clean.lng]);
+      }
+      map.setView([clean.lat, clean.lng], Math.max(map.getZoom(), 15));
+    }
+    updateStatus(source);
+  };
+
+  const ensureMap = () => {
+    if (!mapEl || !window.L) {
+      notify("Map unavailable", "Check your internet connection, then try again.", "warning");
+      return null;
+    }
+    mapEl.classList.remove("d-none");
+    if (!map) {
+      const center = normalizeLocation(getLocation?.()) || state.deviceLocation || DEFAULT_MAP_CENTER;
+      map = window.L.map(mapEl, { zoomControl: true }).setView([center.lat, center.lng], 14);
+      window.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap",
+      }).addTo(map);
+      map.on("click", (event) => placeMarker(event.latlng, "map"));
+      if (initialLocation) placeMarker(initialLocation, initialLocation.source || "map");
+    }
+    setTimeout(() => map?.invalidateSize(), 80);
+    return map;
+  };
+
+  currentButton?.addEventListener("click", async () => {
+    currentButton.disabled = true;
+    try {
+      const location = await getDeviceLocation({ maximumAge: 30000, timeout: 12000 });
+      if (!location) {
+        notify("Location unavailable", "Allow location access or pick the job site on the map.", "warning");
+        return;
+      }
+      ensureMap();
+      placeMarker(location, "current");
+    } finally {
+      currentButton.disabled = false;
+    }
+  });
+
+  mapButton?.addEventListener("click", async () => {
+    if (!state.deviceLocation) await getDeviceLocation({ maximumAge: 60000, timeout: 5000, silent: true });
+    ensureMap();
+  });
+
+  clearButton?.addEventListener("click", () => {
+    setLocation(null, "");
+    if (marker) {
+      marker.remove();
+      marker = null;
+    }
+    updateStatus("");
+  });
+
+  if (initialLocation) ensureMap();
+  updateStatus(initialLocation?.source || "");
+}
+
 async function openRequestModal(existing = null) {
   const editing = Boolean(existing?.id);
+  let selectedJobLocation = normalizeLocation(existing?.jobLocation);
+  let selectedLocationSource = existing?.jobLocationSource || existing?.jobLocation?.source || (selectedJobLocation ? "map" : "");
   const result = await modal({
+    width: "min(96vw, 880px)",
     title: editing ? "Edit request" : "Post request",
     html: `
       <div class="swal-form two">
@@ -3209,6 +3343,19 @@ async function openRequestModal(existing = null) {
         <label class="wide"><span>Address</span>${addressFields("request-address", existing?.area || state.session.area)}</label>
         <label><span>Budget</span><input id="request-budget" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Open / ₱1,500.00" value="${escapeAttribute(currencyNumber(existing?.budget) || "")}"></label>
         <label class="wide"><span>Exact location notes <small>(not forwarded too early)</small></span><textarea id="request-location-notes" class="form-control" rows="2">${escapeHtml(existing?.exactLocationNotes || "")}</textarea></label>
+        <div class="wide location-picker" data-location-picker>
+          <div>
+            <strong>Job site pin</strong>
+            <small data-location-status>${selectedJobLocation ? "Pinned. Providers can see approximate distance." : "Optional, but recommended for accurate provider distance."}</small>
+          </div>
+          <div class="location-actions">
+            <button class="btn btn-sm btn-outline-primary" type="button" data-use-current-location><i class="fa-solid fa-location-crosshairs"></i> I am at the job site</button>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-show-location-map><i class="fa-solid fa-map-location-dot"></i> Pick on map</button>
+            <button class="btn btn-sm btn-outline-danger ${selectedJobLocation ? "" : "d-none"}" type="button" data-clear-job-location><i class="fa-solid fa-xmark"></i> Clear</button>
+          </div>
+          <div class="job-map ${selectedJobLocation ? "" : "d-none"}" data-job-map></div>
+          <small class="location-note">If the request is for your house but you are somewhere else, pick the house/job site on the map instead of using current location.</small>
+        </div>
         <label class="wide"><span>Details</span><textarea id="request-details" class="form-control" rows="3">${escapeHtml(existing?.details || "")}</textarea></label>
         ${editing ? `<div class="wide offer"><strong>Existing media</strong><div>Existing request media stays attached. Add a new request if you need to replace photos or videos.</div></div>` : `
           <label class="wide"><span>Photos or videos (optional, up to 3 files)</span><input id="request-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
@@ -3221,6 +3368,14 @@ async function openRequestModal(existing = null) {
     confirmButtonText: editing ? "Save Changes" : "Post",
     didOpen: () => {
       bindAddressGroup("request-address");
+      bindJobLocationPicker({
+        initialLocation: selectedJobLocation,
+        getLocation: () => selectedJobLocation,
+        setLocation: (location, source) => {
+          selectedJobLocation = normalizeLocation(location);
+          selectedLocationSource = selectedJobLocation ? source : "";
+        },
+      });
       if (!editing) bindAttachmentPreview("#request-attachments", "[data-request-attachment-preview]", 3);
     },
     preConfirm: async () => {
@@ -3234,6 +3389,8 @@ async function openRequestModal(existing = null) {
         preferredSchedule: $("#request-schedule").value,
         contactMethod: $("#request-contact-method").value.trim(),
         exactLocationNotes: $("#request-location-notes").value.trim(),
+        jobLocation: selectedJobLocation,
+        jobLocationSource: selectedLocationSource,
         permissionToForward: $("#request-forward-consent").checked,
         consentToRate: $("#request-rate-consent").checked,
         details: $("#request-details").value.trim(),
@@ -3344,18 +3501,29 @@ async function openOfferModal(requestId, type) {
     html: `
       <div class="swal-form">
         ${renderIdentity(request.clientName, request.clientPhotoUrl, "Client reputation", request.clientReputation, "compact")}
+        ${request.jobLocation ? `<div class="offer"><strong>Job site distance</strong><div data-offer-distance-copy>${state.deviceLocation ? `Approx. ${escapeHtml(formatDistanceKm(distanceKm(state.deviceLocation, request.jobLocation)))} from you.` : "Location access can add your approximate distance to this offer."}</div></div>` : ""}
         <label><span>Amount</span><input id="offer-amount" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="₱1,500.00"></label>
         <label><span>Schedule</span>${select("offer-schedule", URGENCY_OPTIONS, "Today")}</label>
         <label><span>Notes</span><textarea id="offer-notes" class="form-control" rows="3"></textarea></label>
       </div>
     `,
     confirmButtonText: type === "counter" ? "Send Counter" : "Send Offer",
-    preConfirm: () => {
+    didOpen: async () => {
+      if (!request.jobLocation || state.deviceLocation) return;
+      const location = await getDeviceLocation({ maximumAge: 30000, timeout: 6000, silent: true });
+      const copy = $("[data-offer-distance-copy]");
+      if (copy && location) copy.textContent = `Approx. ${formatDistanceKm(distanceKm(location, request.jobLocation))} from you.`;
+    },
+    preConfirm: async () => {
+      const providerLocation = request.jobLocation
+        ? (state.deviceLocation || await getDeviceLocation({ maximumAge: 30000, timeout: 6000, silent: true }))
+        : null;
       const offer = {
         type,
         amount: normalizeCurrencyInput($("#offer-amount").value),
         schedule: $("#offer-schedule").value,
         notes: $("#offer-notes").value.trim(),
+        providerLocation,
       };
       if (!offer.amount) {
         window.Swal.showValidationMessage("Amount is required.");
@@ -7559,6 +7727,67 @@ function formatCurrency(value) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amount).replace("PHP", "₱").replace(/\s/g, "");
+}
+
+function normalizeLocation(value = {}) {
+  const lat = Number(value.lat ?? value.latitude);
+  const lng = Number(value.lng ?? value.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return {
+    lat: Math.round(lat * 10000000) / 10000000,
+    lng: Math.round(lng * 10000000) / 10000000,
+  };
+}
+
+function distanceKm(from, to) {
+  const start = normalizeLocation(from);
+  const end = normalizeLocation(to);
+  if (!start || !end) return null;
+  const radiusKm = 6371;
+  const latDelta = ((end.lat - start.lat) * Math.PI) / 180;
+  const lngDelta = ((end.lng - start.lng) * Math.PI) / 180;
+  const startLat = (start.lat * Math.PI) / 180;
+  const endLat = (end.lat * Math.PI) / 180;
+  const a = Math.sin(latDelta / 2) ** 2 + Math.cos(startLat) * Math.cos(endLat) * Math.sin(lngDelta / 2) ** 2;
+  return radiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatDistanceKm(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "";
+  if (numeric < 1) return `${Math.max(1, Math.round(numeric * 1000))} m away`;
+  return `${numeric < 10 ? numeric.toFixed(1) : Math.round(numeric)} km away`;
+}
+
+function getDeviceLocation(options = {}) {
+  if (!navigator.geolocation) {
+    if (!options.silent) notify("Location unsupported", "This device or browser does not expose GPS location.", "warning");
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const location = normalizeLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+        if (location) {
+          state.deviceLocation = location;
+          state.deviceLocationCheckedAt = Date.now();
+        }
+        resolve(location);
+      },
+      () => {
+        if (!options.silent) notify("Location unavailable", "Allow location access, or pick the job site on the map.", "warning");
+        resolve(null);
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: options.maximumAge ?? 60000,
+        timeout: options.timeout ?? 10000,
+      }
+    );
+  });
 }
 
 function scrollConversationToBottom() {

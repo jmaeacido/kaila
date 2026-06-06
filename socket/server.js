@@ -328,6 +328,20 @@ function boolField(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase()) || value === true;
 }
 
+function coordinateField(value, min, max) {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < min || numeric > max) return null;
+  return Math.round(numeric * 10000000) / 10000000;
+}
+
+function locationPayload(value = {}) {
+  const lat = coordinateField(value.lat ?? value.latitude, -90, 90);
+  const lng = coordinateField(value.lng ?? value.longitude, -180, 180);
+  if (lat === null || lng === null) return { lat: null, lng: null };
+  return { lat, lng };
+}
+
 function passwordHash(password, salt = crypto.randomBytes(16).toString("hex")) {
   const hash = crypto.createHash("sha256").update(`${salt}:${password}`).digest("hex");
   return `${salt}:${hash}`;
@@ -522,6 +536,9 @@ async function initializeDatabase() {
       preferred_schedule VARCHAR(160) NULL,
       contact_method VARCHAR(160) NULL,
       exact_location_notes TEXT NULL,
+      job_lat DECIMAL(10, 7) NULL,
+      job_lng DECIMAL(10, 7) NULL,
+      job_location_source VARCHAR(40) NULL,
       permission_to_forward TINYINT(1) NOT NULL DEFAULT 0,
       consent_to_rate TINYINT(1) NOT NULL DEFAULT 0,
       details TEXT NOT NULL,
@@ -567,6 +584,9 @@ async function initializeDatabase() {
   await ensureColumn("requests", "preferred_schedule", "VARCHAR(160) NULL");
   await ensureColumn("requests", "contact_method", "VARCHAR(160) NULL");
   await ensureColumn("requests", "exact_location_notes", "TEXT NULL");
+  await ensureColumn("requests", "job_lat", "DECIMAL(10, 7) NULL");
+  await ensureColumn("requests", "job_lng", "DECIMAL(10, 7) NULL");
+  await ensureColumn("requests", "job_location_source", "VARCHAR(40) NULL");
   await ensureColumn("requests", "permission_to_forward", "TINYINT(1) NOT NULL DEFAULT 0");
   await ensureColumn("requests", "consent_to_rate", "TINYINT(1) NOT NULL DEFAULT 0");
   await pool.query(`
@@ -579,11 +599,17 @@ async function initializeDatabase() {
       amount VARCHAR(80) NOT NULL,
       schedule VARCHAR(160) NULL,
       notes TEXT NULL,
+      provider_lat DECIMAL(10, 7) NULL,
+      provider_lng DECIMAL(10, 7) NULL,
+      provider_location_captured_at DATETIME NULL,
       created_at DATETIME NOT NULL,
       CONSTRAINT offers_request_fk FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
       CONSTRAINT offers_provider_fk FOREIGN KEY (provider_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  await ensureColumn("offers", "provider_lat", "DECIMAL(10, 7) NULL");
+  await ensureColumn("offers", "provider_lng", "DECIMAL(10, 7) NULL");
+  await ensureColumn("offers", "provider_location_captured_at", "DATETIME NULL");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS push_tokens (
       id VARCHAR(64) PRIMARY KEY,
@@ -1000,6 +1026,11 @@ function mapOffer(row, reputation = emptyReputation(), photoUrl = "") {
     amount: row.amount,
     schedule: row.schedule || "",
     notes: row.notes || "",
+    providerLocation: row.provider_lat !== null && row.provider_lng !== null ? {
+      lat: Number(row.provider_lat),
+      lng: Number(row.provider_lng),
+      capturedAt: row.provider_location_captured_at || "",
+    } : null,
     providerPhotoUrl: photoUrl,
     providerReputation: reputation,
     createdAt: row.created_at,
@@ -1162,6 +1193,12 @@ function mapRequest(row, offers = [], passedProviderIds = [], attachments = [], 
     preferredSchedule: row.preferred_schedule || "",
     contactMethod: row.contact_method || "",
     exactLocationNotes: row.exact_location_notes || "",
+    jobLocation: row.job_lat !== null && row.job_lng !== null ? {
+      lat: Number(row.job_lat),
+      lng: Number(row.job_lng),
+      source: row.job_location_source || "current",
+    } : null,
+    jobLocationSource: row.job_location_source || "",
     permissionToForward: Boolean(row.permission_to_forward),
     consentToRate: Boolean(row.consent_to_rate),
     details: row.details,
@@ -2407,11 +2444,12 @@ app.post("/api/requests", requireUser, async (req, res) => {
   if (req.user.role !== "client") return res.status(403).json({ error: "Only clients can post requests" });
   const {
     category, urgency, area, budget, preferredSchedule, contactMethod, exactLocationNotes,
-    permissionToForward, consentToRate, details, attachments = [],
+    jobLocation, jobLocationSource, permissionToForward, consentToRate, details, attachments = [],
   } = req.body || {};
   if (!category || !area || !details) return res.status(400).json({ error: "Category, area, and details are required" });
   if (!boolField(permissionToForward) || !boolField(consentToRate)) return res.status(400).json({ error: "Permission to forward and rating consent are required" });
   const timestamp = nowMysql();
+  const cleanJobLocation = locationPayload(jobLocation);
   const request = {
     id: createId(),
     clientId: req.user.id,
@@ -2423,6 +2461,8 @@ app.post("/api/requests", requireUser, async (req, res) => {
     preferredSchedule: String(preferredSchedule || "").trim(),
     contactMethod: String(contactMethod || req.user.preferredContactChannel || "").trim(),
     exactLocationNotes: String(exactLocationNotes || "").trim(),
+    jobLocation: cleanJobLocation.lat !== null ? cleanJobLocation : null,
+    jobLocationSource: cleanJobLocation.lat !== null ? String(jobLocationSource || "current").trim().slice(0, 40) : "",
     permissionToForward: boolField(permissionToForward),
     consentToRate: boolField(consentToRate),
     details,
@@ -2432,10 +2472,11 @@ app.post("/api/requests", requireUser, async (req, res) => {
     updatedAt: timestamp,
   };
   await pool.query(
-    "INSERT INTO requests (id, client_id, client_name, category, urgency, area, budget, preferred_schedule, contact_method, exact_location_notes, permission_to_forward, consent_to_rate, details, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO requests (id, client_id, client_name, category, urgency, area, budget, preferred_schedule, contact_method, exact_location_notes, job_lat, job_lng, job_location_source, permission_to_forward, consent_to_rate, details, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     [
       request.id, request.clientId, request.clientName, request.category, request.urgency, request.area, request.budget,
-      request.preferredSchedule, request.contactMethod, request.exactLocationNotes, request.permissionToForward ? 1 : 0,
+      request.preferredSchedule, request.contactMethod, request.exactLocationNotes, request.jobLocation?.lat ?? null,
+      request.jobLocation?.lng ?? null, request.jobLocationSource || null, request.permissionToForward ? 1 : 0,
       request.consentToRate ? 1 : 0, request.details, request.status, request.createdAt, request.updatedAt,
     ]
   );
@@ -2486,19 +2527,21 @@ app.put("/api/requests/:id", requireUser, async (req, res) => {
 
   const {
     category, urgency, area, budget, preferredSchedule, contactMethod, exactLocationNotes,
-    permissionToForward, consentToRate, details,
+    jobLocation, jobLocationSource, permissionToForward, consentToRate, details,
   } = req.body || {};
   if (!category || !area || !details) return res.status(400).json({ error: "Category, area, and details are required" });
   if (!boolField(permissionToForward) || !boolField(consentToRate)) return res.status(400).json({ error: "Permission to forward and rating consent are required" });
   const timestamp = nowMysql();
+  const cleanJobLocation = locationPayload(jobLocation);
   await pool.query(
     `UPDATE requests
      SET category = ?, urgency = ?, area = ?, budget = ?, preferred_schedule = ?, contact_method = ?,
-         exact_location_notes = ?, permission_to_forward = ?, consent_to_rate = ?, details = ?, updated_at = ?
+         exact_location_notes = ?, job_lat = ?, job_lng = ?, job_location_source = ?, permission_to_forward = ?, consent_to_rate = ?, details = ?, updated_at = ?
      WHERE id = ?`,
     [
       category, urgency || "Today", area, budget || "Open", String(preferredSchedule || "").trim(),
       String(contactMethod || req.user.preferredContactChannel || "").trim(), String(exactLocationNotes || "").trim(),
+      cleanJobLocation.lat, cleanJobLocation.lng, cleanJobLocation.lat !== null ? String(jobLocationSource || "current").trim().slice(0, 40) : null,
       boolField(permissionToForward) ? 1 : 0, boolField(consentToRate) ? 1 : 0, details, timestamp, req.params.id,
     ]
   );
@@ -2518,8 +2561,9 @@ app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
   if (!providerRows.length || !hasCategory(providerRows[0].category, requestRows[0].category)) return res.status(403).json({ error: "This request does not match your provider categories" });
   const [passRows] = await pool.query("SELECT request_id FROM request_passes WHERE request_id = ? AND provider_id = ? LIMIT 1", [req.params.id, req.user.id]);
   if (passRows.length) return res.status(400).json({ error: "You already passed this request" });
-  const { amount, schedule, notes, type } = req.body || {};
+  const { amount, schedule, notes, type, providerLocation } = req.body || {};
   if (!amount) return res.status(400).json({ error: "Amount is required" });
+  const cleanProviderLocation = locationPayload(providerLocation);
   const offer = {
     id: createId(),
     type: type === "counter" ? "counter" : "offer",
@@ -2528,13 +2572,17 @@ app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
     amount,
     schedule: schedule || "",
     notes: notes || "",
+    providerLocation: cleanProviderLocation.lat !== null ? { ...cleanProviderLocation, capturedAt: nowMysql() } : null,
     createdAt: nowMysql(),
   };
   const status = offer.type === "counter" ? "Countered" : "Offers Received";
   await pool.query("DELETE FROM offers WHERE request_id = ? AND provider_id = ?", [req.params.id, offer.providerId]);
   await pool.query(
-    "INSERT INTO offers (id, request_id, type, provider_id, provider_name, amount, schedule, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [offer.id, req.params.id, offer.type, offer.providerId, offer.providerName, offer.amount, offer.schedule, offer.notes, offer.createdAt]
+    "INSERT INTO offers (id, request_id, type, provider_id, provider_name, amount, schedule, notes, provider_lat, provider_lng, provider_location_captured_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      offer.id, req.params.id, offer.type, offer.providerId, offer.providerName, offer.amount, offer.schedule, offer.notes,
+      offer.providerLocation?.lat ?? null, offer.providerLocation?.lng ?? null, offer.providerLocation?.capturedAt ?? null, offer.createdAt,
+    ]
   );
   await pool.query("UPDATE requests SET status = ?, updated_at = ? WHERE id = ?", [status, nowMysql(), req.params.id]);
   await addActivity(offer.type === "counter" ? "Counter-offer sent" : "Offer sent", `${offer.amount} for ${requestRows[0].category}`);

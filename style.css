@@ -1703,6 +1703,68 @@ select[multiple].form-select {
   font-weight: 900;
 }
 
+.offer-distance {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.28rem 0.5rem;
+  border-radius: 999px;
+  background: #e9f7ef;
+  color: #17613a;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.location-picker {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.7rem;
+  border: 1px solid #d7e6e3;
+  border-radius: 8px;
+  background: #f6fbfa;
+  text-align: left;
+}
+
+.location-picker strong,
+.location-picker small {
+  display: block;
+}
+
+.location-picker small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.location-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.job-map {
+  min-height: 18rem;
+  height: min(44vh, 24rem);
+  overflow: hidden;
+  border: 1px solid #c9dcd8;
+  border-radius: 8px;
+  background: #dce8e5;
+}
+
+.location-note {
+  font-weight: 800;
+}
+
+:root[data-theme="dark"] .location-picker {
+  border-color: #2c4a52;
+  background: #10272c;
+}
+
+:root[data-theme="dark"] .job-map {
+  border-color: #2c4a52;
+}
+
 :root[data-theme="dark"] .offer-amount {
   color: #8fe7ef;
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
