@@ -31,7 +31,7 @@ public class MainActivity extends BridgeActivity {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             webView.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
-            webView.setOffscreenPreRaster(true);
+            settings.setOffscreenPreRaster(true);
         }
     }
 
