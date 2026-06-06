@@ -96,6 +96,12 @@ const state = {
   presenceTimer: null,
   realtimePollTimer: null,
   conversationPollTimer: null,
+  pullRefresh: {
+    startY: 0,
+    distance: 0,
+    active: false,
+    refreshing: false,
+  },
   call: null,
   adminMetric: "",
   theme: localStorage.getItem(STORAGE.theme) || "system",
@@ -114,6 +120,7 @@ async function init() {
   setupNativeNotifications();
   setupPushNotifications();
   setupOfflineSync();
+  setupPullToRefresh();
   initializeTheme();
   bindEvents();
   hydrateLoginCredentials();
@@ -137,6 +144,80 @@ function setupOfflineSync() {
     addActivity("Offline mode", "You can keep saving validation entries. They will sync automatically later.");
     renderConnectivity();
   });
+}
+
+function setupPullToRefresh() {
+  const indicator = document.createElement("div");
+  indicator.className = "pull-refresh-indicator";
+  indicator.setAttribute("aria-live", "polite");
+  indicator.innerHTML = `<i class="fa-solid fa-arrow-down"></i><span>Pull to refresh</span>`;
+  document.body.appendChild(indicator);
+
+  document.addEventListener("touchstart", (event) => {
+    if (!canStartPullRefresh(event)) return;
+    state.pullRefresh.startY = event.touches[0].clientY;
+    state.pullRefresh.distance = 0;
+    state.pullRefresh.active = true;
+  }, { passive: true });
+
+  document.addEventListener("touchmove", (event) => {
+    if (!state.pullRefresh.active || state.pullRefresh.refreshing) return;
+    const distance = Math.max(0, event.touches[0].clientY - state.pullRefresh.startY);
+    if (distance <= 0) return;
+    state.pullRefresh.distance = Math.min(110, distance * 0.55);
+    updatePullRefreshIndicator(indicator);
+    if (distance > 12 && window.scrollY <= 0) event.preventDefault();
+  }, { passive: false });
+
+  document.addEventListener("touchend", () => {
+    if (!state.pullRefresh.active) return;
+    const shouldRefresh = state.pullRefresh.distance >= 64;
+    state.pullRefresh.active = false;
+    if (shouldRefresh) {
+      runPullRefresh(indicator);
+      return;
+    }
+    state.pullRefresh.distance = 0;
+    updatePullRefreshIndicator(indicator);
+  }, { passive: true });
+}
+
+function canStartPullRefresh(event) {
+  if (!state.session || !document.body.classList.contains("app-mode")) return false;
+  if (state.pullRefresh.refreshing || window.scrollY > 0) return false;
+  const target = event.target;
+  if (target?.closest?.(".swal2-container, .chat-shell, input, textarea, select, button, a, [data-no-pull-refresh]")) return false;
+  return Boolean(event.touches?.length === 1);
+}
+
+function updatePullRefreshIndicator(indicator) {
+  const distance = state.pullRefresh.refreshing ? 74 : state.pullRefresh.distance;
+  const ready = distance >= 64 || state.pullRefresh.refreshing;
+  indicator.classList.toggle("active", distance > 0 || state.pullRefresh.refreshing);
+  indicator.classList.toggle("ready", ready);
+  indicator.style.transform = `translate(-50%, ${Math.min(76, distance) - 74}px)`;
+  indicator.querySelector("i").className = `fa-solid ${state.pullRefresh.refreshing ? "fa-rotate fa-spin" : ready ? "fa-arrow-rotate-right" : "fa-arrow-down"}`;
+  indicator.querySelector("span").textContent = state.pullRefresh.refreshing ? "Refreshing" : ready ? "Release to refresh" : "Pull to refresh";
+}
+
+async function runPullRefresh(indicator) {
+  state.pullRefresh.refreshing = true;
+  updatePullRefreshIndicator(indicator);
+  try {
+    await loadState({ silent: true });
+    await Promise.allSettled([
+      syncUnreadNotificationSummaries(),
+      syncUnreadMessageSummaries(),
+      syncPushStatus(),
+    ]);
+    notify("Refreshed", "KAILA is up to date.", "success");
+  } catch (error) {
+    notify("Refresh failed", error.message || "Please try again.", "error");
+  } finally {
+    state.pullRefresh.refreshing = false;
+    state.pullRefresh.distance = 0;
+    setTimeout(() => updatePullRefreshIndicator(indicator), 160);
+  }
 }
 
 function setupAttentionNotifications() {
@@ -1296,6 +1377,7 @@ function renderRequestCard(request) {
       ${request.disputeNote ? `<div class="offer"><strong>Dispute note</strong><div>${escapeHtml(request.disputeNote)}</div></div>` : ""}
       ${renderAttachments("Dispute media", request.disputeAttachments, request.id)}
       <div class="card-actions">
+        ${canEditRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-edit-request="${request.id}"><i class="fa-solid fa-pen"></i> Edit</button>` : ""}
         ${canAcceptClientPrice(request) ? `<button class="btn btn-sm btn-outline-success" data-accept-client-price="${request.id}">Accept Client Price</button>` : ""}
         ${canOffer(request) ? `<button class="btn btn-sm btn-outline-primary" data-offer="${request.id}">Offer</button>` : ""}
         ${canPass(request) ? `<button class="btn btn-sm btn-outline-secondary" data-pass="${request.id}">Decline/Pass</button>` : ""}
@@ -1377,6 +1459,7 @@ function bindRequestCardActions(host) {
   $$("[data-accept-client-price]", host).forEach((button) => button.addEventListener("click", () => acceptClientPrice(button.dataset.acceptClientPrice)));
   $$("[data-offer]", host).forEach((button) => button.addEventListener("click", () => openOfferModal(button.dataset.offer, "offer")));
   $$("[data-pass]", host).forEach((button) => button.addEventListener("click", () => passRequest(button.dataset.pass)));
+  $$("[data-edit-request]", host).forEach((button) => button.addEventListener("click", () => openRequestModal(state.requests.find((request) => request.id === button.dataset.editRequest))));
   $$("[data-select-offer]", host).forEach((button) => button.addEventListener("click", () => confirmRequest(button.dataset.requestId, button.dataset.selectOffer)));
   $$("[data-media-open]", host).forEach((button) => button.addEventListener("click", () => openMediaViewer(button.dataset.requestId, button.dataset.mediaStage, Number(button.dataset.mediaIndex))));
   $$("[data-conversation]", host).forEach((button) => button.addEventListener("click", () => openConversation(button.dataset.conversation)));
@@ -3113,32 +3196,35 @@ function placeQuestionGuide(button) {
   button.dataset.vertical = rect.top - 96 < bounds.top + 16 ? "below" : "above";
 }
 
-async function openRequestModal() {
+async function openRequestModal(existing = null) {
+  const editing = Boolean(existing?.id);
   const result = await modal({
-    title: "Post request",
+    title: editing ? "Edit request" : "Post request",
     html: `
       <div class="swal-form two">
-        <label><span>Category</span>${categorySelect("request-category", true)}</label>
-        <label><span>Urgency</span>${select("request-urgency", URGENCY_OPTIONS, "Today")}</label>
-        <label><span>Preferred schedule</span>${select("request-schedule", URGENCY_OPTIONS, "Today")}</label>
-        <label><span>Contact method</span>${select("request-contact-method", CONTACT_CHANNELS, state.session.preferredContactChannel || "Messenger")}</label>
-        <label class="wide"><span>Address</span>${addressFields("request-address", state.session.area)}</label>
-        <label><span>Budget</span><input id="request-budget" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Open / ₱1,500.00"></label>
-        <label class="wide"><span>Exact location notes <small>(not forwarded too early)</small></span><textarea id="request-location-notes" class="form-control" rows="2"></textarea></label>
-        <label class="wide"><span>Details</span><textarea id="request-details" class="form-control" rows="3"></textarea></label>
-        <label class="wide"><span>Photos or videos (optional, up to 3 files)</span><input id="request-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
-        <div class="wide upload-preview" data-request-attachment-preview></div>
-        <label class="wide consent-line"><input id="request-forward-consent" type="checkbox" checked> Permission to forward request details to matching providers.</label>
-        <label class="wide consent-line"><input id="request-rate-consent" type="checkbox" checked> I agree to rate after completion.</label>
+        <label><span>Category</span>${categorySelect("request-category", true, existing?.category || "")}</label>
+        <label><span>Urgency</span>${select("request-urgency", URGENCY_OPTIONS, existing?.urgency || "Today")}</label>
+        <label><span>Preferred schedule</span>${select("request-schedule", URGENCY_OPTIONS, existing?.preferredSchedule || "Today")}</label>
+        <label><span>Contact method</span>${select("request-contact-method", CONTACT_CHANNELS, existing?.contactMethod || state.session.preferredContactChannel || "Messenger")}</label>
+        <label class="wide"><span>Address</span>${addressFields("request-address", existing?.area || state.session.area)}</label>
+        <label><span>Budget</span><input id="request-budget" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Open / ₱1,500.00" value="${escapeAttribute(currencyNumber(existing?.budget) || "")}"></label>
+        <label class="wide"><span>Exact location notes <small>(not forwarded too early)</small></span><textarea id="request-location-notes" class="form-control" rows="2">${escapeHtml(existing?.exactLocationNotes || "")}</textarea></label>
+        <label class="wide"><span>Details</span><textarea id="request-details" class="form-control" rows="3">${escapeHtml(existing?.details || "")}</textarea></label>
+        ${editing ? `<div class="wide offer"><strong>Existing media</strong><div>Existing request media stays attached. Add a new request if you need to replace photos or videos.</div></div>` : `
+          <label class="wide"><span>Photos or videos (optional, up to 3 files)</span><input id="request-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
+          <div class="wide upload-preview" data-request-attachment-preview></div>
+        `}
+        <label class="wide consent-line"><input id="request-forward-consent" type="checkbox" ${existing?.permissionToForward === false ? "" : "checked"}> Permission to forward request details to matching providers.</label>
+        <label class="wide consent-line"><input id="request-rate-consent" type="checkbox" ${existing?.consentToRate === false ? "" : "checked"}> I agree to rate after completion.</label>
       </div>
     `,
-    confirmButtonText: "Post",
+    confirmButtonText: editing ? "Save Changes" : "Post",
     didOpen: () => {
       bindAddressGroup("request-address");
-      bindAttachmentPreview("#request-attachments", "[data-request-attachment-preview]", 3);
+      if (!editing) bindAttachmentPreview("#request-attachments", "[data-request-attachment-preview]", 3);
     },
     preConfirm: async () => {
-      const attachments = await readMediaAttachments("#request-attachments");
+      const attachments = editing ? [] : await readMediaAttachments("#request-attachments");
       if (!attachments) return false;
       const request = {
         category: $("#request-category").value,
@@ -3162,9 +3248,11 @@ async function openRequestModal() {
   });
   if (!result.isConfirmed) return;
   try {
-    const payload = await apiFetch("/api/requests", { method: "POST", body: JSON.stringify(result.value) });
+    const payload = editing
+      ? await apiFetch(`/api/requests/${existing.id}`, { method: "PUT", body: JSON.stringify(result.value) })
+      : await apiFetch("/api/requests", { method: "POST", body: JSON.stringify(result.value) });
     applyServerState(payload.state);
-    notify("Request posted", "", "success");
+    notify(editing ? "Request updated" : "Request posted", "", "success");
   } catch (error) {
     notify("Request failed", error.message, "error");
   }
@@ -6522,6 +6610,7 @@ function resumeAttentionAudio() {
 }
 
 async function showSystemNotification(title, options = {}) {
+  if (shouldSuppressForegroundSystemNotification(options)) return;
   if (await showNativeNotification(title, options)) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   const actions = Array.isArray(options.actions) ? options.actions : [];
@@ -6553,6 +6642,12 @@ async function showSystemNotification(title, options = {}) {
   try {
     new Notification(title, simplePayload);
   } catch {}
+}
+
+function shouldSuppressForegroundSystemNotification(options = {}) {
+  if (options.urgency === "call") return false;
+  if (document.visibilityState !== "visible") return false;
+  return Boolean(document.body.classList.contains("app-mode") || state.session);
 }
 
 async function showNativeNotification(title, options = {}) {
@@ -6816,6 +6911,10 @@ function clearVisibleProviderJobNotifications() {
 
 function canSelectOffer(request) {
   return state.session?.role === "client" && request.clientId === state.session.id && visibleOffers(request).length > 0 && ["Offers Received", "Countered"].includes(request.status);
+}
+
+function canEditRequest(request = {}) {
+  return Boolean(state.session?.role === "client" && request.clientId === state.session.id && ["Posted", "Offers Received", "Countered"].includes(request.status));
 }
 
 function visibleOffers(request) {

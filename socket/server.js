@@ -2474,6 +2474,41 @@ app.post("/api/requests", requireUser, async (req, res) => {
   res.status(201).json({ request, state: await getStateFor(req.user) });
 });
 
+app.put("/api/requests/:id", requireUser, async (req, res) => {
+  if (req.user.role !== "client") return res.status(403).json({ error: "Only clients can edit requests" });
+  const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
+  if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
+  const existing = requestRows[0];
+  if (existing.client_id !== req.user.id) return res.status(403).json({ error: "Only the request owner can edit this request" });
+  if (!["Posted", "Offers Received", "Countered"].includes(existing.status)) {
+    return res.status(400).json({ error: "This request can no longer be edited after a provider is selected" });
+  }
+
+  const {
+    category, urgency, area, budget, preferredSchedule, contactMethod, exactLocationNotes,
+    permissionToForward, consentToRate, details,
+  } = req.body || {};
+  if (!category || !area || !details) return res.status(400).json({ error: "Category, area, and details are required" });
+  if (!boolField(permissionToForward) || !boolField(consentToRate)) return res.status(400).json({ error: "Permission to forward and rating consent are required" });
+  const timestamp = nowMysql();
+  await pool.query(
+    `UPDATE requests
+     SET category = ?, urgency = ?, area = ?, budget = ?, preferred_schedule = ?, contact_method = ?,
+         exact_location_notes = ?, permission_to_forward = ?, consent_to_rate = ?, details = ?, updated_at = ?
+     WHERE id = ?`,
+    [
+      category, urgency || "Today", area, budget || "Open", String(preferredSchedule || "").trim(),
+      String(contactMethod || req.user.preferredContactChannel || "").trim(), String(exactLocationNotes || "").trim(),
+      boolField(permissionToForward) ? 1 : 0, boolField(consentToRate) ? 1 : 0, details, timestamp, req.params.id,
+    ]
+  );
+  await addActivity("Request edited", `${category} in ${area}`);
+  const [updatedRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
+  broadcast("kaila.request.updated", { request: mapRequest(updatedRows[0], [], [], [], new Map(), new Map()) });
+  broadcast("kaila.state.updated", await getState());
+  res.json({ state: await getStateFor(req.user) });
+});
+
 app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
   if (req.user.role !== "provider") return res.status(403).json({ error: "Only providers can send offers" });
   const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
