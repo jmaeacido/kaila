@@ -314,7 +314,8 @@ function normalizeCategories(value) {
 }
 
 function hasCategory(categories, category) {
-  return normalizeCategories(categories).split(",").map((item) => item.trim()).includes(String(category || "").trim());
+  const target = String(category || "").trim().toLowerCase();
+  return normalizeCategories(categories).split(",").map((item) => item.trim().toLowerCase()).includes(target);
 }
 
 function normalizeAccountRole(role) {
@@ -882,9 +883,13 @@ async function pushTokensForUsers(userIds = []) {
 }
 
 async function sendPushToUsers(userIds = [], payload = {}) {
-  if (!firebaseMessaging) return;
+  if (!firebaseMessaging) {
+    console.warn("KAILA push skipped: Firebase messaging is not initialized.");
+    return { sent: 0, tokenCount: 0, reason: "firebase_unavailable" };
+  }
   const rows = await pushTokensForUsers(userIds);
-  if (!rows.length) return;
+  if (!rows.length) return { sent: 0, tokenCount: 0, reason: "no_tokens" };
+  let sent = 0;
   await Promise.all(rows.map(async (row) => {
     try {
       const message = {
@@ -893,23 +898,10 @@ async function sendPushToUsers(userIds = [], payload = {}) {
         android: {
           priority: "high",
           ttl: payload.ttl || 60 * 60 * 1000,
-          notification: {
-            channelId: payload.channelId || "kaila-updates",
-            sound: payload.sound || "kaila_notification",
-            priority: "high",
-            defaultVibrateTimings: false,
-            vibrateTimingsMillis: payload.vibrateTimingsMillis || [280, 90, 280],
-            tag: payload.tag || payload.data?.type || "kaila-update",
-          },
         },
       };
-      if (payload.title || payload.body) {
-        message.notification = {
-          title: payload.title || "KAILA",
-          body: payload.body || "",
-        };
-      }
       await firebaseMessaging.send(message);
+      sent += 1;
     } catch (error) {
       const code = error?.errorInfo?.code || error?.code || "";
       if (["messaging/registration-token-not-registered", "messaging/invalid-registration-token"].includes(code)) {
@@ -919,10 +911,11 @@ async function sendPushToUsers(userIds = [], payload = {}) {
       }
     }
   }));
+  return { sent, tokenCount: rows.length };
 }
 
 async function pushNotification(userIds, { type, title, body, data = {}, ttl } = {}) {
-  await sendPushToUsers(userIds, {
+  return sendPushToUsers(userIds, {
     ttl,
     title,
     body,
@@ -2148,7 +2141,31 @@ app.post("/api/push-token", requireUser, async (req, res) => {
      ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), token = VALUES(token), platform = VALUES(platform), device_id = VALUES(device_id), updated_at = VALUES(updated_at)`,
     [createId(), req.user.id, token, hash, platform, deviceId || null, timestamp, timestamp]
   );
-  res.json({ ok: true });
+  const [countRows] = await pool.query("SELECT COUNT(*) AS token_count FROM push_tokens WHERE user_id = ?", [req.user.id]);
+  res.json({ ok: true, tokenCount: Number(countRows[0]?.token_count || 0) });
+});
+
+app.get("/api/push-status", requireUser, async (req, res) => {
+  const [tokenRows] = await pool.query(
+    "SELECT platform, device_id, updated_at FROM push_tokens WHERE user_id = ? ORDER BY updated_at DESC",
+    [req.user.id]
+  );
+  const provider = req.user.role === "provider"
+    ? (await pool.query("SELECT status, category FROM providers WHERE user_id = ? LIMIT 1", [req.user.id]))[0][0] || null
+    : null;
+  res.json({
+    firebase: Boolean(firebaseMessaging),
+    tokenCount: tokenRows.length,
+    tokens: tokenRows.map((row) => ({
+      platform: row.platform,
+      deviceId: row.device_id || "",
+      updatedAt: row.updated_at,
+    })),
+    provider: provider ? {
+      status: provider.status || "",
+      category: provider.category || "",
+    } : null,
+  });
 });
 
 app.post("/api/register", async (req, res) => {
@@ -2412,7 +2429,8 @@ app.post("/api/requests", requireUser, async (req, res) => {
   }
   await addActivity("Request posted", `${request.category} in ${request.area}`);
   broadcast("kaila.request.created", { request });
-  pushNotification(await providerUserIdsForRequestCategory(request.category), {
+  const providerUserIds = await providerUserIdsForRequestCategory(request.category);
+  pushNotification(providerUserIds, {
     type: "request",
     title: "New KAILA job request",
     body: `${request.category} in ${request.area}${request.urgency ? ` - ${request.urgency}` : ""}`,
@@ -2425,6 +2443,15 @@ app.post("/api/requests", requireUser, async (req, res) => {
       persistent: "true",
       attention: "job-request",
     },
+  }).then((result) => {
+    console.log("KAILA request push", {
+      requestId: request.id,
+      category: request.category,
+      matchedProviders: providerUserIds.length,
+      sent: result?.sent || 0,
+      tokenCount: result?.tokenCount || 0,
+      reason: result?.reason || "",
+    });
   }).catch((error) => console.warn("Request push failed:", error.message));
   res.status(201).json({ request, state: await getStateFor(req.user) });
 });

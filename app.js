@@ -87,6 +87,9 @@ const state = {
   nativeNotificationListenersBound: false,
   pushNotificationsBound: false,
   pushToken: "",
+  pushStatus: "",
+  pushError: "",
+  pushServerStatus: null,
   validationSyncing: false,
   typingTimer: null,
   typingSent: false,
@@ -255,18 +258,26 @@ async function ensureNativeNotificationPermission() {
 }
 
 function nativeLocalNotifications() {
-  if (!isNativeApp()) return null;
+  if (!isNativeApp() && !isCapacitorPluginAvailable("LocalNotifications")) return null;
   return window.Capacitor?.Plugins?.LocalNotifications || null;
 }
 
 function nativeKailaBridge() {
-  if (!isNativeApp()) return null;
+  if (!isNativeApp() && !isCapacitorPluginAvailable("KailaNative")) return null;
   return window.Capacitor?.Plugins?.KailaNative || null;
 }
 
 function nativePushNotifications() {
-  if (!isNativeApp()) return null;
+  if (!isNativeApp() && !isCapacitorPluginAvailable("PushNotifications")) return null;
   return window.Capacitor?.Plugins?.PushNotifications || null;
+}
+
+function isCapacitorPluginAvailable(name) {
+  try {
+    return Boolean(window.Capacitor?.isPluginAvailable?.(name) || window.Capacitor?.Plugins?.[name]);
+  } catch {
+    return false;
+  }
 }
 
 async function nativeFirebaseAvailable() {
@@ -322,19 +333,28 @@ async function consumeNativeLaunchAction() {
 
 async function setupPushNotifications() {
   const push = nativePushNotifications();
-  if (!push || state.pushNotificationsBound) return;
+  if (!push) {
+    state.pushStatus = isNativeApp() ? "Push plugin unavailable" : "Not a native app";
+    renderAttentionBadges();
+    return;
+  }
+  if (state.pushNotificationsBound) return;
   try {
-    if (!await nativeFirebaseAvailable()) {
-      console.warn("KAILA push setup skipped: Firebase is not configured for this native build.");
-      return;
-    }
+    const firebaseAvailable = await nativeFirebaseAvailable();
+    state.pushStatus = firebaseAvailable ? "Firebase available" : "Registering with PushNotifications";
     state.pushNotificationsBound = true;
     await push.addListener("registration", (token) => {
       state.pushToken = token.value || "";
+      state.pushStatus = state.pushToken ? "Token registered on device" : "Registration returned no token";
+      state.pushError = "";
       registerPushToken(state.pushToken).catch((error) => console.warn("KAILA push token registration failed:", error));
+      renderSettings();
     });
     await push.addListener("registrationError", (error) => {
+      state.pushStatus = "Registration failed";
+      state.pushError = error?.error || error?.message || JSON.stringify(error || {});
       console.warn("KAILA push registration error:", error);
+      renderSettings();
     });
     await push.addListener("pushNotificationReceived", (notification) => {
       handlePushNotification(notification);
@@ -345,15 +365,20 @@ async function setupPushNotifications() {
     });
     const permission = await push.checkPermissions();
     const nextPermission = permission.receive === "prompt" ? await push.requestPermissions() : permission;
+    state.pushStatus = `Permission: ${nextPermission.receive || "unknown"}`;
     if (nextPermission.receive === "granted") await push.register();
+    else renderSettings();
   } catch (error) {
+    state.pushStatus = "Push setup failed";
+    state.pushError = error?.message || String(error);
     console.warn("KAILA push setup failed:", error);
+    renderSettings();
   }
 }
 
 async function registerPushToken(token) {
   if (!token || !state.session) return;
-  await apiFetch("/api/push-token", {
+  const response = await apiFetch("/api/push-token", {
     method: "POST",
     body: JSON.stringify({
       token,
@@ -362,6 +387,21 @@ async function registerPushToken(token) {
     }),
     silentError: true,
   });
+  state.pushStatus = response?.tokenCount ? `Server registered ${response.tokenCount} device${response.tokenCount === 1 ? "" : "s"}` : "Server registered device";
+  await syncPushStatus();
+  renderSettings();
+}
+
+async function syncPushStatus() {
+  if (!state.session) return null;
+  try {
+    const status = await apiFetch("/api/push-status", { method: "GET", silentError: true });
+    state.pushServerStatus = status;
+    return status;
+  } catch (error) {
+    state.pushServerStatus = { error: error.message || "Push status unavailable" };
+    return state.pushServerStatus;
+  }
 }
 
 function pushDeviceId() {
@@ -815,6 +855,7 @@ function runPostAuthTasks(username, password, user) {
     rememberOfflineLogin(username, password, user),
     offerPasswordSave(username, password, user),
     registerPushToken(state.pushToken),
+    syncPushStatus(),
     syncUnreadNotificationSummaries(),
     syncUnreadMessageSummaries(),
   ]).then((results) => {
@@ -1920,9 +1961,11 @@ function bindInboxActions(host = document) {
 }
 
 function notificationCapabilityText() {
-  if (isNativeApp()) {
+  if (isNativeApp() || nativePushNotifications() || nativeLocalNotifications()) {
     if (state.pushToken) return "Push alerts are active on this device.";
-    return nativePushNotifications() ? "Push alerts are waiting for device registration." : "Native push is not available in this build.";
+    if (nativePushNotifications()) return state.pushStatus || "Push alerts are waiting for device registration.";
+    if (nativeLocalNotifications()) return "Local alerts are available; push plugin is not available.";
+    return "Native push is not available in this build.";
   }
   if (!("Notification" in window)) return "Browser notifications are not supported here.";
   if (Notification.permission === "granted") return "Browser alerts are enabled while the PWA can receive them.";
@@ -2273,7 +2316,11 @@ function renderSettings() {
 
 function renderNotificationSettings() {
   const browserPermission = "Notification" in window ? Notification.permission : "unsupported";
-  const nativePush = isNativeApp() ? (state.pushToken ? "Registered" : nativePushNotifications() ? "Available" : "Unavailable") : "Browser PWA";
+  const nativePush = (isNativeApp() || nativePushNotifications())
+    ? (state.pushToken ? "Registered" : nativePushNotifications() ? "Available" : "Unavailable")
+    : "Browser PWA";
+  const serverStatus = state.pushServerStatus;
+  const providerStatus = serverStatus?.provider;
   return `
     <section class="settings-card">
       <div class="settings-head">
@@ -2287,7 +2334,13 @@ function renderNotificationSettings() {
         <span>Socket: ${state.connected ? "Live" : "Offline"}</span>
         <span>Notifications: ${escapeHtml(browserPermission)}</span>
         <span>Push: ${escapeHtml(nativePush)}</span>
+        ${state.pushStatus ? `<span>Status: ${escapeHtml(state.pushStatus)}</span>` : ""}
+        ${serverStatus ? `<span>Server tokens: ${escapeHtml(serverStatus.tokenCount ?? "unknown")}</span>` : ""}
+        ${serverStatus ? `<span>Firebase: ${serverStatus.firebase ? "Ready" : "Not ready"}</span>` : ""}
       </div>
+      ${providerStatus ? `<div class="offer mt-2"><strong>Provider alert profile</strong><div>${escapeHtml(providerStatus.status || "No status")} - ${escapeHtml(providerStatus.category || "No categories")}</div></div>` : ""}
+      ${serverStatus?.error ? `<div class="offer mt-2"><strong>Server status</strong><div>${escapeHtml(serverStatus.error)}</div></div>` : ""}
+      ${state.pushError ? `<div class="offer mt-2"><strong>Push error</strong><div>${escapeHtml(state.pushError)}</div></div>` : ""}
       <div class="card-actions mt-2">
         <button class="btn btn-sm btn-outline-primary" type="button" data-enable-notifications><i class="fa-solid fa-bell"></i> Enable Alerts</button>
         <button class="btn btn-sm btn-outline-primary" type="button" data-reconnect><i class="fa-solid fa-plug-circle-bolt"></i> Reconnect Live</button>
@@ -2304,6 +2357,7 @@ async function enableNotificationsFromSettings() {
   await ensureNativeNotificationPermission();
   await setupPushNotifications();
   if (state.pushToken) await registerPushToken(state.pushToken).catch(() => {});
+  await syncPushStatus();
   renderSettings();
   notify("Alerts checked", notificationCapabilityText(), "info");
 }
