@@ -1023,6 +1023,7 @@ async function logout() {
 }
 
 function render() {
+  syncNavigationSessionAvailability();
   renderNav();
   renderTabs();
   renderActions();
@@ -1444,6 +1445,7 @@ function canUpdateRequestDistance(request = {}) {
 
 function navigationTargetForRequest(request = {}) {
   if (!state.session || !request?.id) return null;
+  if (!canNavigateRequest(request)) return null;
   if (state.session.role === "provider" && request.acceptedProviderId === state.session.id) {
     const destination = normalizeLocation(request.jobLocation);
     if (!destination) return null;
@@ -1464,6 +1466,21 @@ function navigationTargetForRequest(request = {}) {
     };
   }
   return null;
+}
+
+function canNavigateRequest(request = {}) {
+  return ["Accepted", "In Progress", "Revision Requested"].includes(request.status);
+}
+
+function syncNavigationSessionAvailability() {
+  const requestId = state.navigationSession?.request?.id;
+  if (!requestId) return;
+  const request = state.requests.find((item) => item.id === requestId);
+  if (request && navigationTargetForRequest(request)) {
+    state.navigationSession.request = request;
+    return;
+  }
+  stopNavigationWatch({ clearSession: true });
 }
 
 function renderNavigationCard(request = {}) {
@@ -8129,6 +8146,7 @@ function coverageAreaChips(id, selected = "") {
   return optionChips(id, sortedBarangays(state.geography.barangays), selected, {
     selectedEmpty: "Select barangays below",
     optionsEmpty: "All barangays selected",
+    bulkActions: true,
   });
 }
 
@@ -8137,6 +8155,7 @@ function availableDaysChips(id, selected = "") {
   return optionChips(id, AVAILABLE_DAY_OPTIONS, selectedDays, {
     selectedEmpty: "Select days below",
     optionsEmpty: "All days selected",
+    bulkActions: true,
   });
 }
 
@@ -8172,8 +8191,16 @@ function optionChips(id, options, selected = "", labels = {}) {
   const availableItems = options.filter((item) => !selectedItems.includes(item));
   const selectedEmpty = labels.selectedEmpty || "Select options below";
   const optionsEmpty = labels.optionsEmpty || "All options selected";
+  const bulkActions = labels.bulkActions ? `
+    <div class="category-chip-actions">
+      <button type="button" data-chip-action="select-all">Select All</button>
+      <button type="button" data-chip-action="deselect-all">Deselect All</button>
+      <button type="button" data-chip-action="clear">Clear</button>
+    </div>
+  ` : "";
   return `
     <div class="category-chip-box" data-category-chip-box="${escapeAttribute(id)}">
+      ${bulkActions}
       <div class="category-chip-selected" data-category-selected>
         ${selectedItems.map((item) => categoryChip(item, true)).join("") || `<span class="category-chip-empty">${escapeHtml(selectedEmpty)}</span>`}
       </div>
@@ -8199,6 +8226,13 @@ function renderCategoryChips(id, selected = "") {
 function bindCategoryChips(id) {
   const box = $(`[data-category-chip-box="${escapeCssIdentifier(id)}"]`);
   if (!box) return;
+  $$("[data-chip-action]", box).forEach((button) => button.addEventListener("click", () => {
+    const options = chipOptionsForId(id);
+    const action = button.dataset.chipAction;
+    const next = action === "select-all" ? options : [];
+    box.outerHTML = chipsForId(id, next);
+    bindCategoryChips(id);
+  }));
   $$("[data-category-chip]", box).forEach((button) => button.addEventListener("click", () => {
     const selected = selectedCategoryChips(id);
     const category = button.dataset.categoryChip;
@@ -8218,6 +8252,12 @@ function chipsForId(id, selected = "") {
   if (id.includes("days")) return availableDaysChips(id, selected);
   if (id.includes("coverage")) return coverageAreaChips(id, selected);
   return categoryChips(id, selected);
+}
+
+function chipOptionsForId(id) {
+  if (id.includes("days")) return AVAILABLE_DAY_OPTIONS;
+  if (id.includes("coverage")) return sortedBarangays(state.geography.barangays);
+  return SERVICE_CATEGORIES;
 }
 
 function addressFields(id, value = "") {

@@ -1102,6 +1102,29 @@ body.app-mode > .navbar {
   gap: 0.35rem;
 }
 
+.category-chip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.category-chip-actions button {
+  min-height: 1.8rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--brand);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.category-chip-actions button:hover,
+.category-chip-actions button:focus {
+  border-color: var(--brand-2);
+  background: rgba(15, 107, 112, 0.1);
+}
+
 .category-chip-selected {
   min-height: 2.1rem;
   align-items: center;
