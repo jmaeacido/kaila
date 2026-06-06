@@ -3246,7 +3246,7 @@ function bindJobLocationPicker({ initialLocation = null, getLocation, setLocatio
     clearButton?.classList.toggle("d-none", !location);
     if (!status) return;
     if (!location) {
-      status.textContent = "No pin yet. Distance will use address text only.";
+      status.textContent = "No pin yet. Pin the job site before posting.";
       return;
     }
     status.textContent = source === "current"
@@ -3274,6 +3274,32 @@ function bindJobLocationPicker({ initialLocation = null, getLocation, setLocatio
     updateStatus(source);
   };
 
+  const addTileLayer = () => {
+    const tileSources = [
+      "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      "https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+    ];
+    let tileIndex = 0;
+    let layer = null;
+    const attach = () => {
+      layer = window.L.tileLayer(tileSources[tileIndex], {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap",
+        crossOrigin: true,
+      }).addTo(map);
+      layer.once("tileerror", () => {
+        if (tileIndex >= tileSources.length - 1) {
+          if (status) status.textContent = "Map tiles are not loading. You can still use GPS, or try again with internet.";
+          return;
+        }
+        tileIndex += 1;
+        layer.remove();
+        attach();
+      });
+    };
+    attach();
+  };
+
   const ensureMap = () => {
     if (!mapEl || !window.L) {
       notify("Map unavailable", "Check your internet connection, then try again.", "warning");
@@ -3282,15 +3308,16 @@ function bindJobLocationPicker({ initialLocation = null, getLocation, setLocatio
     mapEl.classList.remove("d-none");
     if (!map) {
       const center = normalizeLocation(getLocation?.()) || state.deviceLocation || DEFAULT_MAP_CENTER;
-      map = window.L.map(mapEl, { zoomControl: true }).setView([center.lat, center.lng], 14);
-      window.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: "&copy; OpenStreetMap",
-      }).addTo(map);
+      map = window.L.map(mapEl, { zoomControl: true, preferCanvas: true }).setView([center.lat, center.lng], 14);
+      addTileLayer();
       map.on("click", (event) => placeMarker(event.latlng, "map"));
       if (initialLocation) placeMarker(initialLocation, initialLocation.source || "map");
     }
-    setTimeout(() => map?.invalidateSize(), 80);
+    [80, 250, 700].forEach((delay) => setTimeout(() => {
+      map?.invalidateSize();
+      const center = normalizeLocation(getLocation?.()) || state.deviceLocation || DEFAULT_MAP_CENTER;
+      map?.setView([center.lat, center.lng], map.getZoom() || 14, { animate: false });
+    }, delay));
     return map;
   };
 
@@ -3327,10 +3354,32 @@ function bindJobLocationPicker({ initialLocation = null, getLocation, setLocatio
   updateStatus(initialLocation?.source || "");
 }
 
+function parseRequestSchedule(value = "") {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/);
+  return match ? { date: match[1], time: match[2] } : { date: "", time: "" };
+}
+
+function bindScheduledRequestFields() {
+  const urgency = $("#request-urgency");
+  const fields = $("[data-scheduled-fields]");
+  const sync = () => fields?.classList.toggle("d-none", urgency?.value !== "Scheduled");
+  urgency?.addEventListener("change", sync);
+  sync();
+}
+
+function requestScheduleValue() {
+  if ($("#request-urgency")?.value !== "Scheduled") return "";
+  const date = $("#request-schedule-date")?.value || "";
+  const time = $("#request-schedule-time")?.value || "";
+  return date && time ? `${date} ${time}` : "";
+}
+
 async function openRequestModal(existing = null) {
   const editing = Boolean(existing?.id);
   let selectedJobLocation = normalizeLocation(existing?.jobLocation);
   let selectedLocationSource = existing?.jobLocationSource || existing?.jobLocation?.source || (selectedJobLocation ? "map" : "");
+  const existingSchedule = parseRequestSchedule(existing?.preferredSchedule || "");
   const result = await modal({
     width: "min(96vw, 880px)",
     title: editing ? "Edit request" : "Post request",
@@ -3338,15 +3387,16 @@ async function openRequestModal(existing = null) {
       <div class="swal-form two">
         <label><span>Category</span>${categorySelect("request-category", true, existing?.category || "")}</label>
         <label><span>Urgency</span>${select("request-urgency", URGENCY_OPTIONS, existing?.urgency || "Today")}</label>
-        <label><span>Preferred schedule</span>${select("request-schedule", URGENCY_OPTIONS, existing?.preferredSchedule || "Today")}</label>
         <label><span>Contact method</span>${select("request-contact-method", CONTACT_CHANNELS, existing?.contactMethod || state.session.preferredContactChannel || "Messenger")}</label>
-        <label class="wide"><span>Address</span>${addressFields("request-address", existing?.area || state.session.area)}</label>
         <label><span>Budget</span><input id="request-budget" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Open / ₱1,500.00" value="${escapeAttribute(currencyNumber(existing?.budget) || "")}"></label>
-        <label class="wide"><span>Exact location notes <small>(not forwarded too early)</small></span><textarea id="request-location-notes" class="form-control" rows="2">${escapeHtml(existing?.exactLocationNotes || "")}</textarea></label>
+        <div class="wide schedule-fields ${existing?.urgency === "Scheduled" ? "" : "d-none"}" data-scheduled-fields>
+          <label><span>Job date</span><input id="request-schedule-date" class="form-control" type="date" value="${escapeAttribute(existingSchedule.date)}"></label>
+          <label><span>Job time</span><input id="request-schedule-time" class="form-control" type="time" value="${escapeAttribute(existingSchedule.time)}"></label>
+        </div>
         <div class="wide location-picker" data-location-picker>
           <div>
             <strong>Job site pin</strong>
-            <small data-location-status>${selectedJobLocation ? "Pinned. Providers can see approximate distance." : "Optional, but recommended for accurate provider distance."}</small>
+            <small data-location-status>${selectedJobLocation ? "Pinned. Providers can see approximate distance." : "Required. Use your current GPS only if you are already at the job site."}</small>
           </div>
           <div class="location-actions">
             <button class="btn btn-sm btn-outline-primary" type="button" data-use-current-location><i class="fa-solid fa-location-crosshairs"></i> I am at the job site</button>
@@ -3367,7 +3417,7 @@ async function openRequestModal(existing = null) {
     `,
     confirmButtonText: editing ? "Save Changes" : "Post",
     didOpen: () => {
-      bindAddressGroup("request-address");
+      bindScheduledRequestFields();
       bindJobLocationPicker({
         initialLocation: selectedJobLocation,
         getLocation: () => selectedJobLocation,
@@ -3384,11 +3434,11 @@ async function openRequestModal(existing = null) {
       const request = {
         category: $("#request-category").value,
         urgency: $("#request-urgency").value,
-        area: addressValue("request-address"),
+        area: existing?.area || state.session.area || "Pinned job site",
         budget: normalizeCurrencyInput($("#request-budget").value) || "Open",
-        preferredSchedule: $("#request-schedule").value,
+        preferredSchedule: requestScheduleValue(),
         contactMethod: $("#request-contact-method").value.trim(),
-        exactLocationNotes: $("#request-location-notes").value.trim(),
+        exactLocationNotes: "",
         jobLocation: selectedJobLocation,
         jobLocationSource: selectedLocationSource,
         permissionToForward: $("#request-forward-consent").checked,
@@ -3396,8 +3446,16 @@ async function openRequestModal(existing = null) {
         details: $("#request-details").value.trim(),
         attachments,
       };
-      if (!request.category || !request.area || !request.details || !request.permissionToForward || !request.consentToRate) {
-        window.Swal.showValidationMessage("Category, area, details, forwarding permission, and rating consent are required.");
+      if (!request.category || !request.details || !request.permissionToForward || !request.consentToRate) {
+        window.Swal.showValidationMessage("Category, details, forwarding permission, and rating consent are required.");
+        return false;
+      }
+      if (request.urgency === "Scheduled" && !request.preferredSchedule) {
+        window.Swal.showValidationMessage("Select the scheduled job date and time.");
+        return false;
+      }
+      if (!request.jobLocation) {
+        window.Swal.showValidationMessage("Pin the job site using current location or the map.");
         return false;
       }
       return request;
@@ -3550,15 +3608,41 @@ async function acceptClientPrice(requestId) {
   }
   const result = await modal({
     title: "Accept client price?",
-    text: `Send an offer for ${formatCurrency(request.budget)}.`,
-    icon: "question",
+    html: `
+      <div class="swal-form">
+        <div class="offer"><strong>${escapeHtml(formatCurrency(request.budget))}</strong><div>Choose when you can do this job.</div></div>
+        <label><span>Schedule</span>${select("accept-price-schedule", URGENCY_OPTIONS, request.urgency === "Scheduled" ? "Scheduled" : "Today")}</label>
+        <div class="schedule-fields ${request.urgency === "Scheduled" ? "" : "d-none"}" data-accept-price-scheduled-fields>
+          <label><span>Job date</span><input id="accept-price-date" class="form-control" type="date" value="${escapeAttribute(parseRequestSchedule(request.preferredSchedule).date)}"></label>
+          <label><span>Job time</span><input id="accept-price-time" class="form-control" type="time" value="${escapeAttribute(parseRequestSchedule(request.preferredSchedule).time)}"></label>
+        </div>
+      </div>
+    `,
     confirmButtonText: "Accept Client Price",
+    didOpen: () => {
+      const schedule = $("#accept-price-schedule");
+      const fields = $("[data-accept-price-scheduled-fields]");
+      const sync = () => fields?.classList.toggle("d-none", schedule?.value !== "Scheduled");
+      schedule?.addEventListener("change", sync);
+      sync();
+    },
+    preConfirm: () => {
+      const schedule = $("#accept-price-schedule")?.value || "";
+      const date = $("#accept-price-date")?.value || "";
+      const time = $("#accept-price-time")?.value || "";
+      const exactSchedule = schedule === "Scheduled" ? (date && time ? `${date} ${time}` : "") : schedule;
+      if (!exactSchedule) {
+        window.Swal.showValidationMessage("Select your schedule for this job.");
+        return false;
+      }
+      return exactSchedule;
+    },
   });
   if (!result.isConfirmed) return;
   try {
     const payload = await apiFetch(`/api/requests/${requestId}/offers`, {
       method: "POST",
-      body: JSON.stringify({ type: "offer", amount: request.budget, notes: "Accepted client price" }),
+      body: JSON.stringify({ type: "offer", amount: request.budget, schedule: result.value, notes: "Accepted client price" }),
     });
     applyServerState(payload.state);
     notify("Client price accepted", "", "success");
@@ -7730,6 +7814,7 @@ function formatCurrency(value) {
 }
 
 function normalizeLocation(value = {}) {
+  if (!value || typeof value !== "object") return null;
   const lat = Number(value.lat ?? value.latitude);
   const lng = Number(value.lng ?? value.longitude);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;

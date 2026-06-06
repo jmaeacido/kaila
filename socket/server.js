@@ -2446,17 +2446,19 @@ app.post("/api/requests", requireUser, async (req, res) => {
     category, urgency, area, budget, preferredSchedule, contactMethod, exactLocationNotes,
     jobLocation, jobLocationSource, permissionToForward, consentToRate, details, attachments = [],
   } = req.body || {};
-  if (!category || !area || !details) return res.status(400).json({ error: "Category, area, and details are required" });
+  if (!category || !details) return res.status(400).json({ error: "Category and details are required" });
   if (!boolField(permissionToForward) || !boolField(consentToRate)) return res.status(400).json({ error: "Permission to forward and rating consent are required" });
   const timestamp = nowMysql();
   const cleanJobLocation = locationPayload(jobLocation);
+  if (cleanJobLocation.lat === null) return res.status(400).json({ error: "Pin the job site before posting" });
+  if ((urgency || "Today") === "Scheduled" && !String(preferredSchedule || "").trim()) return res.status(400).json({ error: "Scheduled requests need a job date and time" });
   const request = {
     id: createId(),
     clientId: req.user.id,
     clientName: req.user.name,
     category,
     urgency: urgency || "Today",
-    area,
+    area: String(area || "Pinned job site").trim(),
     budget: budget || "Open",
     preferredSchedule: String(preferredSchedule || "").trim(),
     contactMethod: String(contactMethod || req.user.preferredContactChannel || "").trim(),
@@ -2529,17 +2531,19 @@ app.put("/api/requests/:id", requireUser, async (req, res) => {
     category, urgency, area, budget, preferredSchedule, contactMethod, exactLocationNotes,
     jobLocation, jobLocationSource, permissionToForward, consentToRate, details,
   } = req.body || {};
-  if (!category || !area || !details) return res.status(400).json({ error: "Category, area, and details are required" });
+  if (!category || !details) return res.status(400).json({ error: "Category and details are required" });
   if (!boolField(permissionToForward) || !boolField(consentToRate)) return res.status(400).json({ error: "Permission to forward and rating consent are required" });
   const timestamp = nowMysql();
   const cleanJobLocation = locationPayload(jobLocation);
+  if (cleanJobLocation.lat === null) return res.status(400).json({ error: "Pin the job site before saving" });
+  if ((urgency || "Today") === "Scheduled" && !String(preferredSchedule || "").trim()) return res.status(400).json({ error: "Scheduled requests need a job date and time" });
   await pool.query(
     `UPDATE requests
      SET category = ?, urgency = ?, area = ?, budget = ?, preferred_schedule = ?, contact_method = ?,
          exact_location_notes = ?, job_lat = ?, job_lng = ?, job_location_source = ?, permission_to_forward = ?, consent_to_rate = ?, details = ?, updated_at = ?
      WHERE id = ?`,
     [
-      category, urgency || "Today", area, budget || "Open", String(preferredSchedule || "").trim(),
+      category, urgency || "Today", String(area || "Pinned job site").trim(), budget || "Open", String(preferredSchedule || "").trim(),
       String(contactMethod || req.user.preferredContactChannel || "").trim(), String(exactLocationNotes || "").trim(),
       cleanJobLocation.lat, cleanJobLocation.lng, cleanJobLocation.lat !== null ? String(jobLocationSource || "current").trim().slice(0, 40) : null,
       boolField(permissionToForward) ? 1 : 0, boolField(consentToRate) ? 1 : 0, details, timestamp, req.params.id,
@@ -2563,6 +2567,7 @@ app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
   if (passRows.length) return res.status(400).json({ error: "You already passed this request" });
   const { amount, schedule, notes, type, providerLocation } = req.body || {};
   if (!amount) return res.status(400).json({ error: "Amount is required" });
+  if (!String(schedule || "").trim()) return res.status(400).json({ error: "Schedule is required" });
   const cleanProviderLocation = locationPayload(providerLocation);
   const offer = {
     id: createId(),
@@ -2570,7 +2575,7 @@ app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
     providerId: req.user.id,
     providerName: req.user.name,
     amount,
-    schedule: schedule || "",
+    schedule: String(schedule || "").trim(),
     notes: notes || "",
     providerLocation: cleanProviderLocation.lat !== null ? { ...cleanProviderLocation, capturedAt: nowMysql() } : null,
     createdAt: nowMysql(),

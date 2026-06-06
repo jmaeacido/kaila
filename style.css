@@ -1727,6 +1727,12 @@ select[multiple].form-select {
   text-align: left;
 }
 
+.schedule-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 0.7rem;
+}
+
 .location-picker strong,
 .location-picker small {
   display: block;
