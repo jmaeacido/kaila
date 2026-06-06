@@ -1419,8 +1419,8 @@ function renderAdminRequestMetricDetail(request) {
 function renderRequestDistanceMeta(request) {
   if (state.session?.role === "provider") {
     const distance = state.deviceLocation && request.jobLocation ? cachedRouteDistanceKm(state.deviceLocation, request.jobLocation) : null;
-    if (distance !== null) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-route"></i> Route ${escapeHtml(formatDistanceKm(distance))}</span>`;
-    if (state.deviceLocation && request.jobLocation) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-route"></i> Calculating route distance...</span>`;
+    if (distance !== null) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-location-dot"></i> Job site pinned · Route ${escapeHtml(formatDistanceKm(distance))}</span>`;
+    if (state.deviceLocation && request.jobLocation) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-location-dot"></i> Job site pinned · Calculating route distance...</span>`;
     if (request.jobLocation) return `<span><i class="fa-solid fa-location-dot"></i> Job site pinned</span>`;
   }
   if (state.session?.role === "client" && request.clientId === state.session.id && request.jobLocation) {
@@ -7390,8 +7390,8 @@ function hydrateRequestRouteDistances(host = document) {
     if (!request?.jobLocation || !state.deviceLocation) return;
     routeDistanceKm(state.deviceLocation, request.jobLocation).then((value) => {
       element.innerHTML = value !== null
-        ? `<i class="fa-solid fa-route"></i> Route ${escapeHtml(formatDistanceKm(value))}`
-        : `<i class="fa-solid fa-triangle-exclamation"></i> Route distance unavailable`;
+        ? `<i class="fa-solid fa-location-dot"></i> Job site pinned · Route ${escapeHtml(formatDistanceKm(value))}`
+        : `<i class="fa-solid fa-location-dot"></i> Job site pinned · Route distance unavailable`;
     });
   });
 }

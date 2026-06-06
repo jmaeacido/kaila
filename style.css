@@ -1717,6 +1717,12 @@ select[multiple].form-select {
   font-weight: 900;
 }
 
+:root[data-theme="dark"] .offer-distance {
+  border: 1px solid #35565d;
+  background: #1c343a;
+  color: #bff3ea;
+}
+
 .location-picker {
   display: grid;
   gap: 0.55rem;
