@@ -96,6 +96,7 @@ const state = {
   deviceLocation: null,
   deviceLocationCheckedAt: 0,
   navigationWatchId: null,
+  navigationSession: null,
   routeDistanceCache: new Map(),
   validationSyncing: false,
   typingTimer: null,
@@ -1600,6 +1601,44 @@ async function openRequestNavigation(requestId) {
   await openNavigationModal({ request, target, origin });
 }
 
+function navigationSessionKey(request = {}, target = {}) {
+  const destination = normalizeLocation(target.destination);
+  return [request?.id || "", target.label || "", destination ? `${destination.lat.toFixed(5)},${destination.lng.toFixed(5)}` : ""].join("|");
+}
+
+function ensureNavigationSession({ request = {}, target = {}, origin = null } = {}) {
+  const destination = normalizeLocation(target.destination);
+  if (!destination) return null;
+  const key = navigationSessionKey(request, target);
+  const currentOrigin = normalizeLocation(origin) || state.navigationSession?.currentOrigin || null;
+  if (state.navigationSession?.key === key) {
+    state.navigationSession.request = request;
+    state.navigationSession.target = target;
+    state.navigationSession.destination = destination;
+    state.navigationSession.label = target.label || "Destination";
+    state.navigationSession.detail = target.detail || "";
+    state.navigationSession.currentOrigin = currentOrigin;
+    return state.navigationSession;
+  }
+  stopNavigationWatch({ clearSession: true });
+  state.navigationSession = {
+    key,
+    request,
+    target,
+    destination,
+    label: target.label || "Destination",
+    detail: target.detail || "",
+    currentOrigin,
+    minimized: false,
+    modalOpen: false,
+    modalShouldMinimize: false,
+    modalRender: null,
+    pipRender: null,
+    lastRoute: null,
+  };
+  return state.navigationSession;
+}
+
 function renderAttachments(title, attachments = [], requestId) {
   if (!attachments.length) return "";
   return `
@@ -2674,12 +2713,13 @@ async function openClientSurveyModal(entry = null) {
         <label>${questionLabel("Age range", "Optional demographic context. Use it only for broad validation patterns, not individual targeting.")}${select("survey-age", ["Under 18", "18-24", "25-34", "35-44", "45-54", "55+"], values.ageRange || "", "Optional")}</label>
         <label class="wide">${questionLabel("Barangay / area", "Maps where demand is coming from so Admin can decide which areas are strong enough for the pilot.")}${addressFields("survey-address", values.area || entry?.area || state.session.area || "")}</label>
         <label>${questionLabel("Needed a provider recently?", "Confirms whether the person actually experienced the problem KAILA wants to solve.")}${select("survey-needed", ["Yes", "No"], values.neededProvider || "Yes")}</label>
-        <label>${questionLabel("Service needed", "Identifies which service categories have real local demand.")}${categorySelect("survey-service", true, values.serviceNeeded || entry?.category || "")}</label>
-        <label>${questionLabel("How did they look?", "Shows current discovery behavior and what KAILA must improve or integrate with.")}${select("survey-search-method", ["Referral", "Facebook", "Messenger", "Neighbor", "Shop", "Previous provider", "Other"], values.searchMethod || "", "Choose method")}</label>
-        <label>${questionLabel("How long did it take?", "Measures search friction and urgency. Longer search time is stronger evidence of pain.")}${select("survey-time-to-find", ["Same day", "1-2 days", "3-7 days", "More than a week", "Never found one"], values.timeToFind || "", "Choose time")}</label>
-        <label>${questionLabel("Compared prices?", "Checks whether clients already want multiple offers or are stuck with one option.")}${select("survey-compared-prices", ["Yes", "No"], values.comparedPrices || "", "Choose")}</label>
-        <label>${questionLabel("Price clear before job?", "Tests pricing transparency problems that KAILA can solve with offers and scope notes.")}${select("survey-price-clear", ["Yes", "No", "Somewhat"], values.priceClear || "", "Choose")}</label>
-        <label>${questionLabel("Satisfied with work?", "Captures quality outcome and whether current alternatives are good enough.")}${select("survey-satisfaction", ["5 - Very satisfied", "4 - Satisfied", "3 - Neutral", "2 - Unsatisfied", "1 - Very unsatisfied", "Not applicable"], values.satisfaction || "", "Choose")}</label>
+        <label class="wide" data-survey-no-recent-wrap>${questionLabel("If no, why are they still relevant?", "Required when the respondent has not needed service recently. Capture future need, household need, past experience, or why they are not in the target segment.")}<textarea id="survey-no-recent-reason" class="form-control" rows="2" placeholder="No recent need, but may need help for...">${escapeHtml(values.noRecentServiceReason || "")}</textarea></label>
+        <label data-recent-service-followup>${questionLabel("Service needed", "Identifies which service categories have real local demand.")}${categorySelect("survey-service", true, values.serviceNeeded || entry?.category || "")}</label>
+        <label data-recent-service-followup>${questionLabel("How did they look?", "Shows current discovery behavior and what KAILA must improve or integrate with.")}${select("survey-search-method", ["Referral", "Facebook", "Messenger", "Neighbor", "Shop", "Previous provider", "Other"], values.searchMethod || "", "Choose method")}</label>
+        <label data-recent-service-followup>${questionLabel("How long did it take?", "Measures search friction and urgency. Longer search time is stronger evidence of pain.")}${select("survey-time-to-find", ["Same day", "1-2 days", "3-7 days", "More than a week", "Never found one"], values.timeToFind || "", "Choose time")}</label>
+        <label data-recent-service-followup>${questionLabel("Compared prices?", "Checks whether clients already want multiple offers or are stuck with one option.")}${select("survey-compared-prices", ["Yes", "No"], values.comparedPrices || "", "Choose")}</label>
+        <label data-recent-service-followup>${questionLabel("Price clear before job?", "Tests pricing transparency problems that KAILA can solve with offers and scope notes.")}${select("survey-price-clear", ["Yes", "No", "Somewhat"], values.priceClear || "", "Choose")}</label>
+        <label data-recent-service-followup>${questionLabel("Satisfied with work?", "Captures quality outcome and whether current alternatives are good enough.")}${select("survey-satisfaction", ["5 - Very satisfied", "4 - Satisfied", "3 - Neutral", "2 - Unsatisfied", "1 - Very unsatisfied", "Not applicable"], values.satisfaction || "", "Choose")}</label>
         <label>${questionLabel("Would post in KAILA?", "Direct willingness signal for demand validation. Probe why if the answer is No or Maybe.")}${select("survey-would-post", YES_NO_MAYBE_OPTIONS, values.wouldPostRequest || "Maybe")}</label>
         <label>${questionLabel("Would upload photos/videos?", "Tests comfort with giving providers evidence for better estimates.")}${select("survey-would-upload", YES_NO_MAYBE_OPTIONS, values.wouldUploadMedia || "Maybe")}</label>
         <label>${questionLabel("Would compare offers?", "Validates the marketplace comparison workflow.")}${select("survey-would-compare", YES_NO_MAYBE_OPTIONS, values.wouldCompareOffers || "Maybe")}</label>
@@ -2694,20 +2734,29 @@ async function openClientSurveyModal(entry = null) {
     didOpen: () => {
       bindAddressGroup("survey-address");
       bindQuestionGuides();
+      bindClientSurveyNeededToggle();
       if (!isEdit) bindValidationDraft("client_survey");
       bindDecisionSignalSuggestion("client_survey");
     },
     preConfirm: () => {
       const responses = clientSurveyResponses();
-      if (!responses.name || !responses.area || !responses.serviceNeeded) {
-        window.Swal.showValidationMessage("Name or nickname, area, and service needed are required.");
+      if (!responses.name || !responses.area) {
+        window.Swal.showValidationMessage("Name or nickname and area are required.");
+        return false;
+      }
+      if (responses.neededProvider === "No" && !responses.noRecentServiceReason) {
+        window.Swal.showValidationMessage("For a No answer, record why this respondent is still relevant or note that they are outside the target segment.");
+        return false;
+      }
+      if (responses.neededProvider !== "No" && !responses.serviceNeeded) {
+        window.Swal.showValidationMessage("Service needed is required when the respondent needed a provider recently.");
         return false;
       }
       return {
         type: "client_survey",
         subjectName: responses.name,
         area: responses.area,
-        category: responses.serviceNeeded,
+        category: responses.serviceNeeded || "No recent service need",
         decisionSignal: responses.decisionSignal,
         notes: responses.notes,
         responses,
@@ -3070,19 +3119,22 @@ function fieldValue(selector) {
 }
 
 function clientSurveyResponses() {
+  const neededProvider = fieldValue("#survey-needed");
+  const hasRecentNeed = neededProvider !== "No";
   return {
     name: fieldValue("#survey-name"),
     ageRange: fieldValue("#survey-age"),
     area: addressValue("survey-address"),
-    neededProvider: fieldValue("#survey-needed"),
-    serviceNeeded: fieldValue("#survey-service"),
-    searchMethod: fieldValue("#survey-search-method"),
-    timeToFind: fieldValue("#survey-time-to-find"),
+    neededProvider,
+    noRecentServiceReason: fieldValue("#survey-no-recent-reason"),
+    serviceNeeded: hasRecentNeed ? fieldValue("#survey-service") : "",
+    searchMethod: hasRecentNeed ? fieldValue("#survey-search-method") : "",
+    timeToFind: hasRecentNeed ? fieldValue("#survey-time-to-find") : "",
     hardestPart: fieldValue("#survey-hardest-part"),
-    comparedPrices: fieldValue("#survey-compared-prices"),
-    priceClear: fieldValue("#survey-price-clear"),
+    comparedPrices: hasRecentNeed ? fieldValue("#survey-compared-prices") : "",
+    priceClear: hasRecentNeed ? fieldValue("#survey-price-clear") : "",
     trustFactors: fieldValue("#survey-trust-factors"),
-    satisfaction: fieldValue("#survey-satisfaction"),
+    satisfaction: hasRecentNeed ? fieldValue("#survey-satisfaction") : "",
     wouldPostRequest: fieldValue("#survey-would-post"),
     wouldUploadMedia: fieldValue("#survey-would-upload"),
     wouldCompareOffers: fieldValue("#survey-would-compare"),
@@ -3090,6 +3142,28 @@ function clientSurveyResponses() {
     decisionSignal: fieldValue("#survey-signal"),
     notes: fieldValue("#survey-notes"),
   };
+}
+
+function bindClientSurveyNeededToggle() {
+  const popup = window.Swal?.getPopup();
+  if (!popup) return;
+  const needed = $("#survey-needed", popup);
+  const noRecentWrap = $("[data-survey-no-recent-wrap]", popup);
+  const noRecentReason = $("#survey-no-recent-reason", popup);
+  const recentFollowups = $$("[data-recent-service-followup]", popup);
+  const sync = () => {
+    const isNo = needed?.value === "No";
+    if (noRecentWrap) noRecentWrap.hidden = !isNo;
+    if (noRecentReason) noRecentReason.required = isNo;
+    recentFollowups.forEach((field) => {
+      field.hidden = isNo;
+      $$("input, select, textarea", field).forEach((control) => {
+        control.disabled = isNo;
+      });
+    });
+  };
+  needed?.addEventListener("change", sync);
+  sync();
 }
 
 function providerInterviewResponses() {
@@ -7478,8 +7552,11 @@ function routeStepInstruction(step = {}) {
 }
 
 async function openNavigationModal({ request = {}, target = {}, origin = null } = {}) {
-  const destination = normalizeLocation(target.destination);
-  if (!destination) return;
+  const session = ensureNavigationSession({ request, target, origin });
+  if (!session) return;
+  session.minimized = false;
+  session.modalShouldMinimize = false;
+  removeNavigationPip();
   await modal({
     width: "min(96vw, 960px)",
     customClass: { popup: "kaila-popup navigation-popup" },
@@ -7488,10 +7565,13 @@ async function openNavigationModal({ request = {}, target = {}, origin = null } 
       <div class="navigation-shell">
         <div class="navigation-head">
           <div>
-            <h3>${escapeHtml(target.label || "Destination")}</h3>
-            <p>${escapeHtml(request.category || "KAILA route")}${target.detail ? ` - ${escapeHtml(target.detail)}` : ""}</p>
+            <h3>${escapeHtml(session.label)}</h3>
+            <p>${escapeHtml(request.category || "KAILA route")}${session.detail ? ` - ${escapeHtml(session.detail)}` : ""}</p>
           </div>
-          <button class="btn btn-sm btn-outline-secondary" type="button" data-navigation-external><i class="fa-solid fa-up-right-from-square"></i> Open Maps</button>
+          <div class="navigation-head-actions">
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-navigation-minimize><i class="fa-solid fa-down-left-and-up-right-to-center"></i> Minimize</button>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-navigation-external><i class="fa-solid fa-up-right-from-square"></i> Open Maps</button>
+          </div>
         </div>
         <div class="navigation-map-wrap">
           <div class="navigation-map" data-navigation-map></div>
@@ -7503,7 +7583,7 @@ async function openNavigationModal({ request = {}, target = {}, origin = null } 
         <div class="navigation-panel">
           <div class="navigation-stats" data-navigation-stats>
             <span><i class="fa-solid fa-location-dot"></i> Destination pinned</span>
-            <span>${origin ? "Building route..." : "Allow location to build a route."}</span>
+            <span>${session.currentOrigin ? "Building route..." : "Allow location to build a route."}</span>
           </div>
           <div class="navigation-actions">
             <button class="btn btn-sm btn-outline-primary" type="button" data-navigation-current><i class="fa-solid fa-location-crosshairs"></i> Use My Location</button>
@@ -7515,18 +7595,27 @@ async function openNavigationModal({ request = {}, target = {}, origin = null } 
     `,
     showConfirmButton: false,
     showCloseButton: true,
-    didOpen: () => bindNavigationMap({ destination, origin, label: target.label || "Destination" }),
-    willClose: stopNavigationWatch,
+    didOpen: () => bindNavigationMap(session),
+    willClose: () => {
+      session.modalOpen = false;
+      session.modalRender = null;
+      if (session.modalShouldMinimize) {
+        session.minimized = true;
+        renderNavigationPip(session);
+        return;
+      }
+      stopNavigationWatch({ clearSession: true });
+    },
   });
 }
 
-function bindNavigationMap({ destination, origin = null, label = "Destination" } = {}) {
+function bindNavigationMap(session) {
   const popup = window.Swal.getPopup?.() || document;
   const mapEl = $("[data-navigation-map]", popup);
   const stats = $("[data-navigation-stats]", popup);
   const steps = $("[data-navigation-steps]", popup);
-  const destinationLocation = normalizeLocation(destination);
-  let currentOrigin = normalizeLocation(origin);
+  const destinationLocation = normalizeLocation(session?.destination);
+  session.modalOpen = true;
   let map = null;
   let originMarker = null;
   let routeLine = null;
@@ -7535,12 +7624,12 @@ function bindNavigationMap({ destination, origin = null, label = "Destination" }
     if (!stats) return;
     stats.innerHTML = route
       ? `<span><i class="fa-solid fa-route"></i> ${escapeHtml(formatDistanceKm(route.distanceKm))}</span><span><i class="fa-solid fa-clock"></i> About ${escapeHtml(route.durationMinutes)} min</span>`
-      : `<span><i class="fa-solid fa-location-dot"></i> Destination pinned</span><span>${currentOrigin ? "Route unavailable" : "Waiting for your location"}</span>`;
+      : `<span><i class="fa-solid fa-location-dot"></i> Destination pinned</span><span>${session.currentOrigin ? "Route unavailable" : "Waiting for your location"}</span>`;
   };
   const setSteps = (route = null) => {
     if (!steps) return;
     if (!route?.steps?.length) {
-      steps.innerHTML = `<p>${currentOrigin ? "Turn details are unavailable for this route." : "Use your location to preview the route."}</p>`;
+      steps.innerHTML = `<p>${session.currentOrigin ? "Turn details are unavailable for this route." : "Use your location to preview the route."}</p>`;
       return;
     }
     steps.innerHTML = route.steps.map((step) => `
@@ -7558,7 +7647,7 @@ function bindNavigationMap({ destination, origin = null, label = "Destination" }
       maxZoom: 20,
       attribution: "&copy; OpenStreetMap",
     }).addTo(map);
-    window.L.marker([destinationLocation.lat, destinationLocation.lng]).addTo(map).bindPopup(label);
+    window.L.marker([destinationLocation.lat, destinationLocation.lng]).addTo(map).bindPopup(session.label);
     setTimeout(() => map?.invalidateSize(), 80);
     return map;
   };
@@ -7567,15 +7656,16 @@ function bindNavigationMap({ destination, origin = null, label = "Destination" }
     if (!activeMap || !destinationLocation) return;
     if (originMarker) originMarker.remove();
     if (routeLine) routeLine.remove();
-    if (currentOrigin) {
-      originMarker = window.L.circleMarker([currentOrigin.lat, currentOrigin.lng], {
+    if (session.currentOrigin) {
+      originMarker = window.L.circleMarker([session.currentOrigin.lat, session.currentOrigin.lng], {
         radius: 8,
         color: "#0b4552",
         fillColor: "#0f6b70",
         fillOpacity: 0.9,
         weight: 3,
       }).addTo(activeMap).bindPopup("You");
-      const route = await fetchRouteGeometry(currentOrigin, destinationLocation);
+      const route = await fetchRouteGeometry(session.currentOrigin, destinationLocation);
+      session.lastRoute = route;
       if (route?.coordinates?.length) {
         routeLine = window.L.polyline(route.coordinates.map((point) => [point.lat, point.lng]), {
           color: "#0f6b70",
@@ -7593,25 +7683,32 @@ function bindNavigationMap({ destination, origin = null, label = "Destination" }
     setSteps(null);
   };
 
+  session.modalRender = renderRoute;
   ensureMap();
   renderRoute();
   $("[data-navigation-zoom-in]", popup)?.addEventListener("click", () => map?.zoomIn());
   $("[data-navigation-zoom-out]", popup)?.addEventListener("click", () => map?.zoomOut());
-  $("[data-navigation-external]", popup)?.addEventListener("click", () => launchExternalNavigation(destinationLocation, { origin: currentOrigin, label }));
+  $("[data-navigation-external]", popup)?.addEventListener("click", () => launchExternalNavigation(destinationLocation, { origin: session.currentOrigin, label: session.label }));
+  $("[data-navigation-minimize]", popup)?.addEventListener("click", () => {
+    session.modalShouldMinimize = true;
+    window.Swal.close();
+  });
   $("[data-navigation-current]", popup)?.addEventListener("click", async () => {
     const location = await getDeviceLocation({ maximumAge: 15000, timeout: 12000 });
     if (!location) return;
-    currentOrigin = location;
+    session.currentOrigin = location;
     renderRoute();
+    session.pipRender?.();
   });
-  $("[data-navigation-track]", popup)?.addEventListener("click", () => startNavigationWatch((location) => {
-    currentOrigin = location;
-    renderRoute();
-  }));
+  $("[data-navigation-track]", popup)?.addEventListener("click", () => startNavigationWatch(session));
 }
 
-function startNavigationWatch(onLocation) {
-  stopNavigationWatch();
+function startNavigationWatch(session = state.navigationSession) {
+  if (!session) return;
+  if (state.navigationWatchId) {
+    notify("Tracking already live", "KAILA is still updating this route.", "info");
+    return;
+  }
   if (!navigator.geolocation) {
     notify("Tracking unavailable", "This device or browser does not expose GPS location.", "warning");
     return;
@@ -7622,18 +7719,201 @@ function startNavigationWatch(onLocation) {
       if (location) {
         state.deviceLocation = location;
         state.deviceLocationCheckedAt = Date.now();
-        onLocation(location);
+        session.currentOrigin = location;
+        session.modalRender?.();
+        session.pipRender?.();
       }
     },
     () => notify("Tracking paused", "Allow location access to keep the KAILA route live.", "warning"),
     { enableHighAccuracy: true, maximumAge: 8000, timeout: 15000 }
   );
-  notify("Tracking started", "KAILA will update the route while this map is open.", "success");
+  notify("Tracking started", "KAILA will update the route until you stop navigation.", "success");
 }
 
-function stopNavigationWatch() {
+function stopNavigationWatch({ clearSession = false } = {}) {
   if (state.navigationWatchId && navigator.geolocation) navigator.geolocation.clearWatch(state.navigationWatchId);
   state.navigationWatchId = null;
+  if (clearSession) {
+    removeNavigationPip();
+    state.navigationSession = null;
+  }
+}
+
+function renderNavigationPip(session = state.navigationSession) {
+  if (!session?.minimized) return;
+  removeNavigationPip();
+  const pip = document.createElement("section");
+  pip.className = "navigation-pip";
+  pip.dataset.navigationPip = "";
+  pip.innerHTML = `
+    <div class="navigation-pip-map-button" role="button" tabindex="0" data-navigation-pip-restore aria-label="Restore navigation map">
+      <span class="navigation-pip-map" data-navigation-pip-map></span>
+    </div>
+    <div class="navigation-pip-body">
+      <div>
+        <strong>${escapeHtml(session.label)}</strong>
+        <span data-navigation-pip-status>${session.currentOrigin ? "Updating route" : "Waiting for GPS"}</span>
+      </div>
+      <div class="navigation-pip-actions">
+        <button type="button" data-navigation-pip-restore aria-label="Restore navigation"><i class="fa-solid fa-up-right-and-down-left-from-center"></i></button>
+        <button type="button" data-navigation-pip-stop aria-label="Stop navigation"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(pip);
+  makeNavigationPipDraggable(pip);
+  bindNavigationPip(session, pip);
+}
+
+function bindNavigationPip(session, pip) {
+  const mapHost = $("[data-navigation-pip-map]", pip);
+  const status = $("[data-navigation-pip-status]", pip);
+  const destinationLocation = normalizeLocation(session.destination);
+  let map = null;
+  let originMarker = null;
+  let routeLine = null;
+
+  const ensureMap = () => {
+    if (!mapHost || !window.L || !destinationLocation) return null;
+    if (map) return map;
+    map = window.L.map(mapHost, {
+      attributionControl: false,
+      dragging: false,
+      doubleClickZoom: false,
+      scrollWheelZoom: false,
+      boxZoom: false,
+      keyboard: false,
+      tap: false,
+      zoomControl: false,
+      preferCanvas: true,
+    }).setView([destinationLocation.lat, destinationLocation.lng], 15);
+    window.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 20 }).addTo(map);
+    window.L.marker([destinationLocation.lat, destinationLocation.lng]).addTo(map);
+    setTimeout(() => map?.invalidateSize(), 80);
+    return map;
+  };
+
+  const renderRoute = async () => {
+    const activeMap = ensureMap();
+    if (!activeMap || !destinationLocation) return;
+    if (originMarker) originMarker.remove();
+    if (routeLine) routeLine.remove();
+    status.textContent = state.navigationWatchId ? "Tracking live" : "Navigation minimized";
+    if (session.currentOrigin) {
+      originMarker = window.L.circleMarker([session.currentOrigin.lat, session.currentOrigin.lng], {
+        radius: 6,
+        color: "#0b4552",
+        fillColor: "#8fe7ef",
+        fillOpacity: 0.95,
+        weight: 2,
+      }).addTo(activeMap);
+      const route = session.lastRoute?.coordinates?.length ? session.lastRoute : await fetchRouteGeometry(session.currentOrigin, destinationLocation);
+      session.lastRoute = route;
+      if (route?.coordinates?.length) {
+        routeLine = window.L.polyline(route.coordinates.map((point) => [point.lat, point.lng]), {
+          color: "#0f6b70",
+          weight: 4,
+          opacity: 0.9,
+        }).addTo(activeMap);
+        activeMap.fitBounds(routeLine.getBounds(), { padding: [12, 12], animate: false });
+        status.textContent = `${formatDistanceKm(route.distanceKm)} · ${route.durationMinutes} min`;
+        return;
+      }
+    }
+    activeMap.setView([destinationLocation.lat, destinationLocation.lng], Math.max(activeMap.getZoom(), 15), { animate: false });
+  };
+
+  session.pipRender = renderRoute;
+  renderRoute();
+  $$("[data-navigation-pip-restore]", pip).forEach((button) => button.addEventListener("click", () => {
+    session.minimized = false;
+    openNavigationModal({ request: session.request, target: session.target, origin: session.currentOrigin });
+  }));
+  $("[data-navigation-pip-stop]", pip)?.addEventListener("click", () => stopNavigationWatch({ clearSession: true }));
+}
+
+function removeNavigationPip() {
+  const pip = $("[data-navigation-pip]");
+  if (pip) pip.remove();
+  if (state.navigationSession) state.navigationSession.pipRender = null;
+}
+
+function makeNavigationPipDraggable(pip) {
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+  let startLeft = 0;
+  let startTop = 0;
+  let moved = false;
+  let suppressClick = false;
+
+  const clampPip = (left, top) => {
+    const rect = pip.getBoundingClientRect();
+    const margin = 8;
+    const maxLeft = window.innerWidth - rect.width - margin;
+    const maxTop = window.innerHeight - rect.height - margin;
+    return {
+      left: Math.min(Math.max(margin, left), Math.max(margin, maxLeft)),
+      top: Math.min(Math.max(margin, top), Math.max(margin, maxTop)),
+    };
+  };
+
+  const movePip = (clientX, clientY) => {
+    const next = clampPip(startLeft + clientX - startX, startTop + clientY - startY);
+    pip.style.left = `${next.left}px`;
+    pip.style.top = `${next.top}px`;
+    pip.style.right = "auto";
+    pip.style.bottom = "auto";
+    moved = moved || Math.abs(clientX - startX) > 4 || Math.abs(clientY - startY) > 4;
+  };
+
+  pip.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("[data-navigation-pip-stop]")) return;
+    const rect = pip.getBoundingClientRect();
+    dragging = true;
+    moved = false;
+    startX = event.clientX;
+    startY = event.clientY;
+    startLeft = rect.left;
+    startTop = rect.top;
+    pip.classList.add("dragging");
+    pip.setPointerCapture?.(event.pointerId);
+  });
+
+  pip.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    event.preventDefault();
+    movePip(event.clientX, event.clientY);
+  });
+
+  const stopDrag = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    pip.classList.remove("dragging");
+    pip.releasePointerCapture?.(event.pointerId);
+    if (moved) {
+      suppressClick = true;
+      setTimeout(() => { suppressClick = false; }, 0);
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
+
+  pip.addEventListener("pointerup", stopDrag);
+  pip.addEventListener("pointercancel", stopDrag);
+  pip.addEventListener("click", (event) => {
+    if (!suppressClick) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
+  window.addEventListener("resize", () => {
+    const rect = pip.getBoundingClientRect();
+    const next = clampPip(rect.left, rect.top);
+    pip.style.left = `${next.left}px`;
+    pip.style.top = `${next.top}px`;
+    pip.style.right = "auto";
+    pip.style.bottom = "auto";
+  }, { passive: true });
 }
 
 function launchExternalNavigation(destination, { origin = null, label = "" } = {}) {
@@ -8200,7 +8480,8 @@ function localStringVerifier(value) {
 
 function notify(title, text = "", icon = "info") {
   const timer = icon === "error" ? 5000 : icon === "warning" ? 4500 : 3500;
-  if ($(".swal2-popup.chat-popup")) {
+  const activePopup = $(".swal2-popup");
+  if (activePopup && !activePopup.classList.contains("swal2-toast")) {
     showInlineToast(title, text, icon, timer);
     return;
   }
