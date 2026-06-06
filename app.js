@@ -45,6 +45,7 @@ const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: 
 const GEOGRAPHY_SOURCE = "assets/Gingoog City PSGC.xlsx";
 const DEFAULT_MAP_CENTER = { lat: 8.826, lng: 125.117 };
 const ROUTE_DISTANCE_CACHE_MS = 6 * 60 * 60 * 1000;
+const ROUTE_DISTANCE_DIRECT_URL = "https://router.project-osrm.org/route/v1/driving";
 const FALLBACK_GEOGRAPHY = {
   region: "Region X (Northern Mindanao)",
   city: "City of Gingoog",
@@ -7313,23 +7314,18 @@ function cachedRouteDistanceKm(from, to) {
 async function routeDistanceKm(from, to) {
   const start = normalizeLocation(from);
   const end = normalizeLocation(to);
-  if (!start || !end || !state.session?.id) return null;
+  if (!start || !end) return null;
   const key = routeDistanceKey(start, end);
   const cached = state.routeDistanceCache.get(key);
   if (cached?.promise) return cached.promise;
   if (cached?.expiresAt > Date.now() && typeof cached.value === "number") return cached.value;
-  const query = new URLSearchParams({
-    fromLat: start.lat,
-    fromLng: start.lng,
-    toLat: end.lat,
-    toLng: end.lng,
-  });
-  const promise = apiFetch(`/api/route-distance?${query.toString()}`, { method: "GET", silentError: true })
-    .then((payload) => {
-      const value = Number(payload.distanceKm);
-      if (!Number.isFinite(value)) throw new Error("Route distance unavailable");
-      state.routeDistanceCache.set(key, { value, expiresAt: Date.now() + ROUTE_DISTANCE_CACHE_MS });
-      return value;
+  const promise = fetchDirectRouteDistanceKm(start, end)
+    .catch(() => fetchApiRouteDistanceKm(start, end))
+    .then((value) => {
+      const distance = Number(value);
+      if (!Number.isFinite(distance)) throw new Error("Route distance unavailable");
+      state.routeDistanceCache.set(key, { value: distance, expiresAt: Date.now() + ROUTE_DISTANCE_CACHE_MS });
+      return distance;
     })
     .catch(() => {
       state.routeDistanceCache.delete(key);
@@ -7337,6 +7333,39 @@ async function routeDistanceKm(from, to) {
     });
   state.routeDistanceCache.set(key, { promise, expiresAt: Date.now() + 30000 });
   return promise;
+}
+
+async function fetchDirectRouteDistanceKm(from, to) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 9000);
+  try {
+    const base = ROUTE_DISTANCE_DIRECT_URL.replace(/\/$/, "");
+    const response = await fetch(`${base}/${from.lng},${from.lat};${to.lng},${to.lat}?overview=false&alternatives=false&steps=false`, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.code !== "Ok" || !payload.routes?.length) throw new Error(payload.message || "Route distance unavailable");
+    const value = Number(payload.routes[0].distance) / 1000;
+    if (!Number.isFinite(value)) throw new Error("Route distance unavailable");
+    return Math.round(value * 10) / 10;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchApiRouteDistanceKm(from, to) {
+  if (!state.session?.id) return null;
+  const query = new URLSearchParams({
+    fromLat: from.lat,
+    fromLng: from.lng,
+    toLat: to.lat,
+    toLng: to.lng,
+  });
+  const payload = await apiFetch(`/api/route-distance?${query.toString()}`, { method: "GET", silentError: true });
+  const value = Number(payload.distanceKm);
+  if (!Number.isFinite(value)) throw new Error("Route distance unavailable");
+  return value;
 }
 
 function hydrateOfferRouteDistances(host = document) {

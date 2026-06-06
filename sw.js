@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v138-route-distance-native-map";
+const CACHE_NAME = "kaila-pwa-v139-route-distance-direct-osrm";
 const IS_NATIVE_WEBVIEW = self.location.protocol === "https:"
   && ["localhost", "127.0.0.1", "::1"].includes(self.location.hostname)
   && /\bwv\b/i.test(navigator.userAgent || "");
