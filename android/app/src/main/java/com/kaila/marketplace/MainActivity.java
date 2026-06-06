@@ -27,9 +27,11 @@ public class MainActivity extends BridgeActivity {
 
         WebSettings settings = webView.getSettings();
         settings.setSaveFormData(true);
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             webView.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
+            webView.setOffscreenPreRaster(true);
         }
     }
 

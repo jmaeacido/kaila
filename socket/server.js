@@ -42,6 +42,8 @@ const CALL_DISCONNECT_GRACE_MS = Number(process.env.KAILA_CALL_DISCONNECT_GRACE_
 const FIREBASE_SERVICE_ACCOUNT_JSON = String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || "").trim();
 const GROQ_API_KEY = sanitizeToken(process.env.GROQ_API_KEY || "");
 const GROQ_MODEL = sanitizeToken(process.env.GROQ_MODEL || "llama-3.1-8b-instant");
+const ROUTE_DISTANCE_URL = sanitizeToken(process.env.KAILA_ROUTE_DISTANCE_URL || "https://router.project-osrm.org/route/v1/driving");
+const ROUTE_DISTANCE_CACHE_MS = Number(process.env.KAILA_ROUTE_DISTANCE_CACHE_MS || 6 * 60 * 60 * 1000);
 const UPLOAD_DIR = path.resolve(__dirname, "..", "uploads");
 const PROFILE_UPLOAD_DIR = path.resolve(__dirname, "..", "profile-photos");
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -75,6 +77,7 @@ let pool;
 const conversationPresence = new Map();
 const directConversationPresence = new Map();
 const activeCalls = new Map();
+const routeDistanceCache = new Map();
 let firebaseMessaging = null;
 
 app.use(cors());
@@ -340,6 +343,38 @@ function locationPayload(value = {}) {
   const lng = coordinateField(value.lng ?? value.longitude, -180, 180);
   if (lat === null || lng === null) return { lat: null, lng: null };
   return { lat, lng };
+}
+
+function routeCacheKey(from, to) {
+  return [from, to].map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join("|");
+}
+
+async function lookupRouteDistanceKm(from, to) {
+  const key = routeCacheKey(from, to);
+  const cached = routeDistanceCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const base = ROUTE_DISTANCE_URL.replace(/\/$/, "");
+    const url = `${base}/${from.lng},${from.lat};${to.lng},${to.lat}?overview=false&alternatives=false&steps=false`;
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.code !== "Ok" || !payload.routes?.length) {
+      const error = new Error(payload.message || "Route distance unavailable");
+      error.status = response.status || 502;
+      throw error;
+    }
+    const distanceKm = Math.round((Number(payload.routes[0].distance) / 1000) * 10) / 10;
+    const value = { distanceKm, source: "route" };
+    routeDistanceCache.set(key, { value, expiresAt: Date.now() + ROUTE_DISTANCE_CACHE_MS });
+    return value;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function passwordHash(password, salt = crypto.randomBytes(16).toString("hex")) {
@@ -2180,6 +2215,18 @@ app.get("/api/notification-summary", requireUser, async (req, res) => {
   res.json(await notificationSummaryFor(req.user));
 });
 
+app.get("/api/route-distance", requireUser, async (req, res) => {
+  const from = locationPayload({ lat: req.query.fromLat, lng: req.query.fromLng });
+  const to = locationPayload({ lat: req.query.toLat, lng: req.query.toLng });
+  if (from.lat === null || to.lat === null) return res.status(400).json({ error: "Valid start and destination coordinates are required" });
+  try {
+    res.json(await lookupRouteDistanceKm(from, to));
+  } catch (error) {
+    console.warn("Route distance lookup failed:", error.message);
+    res.status(502).json({ error: "Route distance unavailable" });
+  }
+});
+
 app.post("/api/push-token", requireUser, async (req, res) => {
   const token = String(req.body?.token || "").trim();
   const platform = String(req.body?.platform || "android").trim().slice(0, 40) || "android";
@@ -2569,6 +2616,9 @@ app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
   if (!amount) return res.status(400).json({ error: "Amount is required" });
   if (!String(schedule || "").trim()) return res.status(400).json({ error: "Schedule is required" });
   const cleanProviderLocation = locationPayload(providerLocation);
+  if (requestRows[0].job_lat !== null && cleanProviderLocation.lat === null) {
+    return res.status(400).json({ error: "Provider location is required so clients can see route distance" });
+  }
   const offer = {
     id: createId(),
     type: type === "counter" ? "counter" : "offer",

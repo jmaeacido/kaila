@@ -1845,6 +1845,12 @@ select[multiple].form-select {
   font-size: 0.66rem;
 }
 
+.job-map .leaflet-tile {
+  image-rendering: auto;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
 .location-note {
   font-weight: 800;
 }

@@ -44,6 +44,7 @@ const NATIVE_NOTIFICATION_CHANNELS = {
 const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
 const GEOGRAPHY_SOURCE = "assets/Gingoog City PSGC.xlsx";
 const DEFAULT_MAP_CENTER = { lat: 8.826, lng: 125.117 };
+const ROUTE_DISTANCE_CACHE_MS = 6 * 60 * 60 * 1000;
 const FALLBACK_GEOGRAPHY = {
   region: "Region X (Northern Mindanao)",
   city: "City of Gingoog",
@@ -93,6 +94,7 @@ const state = {
   pushServerStatus: null,
   deviceLocation: null,
   deviceLocationCheckedAt: 0,
+  routeDistanceCache: new Map(),
   validationSyncing: false,
   typingTimer: null,
   typingSent: false,
@@ -1312,6 +1314,8 @@ function renderRequests() {
   host.innerHTML = `${adminPanel}${requestCards || emptyCard("No active requests", "Cancelled requests are tucked below.")}${cancelledSection}`;
 
   bindRequestCardActions(host);
+  hydrateRequestRouteDistances(host);
+  hydrateOfferRouteDistances(host);
 }
 
 function adminMetricRequests(requests) {
@@ -1413,8 +1417,9 @@ function renderAdminRequestMetricDetail(request) {
 
 function renderRequestDistanceMeta(request) {
   if (state.session?.role === "provider") {
-    const distance = distanceKm(state.deviceLocation, request.jobLocation);
-    if (distance !== null) return `<span><i class="fa-solid fa-route"></i> ${escapeHtml(formatDistanceKm(distance))}</span>`;
+    const distance = state.deviceLocation && request.jobLocation ? cachedRouteDistanceKm(state.deviceLocation, request.jobLocation) : null;
+    if (distance !== null) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-route"></i> Route ${escapeHtml(formatDistanceKm(distance))}</span>`;
+    if (state.deviceLocation && request.jobLocation) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-route"></i> Calculating route distance...</span>`;
     if (request.jobLocation) return `<span><i class="fa-solid fa-location-dot"></i> Job site pinned</span>`;
   }
   if (state.session?.role === "client" && request.clientId === state.session.id && request.jobLocation) {
@@ -1508,7 +1513,12 @@ function renderOffers(request) {
 
 function renderOffer(offer, requestId, selectable) {
   const request = state.requests.find((item) => item.id === requestId);
-  const offerDistance = request?.jobLocation && offer.providerLocation ? distanceKm(request.jobLocation, offer.providerLocation) : null;
+  const routeDistance = request?.jobLocation && offer.providerLocation ? cachedRouteDistanceKm(request.jobLocation, offer.providerLocation) : null;
+  const distanceCopy = routeDistance !== null
+    ? `Route ${formatDistanceKm(routeDistance)} from job site`
+    : request?.jobLocation && offer.providerLocation
+      ? "Calculating route distance..."
+      : "";
   return `
     <article class="offer-card" data-offer-card="${escapeAttribute(offer.id)}">
       <div class="offer-card-head">
@@ -1517,7 +1527,7 @@ function renderOffer(offer, requestId, selectable) {
       ${renderIdentity(offer.providerName, offer.providerPhotoUrl, "Provider reputation", offerProviderReputation(offer), "compact")}
       <div class="offer-amount">${escapeHtml(formatCurrency(offer.amount))}</div>
       <div class="offer-schedule">${escapeHtml(offer.schedule || "Schedule TBD")}</div>
-      ${offerDistance !== null ? `<div class="offer-distance"><i class="fa-solid fa-route"></i> Approx. ${escapeHtml(formatDistanceKm(offerDistance))} from job site</div>` : ""}
+      ${distanceCopy ? `<div class="offer-distance" data-route-distance="${escapeAttribute(requestId)}:${escapeAttribute(offer.id)}"><i class="fa-solid fa-route"></i> ${escapeHtml(distanceCopy)}</div>` : ""}
       ${offer.notes ? `<p>${escapeHtml(offer.notes)}</p>` : ""}
       ${selectable ? `<button class="btn btn-sm btn-success w-100" type="button" data-request-id="${requestId}" data-select-offer="${offer.id}">Select Offer</button>` : ""}
     </article>
@@ -1529,7 +1539,8 @@ async function updateRequestDistance(requestId) {
   if (!request?.jobLocation) return;
   const location = await getDeviceLocation({ maximumAge: 30000, timeout: 12000 });
   if (!location) return;
-  notify("Distance updated", `Approx. ${formatDistanceKm(distanceKm(location, request.jobLocation))} from the job site.`, "success");
+  const routeDistance = await routeDistanceKm(location, request.jobLocation);
+  notify("Distance updated", routeDistance !== null ? `Route ${formatDistanceKm(routeDistance)} from the job site.` : "Route distance unavailable.", routeDistance !== null ? "success" : "warning");
   renderDashboard();
 }
 
@@ -3313,6 +3324,7 @@ function bindJobLocationPicker({ initialLocation = null, getLocation, setLocatio
       layer = window.L.tileLayer(urls[index], {
         maxZoom: 20,
         maxNativeZoom: 18,
+        detectRetina: true,
         crossOrigin: true,
         ...options,
       });
@@ -3635,12 +3647,13 @@ async function openProviderModal() {
 async function openOfferModal(requestId, type) {
   const request = state.requests.find((item) => item.id === requestId);
   if (!request) return;
+  const cachedProviderRouteDistance = request.jobLocation && state.deviceLocation ? cachedRouteDistanceKm(state.deviceLocation, request.jobLocation) : null;
   const result = await modal({
     title: type === "counter" ? "Send counter-offer" : "Send offer",
     html: `
       <div class="swal-form">
         ${renderIdentity(request.clientName, request.clientPhotoUrl, "Client reputation", request.clientReputation, "compact")}
-        ${request.jobLocation ? `<div class="offer"><strong>Job site distance</strong><div data-offer-distance-copy>${state.deviceLocation ? `Approx. ${escapeHtml(formatDistanceKm(distanceKm(state.deviceLocation, request.jobLocation)))} from you.` : "Location access can add your approximate distance to this offer."}</div></div>` : ""}
+        ${request.jobLocation ? `<div class="offer"><strong>Job site route distance</strong><div data-offer-distance-copy>${cachedProviderRouteDistance !== null ? `Route ${escapeHtml(formatDistanceKm(cachedProviderRouteDistance))} from you.` : "Location access can calculate your route distance for this offer."}</div></div>` : ""}
         <label><span>Amount</span><input id="offer-amount" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="₱1,500.00"></label>
         <label><span>Schedule</span>${select("offer-schedule", URGENCY_OPTIONS, "Today")}</label>
         <label><span>Notes</span><textarea id="offer-notes" class="form-control" rows="3"></textarea></label>
@@ -3648,15 +3661,22 @@ async function openOfferModal(requestId, type) {
     `,
     confirmButtonText: type === "counter" ? "Send Counter" : "Send Offer",
     didOpen: async () => {
-      if (!request.jobLocation || state.deviceLocation) return;
-      const location = await getDeviceLocation({ maximumAge: 30000, timeout: 6000, silent: true });
+      if (!request.jobLocation) return;
       const copy = $("[data-offer-distance-copy]");
-      if (copy && location) copy.textContent = `Approx. ${formatDistanceKm(distanceKm(location, request.jobLocation))} from you.`;
+      const location = state.deviceLocation || await getDeviceLocation({ maximumAge: 30000, timeout: 6000, silent: true });
+      if (!copy || !location) return;
+      copy.textContent = "Calculating route distance...";
+      const routeDistance = await routeDistanceKm(location, request.jobLocation);
+      copy.textContent = routeDistance !== null ? `Route ${formatDistanceKm(routeDistance)} from you.` : "Route distance unavailable.";
     },
     preConfirm: async () => {
       const providerLocation = request.jobLocation
         ? (state.deviceLocation || await getDeviceLocation({ maximumAge: 30000, timeout: 6000, silent: true }))
         : null;
+      if (request.jobLocation && !providerLocation) {
+        window.Swal.showValidationMessage("Allow location access so clients can see your route distance.");
+        return false;
+      }
       const offer = {
         type,
         amount: normalizeCurrencyInput($("#offer-amount").value),
@@ -3707,7 +3727,7 @@ async function acceptClientPrice(requestId) {
       schedule?.addEventListener("change", sync);
       sync();
     },
-    preConfirm: () => {
+    preConfirm: async () => {
       const schedule = $("#accept-price-schedule")?.value || "";
       const date = $("#accept-price-date")?.value || "";
       const time = $("#accept-price-time")?.value || "";
@@ -3716,14 +3736,21 @@ async function acceptClientPrice(requestId) {
         window.Swal.showValidationMessage("Select your schedule for this job.");
         return false;
       }
-      return exactSchedule;
+      const providerLocation = request.jobLocation
+        ? (state.deviceLocation || await getDeviceLocation({ maximumAge: 30000, timeout: 6000, silent: true }))
+        : null;
+      if (request.jobLocation && !providerLocation) {
+        window.Swal.showValidationMessage("Allow location access so clients can see your route distance.");
+        return false;
+      }
+      return { schedule: exactSchedule, providerLocation };
     },
   });
   if (!result.isConfirmed) return;
   try {
     const payload = await apiFetch(`/api/requests/${requestId}/offers`, {
       method: "POST",
-      body: JSON.stringify({ type: "offer", amount: request.budget, schedule: result.value, notes: "Accepted client price" }),
+      body: JSON.stringify({ type: "offer", amount: request.budget, schedule: result.value.schedule, notes: "Accepted client price", providerLocation: result.value.providerLocation }),
     });
     applyServerState(payload.state);
     notify("Client price accepted", "", "success");
@@ -6260,6 +6287,7 @@ async function handleOfferSaved({ requestId, offer } = {}) {
     onConfirm: () => focusRequestCard(request.id, enrichedOffer.id || offer.id),
     didOpen: () => {
       state.activeOfferPromptRequestId = request.id;
+      hydrateOfferRouteDistances(document.querySelector(".swal2-popup") || document);
     },
     willClose: () => {
       if (state.activeOfferPromptRequestId === request.id) state.activeOfferPromptRequestId = null;
@@ -6270,6 +6298,7 @@ async function handleOfferSaved({ requestId, offer } = {}) {
         <div class="attention-request-details">
           <strong>${escapeHtml(formatCurrency(offer.amount))} for ${escapeHtml(request.category)}</strong>
           <p>${escapeHtml(offer.schedule || "Schedule TBD")}</p>
+          ${renderOfferRouteDistanceLine(request, enrichedOffer)}
           ${offer.notes ? `<span>${escapeHtml(offer.notes)}</span>` : ""}
         </div>
       </div>
@@ -6298,6 +6327,7 @@ function compactOfferAttentionOptions(request, isCounter = false) {
     didOpen: () => {
       state.activeOfferPromptRequestId = request.id;
       bindCompactOfferButtons(request.id);
+      hydrateOfferRouteDistances(document.querySelector(".swal2-popup") || document);
     },
     willClose: () => {
       if (state.activeOfferPromptRequestId === request.id) state.activeOfferPromptRequestId = null;
@@ -6317,6 +6347,7 @@ function updateActiveOfferPrompt(request, isCounter = false) {
     showCancelButton: false,
   });
   bindCompactOfferButtons(request.id);
+  hydrateOfferRouteDistances(document.querySelector(".swal2-popup") || document);
   return true;
 }
 
@@ -6327,6 +6358,13 @@ function bindCompactOfferButtons(requestId) {
       openOfferDetailModal(requestId, button.dataset.offerDetail);
     });
   });
+}
+
+function renderOfferRouteDistanceLine(request, offer) {
+  if (!request?.jobLocation || !offer?.providerLocation) return "";
+  const routeDistance = cachedRouteDistanceKm(request.jobLocation, offer.providerLocation);
+  const copy = routeDistance !== null ? `Route ${formatDistanceKm(routeDistance)} from job site` : "Calculating route distance...";
+  return `<span class="offer-distance" data-route-distance="${escapeAttribute(request.id)}:${escapeAttribute(offer.id)}"><i class="fa-solid fa-route"></i> ${escapeHtml(copy)}</span>`;
 }
 
 function renderCompactOffersPrompt(request) {
@@ -6364,10 +6402,12 @@ async function openOfferDetailModal(requestId, offerId) {
         <div class="attention-request-details">
           <strong>${escapeHtml(formatCurrency(offer.amount))} for ${escapeHtml(request.category)}</strong>
           <p>${escapeHtml(offer.schedule || "Schedule TBD")}</p>
+          ${renderOfferRouteDistanceLine(request, offer)}
           ${offer.notes ? `<span>${escapeHtml(offer.notes)}</span>` : ""}
         </div>
       </div>
     `,
+    didOpen: () => hydrateOfferRouteDistances(document.querySelector(".swal2-popup") || document),
     showDenyButton: true,
     showCancelButton: true,
     confirmButtonText: "Select Offer",
@@ -7254,6 +7294,77 @@ function visibleOffers(request) {
   if (!request?.offers?.length) return [];
   const passedProviderIds = new Set(request.passedProviderIds || []);
   return request.offers.filter((offer) => !passedProviderIds.has(offer.providerId));
+}
+
+function routeDistanceKey(from, to) {
+  return [from, to].map((point) => {
+    const clean = normalizeLocation(point);
+    return clean ? `${clean.lat.toFixed(5)},${clean.lng.toFixed(5)}` : "";
+  }).join("|");
+}
+
+function cachedRouteDistanceKm(from, to) {
+  const key = routeDistanceKey(from, to);
+  const cached = state.routeDistanceCache.get(key);
+  if (!cached || cached.expiresAt <= Date.now() || typeof cached.value !== "number") return null;
+  return cached.value;
+}
+
+async function routeDistanceKm(from, to) {
+  const start = normalizeLocation(from);
+  const end = normalizeLocation(to);
+  if (!start || !end || !state.session?.id) return null;
+  const key = routeDistanceKey(start, end);
+  const cached = state.routeDistanceCache.get(key);
+  if (cached?.promise) return cached.promise;
+  if (cached?.expiresAt > Date.now() && typeof cached.value === "number") return cached.value;
+  const query = new URLSearchParams({
+    fromLat: start.lat,
+    fromLng: start.lng,
+    toLat: end.lat,
+    toLng: end.lng,
+  });
+  const promise = apiFetch(`/api/route-distance?${query.toString()}`, { method: "GET", silentError: true })
+    .then((payload) => {
+      const value = Number(payload.distanceKm);
+      if (!Number.isFinite(value)) throw new Error("Route distance unavailable");
+      state.routeDistanceCache.set(key, { value, expiresAt: Date.now() + ROUTE_DISTANCE_CACHE_MS });
+      return value;
+    })
+    .catch(() => {
+      state.routeDistanceCache.delete(key);
+      return null;
+    });
+  state.routeDistanceCache.set(key, { promise, expiresAt: Date.now() + 30000 });
+  return promise;
+}
+
+function hydrateOfferRouteDistances(host = document) {
+  $$("[data-route-distance]", host).forEach((element) => {
+    const [requestId, offerId] = String(element.dataset.routeDistance || "").split(":");
+    const request = state.requests.find((item) => item.id === requestId);
+    const offer = visibleOffers(request).find((item) => item.id === offerId);
+    if (!request?.jobLocation || !offer?.providerLocation) return;
+    routeDistanceKm(request.jobLocation, offer.providerLocation).then((value) => {
+      if (value === null) {
+        element.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Route distance unavailable`;
+        return;
+      }
+      element.innerHTML = `<i class="fa-solid fa-route"></i> Route ${escapeHtml(formatDistanceKm(value))} from job site`;
+    });
+  });
+}
+
+function hydrateRequestRouteDistances(host = document) {
+  $$("[data-request-route-distance]", host).forEach((element) => {
+    const request = state.requests.find((item) => item.id === element.dataset.requestRouteDistance);
+    if (!request?.jobLocation || !state.deviceLocation) return;
+    routeDistanceKm(state.deviceLocation, request.jobLocation).then((value) => {
+      element.innerHTML = value !== null
+        ? `<i class="fa-solid fa-route"></i> Route ${escapeHtml(formatDistanceKm(value))}`
+        : `<i class="fa-solid fa-triangle-exclamation"></i> Route distance unavailable`;
+    });
+  });
 }
 
 function canViewConversation(request) {
