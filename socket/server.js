@@ -887,14 +887,29 @@ async function sendPushToUsers(userIds = [], payload = {}) {
   if (!rows.length) return;
   await Promise.all(rows.map(async (row) => {
     try {
-      await firebaseMessaging.send({
+      const message = {
         token: row.token,
         data: Object.fromEntries(Object.entries(payload.data || {}).map(([key, value]) => [key, String(value ?? "")])),
         android: {
           priority: "high",
           ttl: payload.ttl || 60 * 60 * 1000,
+          notification: {
+            channelId: payload.channelId || "kaila-updates",
+            sound: payload.sound || "kaila_notification",
+            priority: "high",
+            defaultVibrateTimings: false,
+            vibrateTimingsMillis: payload.vibrateTimingsMillis || [280, 90, 280],
+            tag: payload.tag || payload.data?.type || "kaila-update",
+          },
         },
-      });
+      };
+      if (payload.title || payload.body) {
+        message.notification = {
+          title: payload.title || "KAILA",
+          body: payload.body || "",
+        };
+      }
+      await firebaseMessaging.send(message);
     } catch (error) {
       const code = error?.errorInfo?.code || error?.code || "";
       if (["messaging/registration-token-not-registered", "messaging/invalid-registration-token"].includes(code)) {
@@ -909,6 +924,12 @@ async function sendPushToUsers(userIds = [], payload = {}) {
 async function pushNotification(userIds, { type, title, body, data = {}, ttl } = {}) {
   await sendPushToUsers(userIds, {
     ttl,
+    title,
+    body,
+    channelId: type === "call" ? "kaila-calls" : type === "request" ? "kaila-job-alerts-v3" : "kaila-updates",
+    sound: type === "call" ? "kaila_call" : type === "request" ? "kaila_job_alert" : "kaila_notification",
+    vibrateTimingsMillis: type === "call" || type === "request" ? [500, 100, 500, 100, 700] : [280, 90, 280],
+    tag: data.requestId || data.callId || data.messageId || type,
     data: {
       type,
       title,
@@ -1621,11 +1642,11 @@ async function messageSummaryFor(user) {
       FROM direct_messages AS message
       JOIN users AS sender ON sender.id = message.sender_id
       JOIN (
-        SELECT sender_id, MAX(created_at) AS latest_at
+        SELECT sender_id, COALESCE(request_id, '') AS request_key, MAX(created_at) AS latest_at
         FROM direct_messages
         WHERE recipient_id = ?
-        GROUP BY sender_id
-      ) AS latest ON latest.sender_id = message.sender_id AND latest.latest_at = message.created_at
+        GROUP BY sender_id, COALESCE(request_id, '')
+      ) AS latest ON latest.sender_id = message.sender_id AND latest.request_key = COALESCE(message.request_id, '') AND latest.latest_at = message.created_at
       WHERE message.recipient_id = ?
       ORDER BY message.created_at DESC
       LIMIT 50
@@ -1636,7 +1657,7 @@ async function messageSummaryFor(user) {
     jobMessages: jobRows.map((row) => ({ requestId: row.request_id, title: row.category, message: mapMessage(row) })),
     directMessages: directRows.map((row) => {
       const message = mapDirectMessage(row);
-      return { userId: row.sender_id, title: message.senderName, message };
+      return { userId: row.sender_id, requestId: row.request_id || "", title: message.senderName, message };
     }),
   };
 }
@@ -1678,7 +1699,7 @@ async function recordMissedCall({ caller, recipientId, requestId = "", directUse
     type: "call",
     title: `Missed KAILA ${callType === "video" ? "video call" : "audio call"}`,
     body: `${missedCall.callerName} tried to call${contextTitle ? ` about ${contextTitle}` : ""}.`,
-    data: { callId: missedCall.id, callType, callerName: missedCall.callerName, requestId, directUserId },
+    data: { action: "open-notifications", callId: missedCall.id, callType, callerName: missedCall.callerName, requestId, directUserId, createdAt: missedCall.createdAt },
   }).catch((error) => console.warn("Missed-call push failed:", error.message));
   return missedCall;
 }
@@ -2442,7 +2463,7 @@ app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
     type: "offer",
     title: offer.type === "counter" ? "New counter-offer" : "New provider offer",
     body: `${displayNameForUser(req.user)} sent ${offer.amount} for ${requestRows[0].category}`,
-    data: { requestId: req.params.id, offerId: offer.id },
+    data: { action: "offer", requestId: req.params.id, offerId: offer.id, senderName: displayNameForUser(req.user), createdAt: offer.createdAt },
   }).catch((error) => console.warn("Offer push failed:", error.message));
   res.status(201).json({ offer, state: await getStateFor(req.user) });
 });
@@ -2486,7 +2507,7 @@ app.post("/api/requests/:id/confirm", requireUser, async (req, res) => {
     type: "job",
     title: "Offer accepted",
     body: `${request.category} is confirmed. Messaging is open.`,
-    data: { requestId: req.params.id },
+    data: { action: "job", requestId: req.params.id, senderName: displayNameForUser(req.user), createdAt: timestamp },
   }).catch((error) => console.warn("Confirm push failed:", error.message));
   res.json({ state: await getStateFor(req.user) });
 });
@@ -2703,7 +2724,7 @@ app.post("/api/requests/:id/messages", requireUser, async (req, res) => {
     type: "message",
     title: "New KAILA message",
     body: `${message.senderName}: ${message.detail || "Sent media"}`,
-    data: { requestId: req.params.id, messageId: message.id },
+    data: { action: "message", requestId: req.params.id, messageId: message.id, senderId: req.user.id, senderName: message.senderName, createdAt: message.createdAt },
   }).catch((error) => console.warn("Message push failed:", error.message));
   res.status(201).json({ message });
 });
@@ -2828,7 +2849,7 @@ app.post("/api/direct-conversations/:userId/messages", requireUser, async (req, 
     type: "direct-message",
     title: "New direct message",
     body: `${message.senderName}: ${message.detail || "Sent media"}`,
-    data: { userId: req.user.id, requestId, messageId: message.id },
+    data: { action: "direct-message", userId: req.user.id, senderId: req.user.id, requestId, messageId: message.id, senderName: message.senderName, createdAt: message.createdAt },
   }).catch((error) => console.warn("Direct message push failed:", error.message));
   res.status(201).json({ message });
 });
@@ -3169,12 +3190,14 @@ socketServer.on("connection", (socket) => {
           body: `${callerName} is calling.`,
           ttl: CALL_RING_TIMEOUT_MS,
           data: {
+            action: "call",
             callId,
             callType: payload.withVideo ? "video" : "audio",
             callerId: user.id,
             callerName,
             requestId,
             directUserId: directUserId ? user.id : "",
+            createdAt: nowMysql(),
           },
         }).catch((error) => console.warn("Incoming-call push failed:", error.message));
       }

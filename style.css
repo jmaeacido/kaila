@@ -1395,6 +1395,93 @@ select[multiple].form-select {
   color: var(--brand);
 }
 
+.inbox-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.inbox-summary h3,
+.inbox-summary p {
+  margin: 0;
+}
+
+.inbox-summary p {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.inbox-item {
+  padding: 0;
+  overflow: hidden;
+}
+
+.inbox-item > button {
+  width: 100%;
+  min-height: 4.6rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.72rem;
+  align-items: center;
+  padding: 0.8rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.inbox-item.unread {
+  border-color: rgba(15, 107, 112, 0.38);
+  box-shadow: 0 0 0 1px rgba(15, 107, 112, 0.12), 0 12px 24px var(--shadow);
+}
+
+.inbox-icon {
+  width: 2.55rem;
+  height: 2.55rem;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--brand-3);
+  color: var(--brand);
+}
+
+.inbox-copy {
+  min-width: 0;
+  display: grid;
+  gap: 0.12rem;
+}
+
+.inbox-copy strong,
+.inbox-copy small,
+.inbox-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-copy strong {
+  font-size: 0.95rem;
+}
+
+.inbox-copy small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.inbox-copy span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.inbox-unread-dot {
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 50%;
+  background: var(--brand-2);
+}
+
 @media (max-width: 380px) {
   .app-tabs {
     right: 0.35rem;

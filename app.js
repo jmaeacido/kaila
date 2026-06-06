@@ -293,6 +293,10 @@ function handleAttentionAction(action, data = {}) {
     handlePushAction({ action, ...data });
     return;
   }
+  if (["message", "direct-message", "request", "offer", "job"].includes(action)) {
+    handlePushAction({ action, ...data });
+    return;
+  }
   if (action === "open-call" && state.call?.status === "incoming") {
     route("app");
     setCallMinimized(false);
@@ -373,8 +377,28 @@ function handlePushNotification(notification = {}) {
   const data = notification.data || notification;
   if (data.type === "call") {
     showNativeIncomingCall(data.callerName || "Your job contact", data.callType || "audio").catch(() => {});
+  } else if (data.type === "message" || data.action === "message") {
+    addUnreadMessage({
+      type: "job",
+      id: data.requestId || data.id || "",
+      title: data.title || "Job message",
+      sender: data.senderName || "KAILA",
+      detail: data.body || notification.body || "",
+      createdAt: data.createdAt || new Date().toISOString(),
+    });
+  } else if (data.type === "direct-message" || data.action === "direct-message") {
+    addUnreadMessage({
+      type: "direct",
+      id: directConversationMessageKey(data.userId || data.senderId || data.id || "", data.requestId || ""),
+      userId: data.userId || data.senderId || data.id || "",
+      requestId: data.requestId || "",
+      title: data.title || "Direct message",
+      sender: data.senderName || "KAILA",
+      detail: data.body || notification.body || "",
+      createdAt: data.createdAt || new Date().toISOString(),
+    });
   } else if (data.title || notification.title) {
-    addUnreadNotification();
+    addUnreadNotification(notificationItemFromPushData(data, notification));
     renderAttentionBadges();
   }
 }
@@ -391,12 +415,43 @@ async function handlePushAction(data = {}) {
     setCallMinimized(false);
     return;
   }
-  if (action === "message" || action === "direct-message") openMessageBell();
+  if (action === "message") {
+    await openMessageFromNotification(data);
+  } else if (action === "direct-message") {
+    await openDirectMessageFromNotification(data);
+  }
   else if (action === "request" || action === "job-request" || action === "offer" || action === "job") {
     await openRequestFromNotification(data);
   } else {
     openNotificationBell();
   }
+}
+
+async function openMessageFromNotification(data = {}) {
+  const requestId = data.requestId || data.id || "";
+  route("app");
+  if (!requestId) {
+    activateTab("#inbox-pane");
+    return;
+  }
+  await loadState({ silent: true });
+  if (state.requests.some((request) => request.id === requestId)) {
+    openConversation(requestId);
+  } else {
+    activateTab("#inbox-pane");
+  }
+}
+
+async function openDirectMessageFromNotification(data = {}) {
+  const userId = data.userId || data.senderId || data.id || "";
+  const requestId = data.requestId || "";
+  route("app");
+  if (!userId) {
+    activateTab("#inbox-pane");
+    return;
+  }
+  await loadState({ silent: true });
+  openDirectConversation(userId, requestId);
 }
 
 async function openRequestFromNotification(data = {}) {
@@ -440,7 +495,7 @@ function registerServiceWorker() {
   if (!state.notificationClicksBound) {
     state.notificationClicksBound = true;
     navigator.serviceWorker.addEventListener("message", (event) => {
-      handleAttentionAction(event.data?.action);
+      handleAttentionAction(event.data?.action, event.data || {});
     });
   }
   let refreshing = false;
@@ -838,6 +893,7 @@ function render() {
   renderProviders();
   renderClients();
   renderCustomerService();
+  renderInbox();
   renderOps();
   renderValidation();
   renderActivity();
@@ -896,29 +952,34 @@ function renderTabs() {
   const providersTab = $("[data-providers-tab]");
   const clientsTab = $("[data-clients-tab]");
   const customerServiceTab = $("[data-customer-service-tab]");
+  const inboxTab = $("[data-inbox-tab]");
   const opsTab = $("[data-ops-tab]");
   const activityTab = $("[data-activity-tab]");
   const validationTab = $("[data-validation-tab]");
   if (!providersTab) return;
   const isOps = state.session?.role === "ops";
   const isSupport = state.session?.role === SUPPORT_ROLE;
+  const canViewActivity = ["admin", SUPPORT_ROLE].includes(state.session?.role);
   const hideProviders = state.session?.role === "provider" || isOps;
   if (requestsTab) requestsTab.hidden = isOps;
   providersTab.hidden = hideProviders;
   if (clientsTab) clientsTab.hidden = !["admin", SUPPORT_ROLE].includes(state.session?.role);
   if (customerServiceTab) customerServiceTab.hidden = !["admin", "client", "provider", SUPPORT_ROLE].includes(state.session?.role);
+  if (inboxTab) inboxTab.hidden = state.session?.role === "ops";
   if (opsTab) opsTab.hidden = state.session?.role !== "admin";
-  if (activityTab) activityTab.hidden = isOps;
+  if (activityTab) activityTab.hidden = !canViewActivity;
   if (validationTab) validationTab.hidden = !["admin", "ops"].includes(state.session?.role);
   if (hideProviders && providersTab.querySelector(".nav-link")?.classList.contains("active")) {
     activateTab("#requests-pane");
   }
   if (!["admin", SUPPORT_ROLE].includes(state.session?.role) && clientsTab?.classList.contains("active")) activateTab("#requests-pane");
   if (!["admin", "client", "provider", SUPPORT_ROLE].includes(state.session?.role) && customerServiceTab?.classList.contains("active")) activateTab("#requests-pane");
+  if (state.session?.role === "ops" && inboxTab?.classList.contains("active")) activateTab("#validation-pane");
   if (state.session?.role !== "admin" && opsTab?.classList.contains("active")) activateTab("#requests-pane");
+  if (!canViewActivity && activityTab?.classList.contains("active")) activateTab("#requests-pane");
   if (!["admin", "ops"].includes(state.session?.role) && validationTab?.classList.contains("active")) activateTab("#requests-pane");
   if (isOps && !validationTab?.classList.contains("active")) activateTab("#validation-pane");
-  if (isSupport && !["#requests-pane", "#clients-pane", "#providers-pane", "#customer-service-pane", "#activity-pane", "#settings-pane"].includes(state.lastDashboardTabTarget)) activateTab("#customer-service-pane");
+  if (isSupport && !["#requests-pane", "#clients-pane", "#providers-pane", "#customer-service-pane", "#inbox-pane", "#activity-pane", "#settings-pane"].includes(state.lastDashboardTabTarget)) activateTab("#customer-service-pane");
 }
 
 function activateTab(target) {
@@ -994,7 +1055,7 @@ function renderActions() {
     const admin = state.users.find((user) => user.role === "admin");
     if (admin) actions.push(`<button class="btn btn-outline-primary" type="button" data-direct-chat="${admin.id}"><i class="fa-solid fa-headset"></i><span>Admin Support</span></button>`);
   }
-  if (state.session.role !== "ops") {
+  if (["admin", SUPPORT_ROLE].includes(state.session.role)) {
     actions.push(`<button class="btn btn-outline-secondary" type="button" data-team-note title="Post a short note to the shared Activity feed."><i class="fa-solid fa-note-sticky"></i><span>Team Note</span></button>`);
   }
   row.innerHTML = actions.join("");
@@ -1756,6 +1817,119 @@ function renderCustomerService() {
   `;
 }
 
+function renderInbox() {
+  const host = $("[data-inbox-list]");
+  if (!host) return;
+  if (!state.session || state.session.role === "ops") {
+    host.innerHTML = "";
+    return;
+  }
+
+  const conversations = inboxConversations();
+  const unreadCount = state.unreadMessages.length;
+  const notificationText = notificationCapabilityText();
+  const summary = `
+    <article class="k-card inbox-summary">
+      <div>
+        <h3>Inbox</h3>
+        <p>${unreadCount ? `${unreadCount} unread conversation${unreadCount === 1 ? "" : "s"}.` : "All caught up."} ${escapeHtml(notificationText)}</p>
+      </div>
+      <button class="btn btn-sm btn-outline-primary" type="button" data-inbox-refresh><i class="fa-solid fa-rotate"></i> Refresh</button>
+    </article>
+  `;
+  if (!conversations.length) {
+    host.innerHTML = `${summary}${emptyCard("No conversations yet", "Confirmed job messages and direct support chats will appear here.")}`;
+    bindInboxActions(host);
+    return;
+  }
+
+  host.innerHTML = `${summary}${conversations.map(renderInboxConversation).join("")}`;
+  bindInboxActions(host);
+}
+
+function inboxConversations() {
+  const unreadByKey = new Map(state.unreadMessages.map((message) => [message.key, message]));
+  const jobThreads = state.requests
+    .filter((request) => canViewConversation(request))
+    .map((request) => {
+      const key = `job:${request.id}`;
+      const unread = unreadByKey.get(key);
+      return {
+        type: "job",
+        key,
+        id: request.id,
+        title: request.category || "Job conversation",
+        subtitle: conversationOtherPartyName(request),
+        detail: unread?.detail || request.status || "Open job messages",
+        createdAt: unread?.createdAt || request.updatedAt || request.createdAt || "",
+        unread: Boolean(unread),
+      };
+    });
+  const directThreads = state.unreadMessages
+    .filter((message) => message.type === "direct")
+    .map((message) => ({
+      type: "direct",
+      key: message.key,
+      id: message.userId || message.id,
+      userId: message.userId || message.id,
+      requestId: message.requestId || "",
+      title: message.title || "Direct message",
+      subtitle: message.sender || "KAILA",
+      detail: message.detail || "Sent media",
+      createdAt: message.createdAt || "",
+      unread: true,
+    }));
+  const seen = new Set();
+  return [...directThreads, ...jobThreads]
+    .filter((thread) => {
+      if (!thread.id || seen.has(thread.key)) return false;
+      seen.add(thread.key);
+      return true;
+    })
+    .sort((left, right) => Number(right.unread) - Number(left.unread) || new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime());
+}
+
+function renderInboxConversation(thread = {}) {
+  return `
+    <article class="k-card inbox-item ${thread.unread ? "unread" : ""}" data-inbox-item="${escapeAttribute(thread.key)}">
+      <button type="button" data-open-inbox-thread="${escapeAttribute(thread.key)}">
+        <span class="inbox-icon"><i class="fa-solid ${thread.type === "direct" ? "fa-user" : "fa-briefcase"}"></i></span>
+        <span class="inbox-copy">
+          <strong>${escapeHtml(thread.title)}</strong>
+          <small>${escapeHtml(thread.subtitle || "")}${thread.createdAt ? ` - ${escapeHtml(formatDateTime(thread.createdAt))}` : ""}</small>
+          <span>${escapeHtml(thread.detail || "")}</span>
+        </span>
+        ${thread.unread ? `<b class="inbox-unread-dot" aria-label="Unread"></b>` : ""}
+      </button>
+    </article>
+  `;
+}
+
+function bindInboxActions(host = document) {
+  $("[data-inbox-refresh]", host)?.addEventListener("click", () => {
+    syncUnreadMessageSummaries().then(() => renderInbox());
+  });
+  $$("[data-open-inbox-thread]", host).forEach((button) => {
+    button.addEventListener("click", () => {
+      const thread = inboxConversations().find((item) => item.key === button.dataset.openInboxThread);
+      if (!thread) return;
+      if (thread.type === "direct") openDirectConversation(thread.userId || thread.id, thread.requestId || "");
+      else openConversation(thread.id);
+    });
+  });
+}
+
+function notificationCapabilityText() {
+  if (isNativeApp()) {
+    if (state.pushToken) return "Push alerts are active on this device.";
+    return nativePushNotifications() ? "Push alerts are waiting for device registration." : "Native push is not available in this build.";
+  }
+  if (!("Notification" in window)) return "Browser notifications are not supported here.";
+  if (Notification.permission === "granted") return "Browser alerts are enabled while the PWA can receive them.";
+  if (Notification.permission === "denied") return "Browser alerts are blocked in system or browser settings.";
+  return "Tap anywhere and allow notifications to receive browser alerts.";
+}
+
 function renderModerationReports() {
   const reports = state.reports || [];
   if (!reports.length) return "";
@@ -2078,10 +2252,13 @@ function renderSettings() {
       <div class="upload-preview settings-preview" data-settings-photo-preview></div>
       <button class="btn btn-primary" type="submit">Save Settings</button>
     </form>
+    ${renderNotificationSettings()}
     ${renderSafetySettings()}
   `;
     $("[data-settings-form]")?.addEventListener("submit", saveSettings);
     $("[data-delete-account]")?.addEventListener("click", deleteAccount);
+    $("[data-enable-notifications]")?.addEventListener("click", enableNotificationsFromSettings);
+    $("[data-settings-panel] [data-reconnect]")?.addEventListener("click", () => connectSocket(true));
     $("[data-settings-support]")?.addEventListener("click", openCustomerServicePlatform);
     $$("[data-route]", host).forEach((button) => button.addEventListener("click", () => route(button.dataset.route)));
     $$("[data-unblock-settings]").forEach((button) => button.addEventListener("click", () => unblockUser(button.dataset.unblockSettings)));
@@ -2092,6 +2269,43 @@ function renderSettings() {
     console.error("Settings render failed:", error);
     host.innerHTML = emptyCard("Settings unavailable", "Refresh the app and try again.");
   }
+}
+
+function renderNotificationSettings() {
+  const browserPermission = "Notification" in window ? Notification.permission : "unsupported";
+  const nativePush = isNativeApp() ? (state.pushToken ? "Registered" : nativePushNotifications() ? "Available" : "Unavailable") : "Browser PWA";
+  return `
+    <section class="settings-card">
+      <div class="settings-head">
+        <div class="profile-photo safety-icon"><i class="fa-solid fa-bell"></i></div>
+        <div>
+          <h3>Realtime alerts</h3>
+          <p>${escapeHtml(notificationCapabilityText())}</p>
+        </div>
+      </div>
+      <div class="meta">
+        <span>Socket: ${state.connected ? "Live" : "Offline"}</span>
+        <span>Notifications: ${escapeHtml(browserPermission)}</span>
+        <span>Push: ${escapeHtml(nativePush)}</span>
+      </div>
+      <div class="card-actions mt-2">
+        <button class="btn btn-sm btn-outline-primary" type="button" data-enable-notifications><i class="fa-solid fa-bell"></i> Enable Alerts</button>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-reconnect><i class="fa-solid fa-plug-circle-bolt"></i> Reconnect Live</button>
+      </div>
+    </section>
+  `;
+}
+
+async function enableNotificationsFromSettings() {
+  state.userInteracted = true;
+  if ("Notification" in window && Notification.permission === "default") {
+    await Notification.requestPermission().catch(() => {});
+  }
+  await ensureNativeNotificationPermission();
+  await setupPushNotifications();
+  if (state.pushToken) await registerPushToken(state.pushToken).catch(() => {});
+  renderSettings();
+  notify("Alerts checked", notificationCapabilityText(), "info");
 }
 
 function renderSafetySettings() {
@@ -5689,12 +5903,18 @@ function handleMessageSaved({ requestId, message } = {}) {
   addUnreadMessage({
     type: "job",
     id: requestId,
+    messageId: message.id,
     title: request.category,
     sender: senderName,
     detail: message.detail,
     createdAt: message.createdAt,
   });
-  announceAttentionEvent("New job message", `${senderName}: ${message.detail}`, "message");
+  announceAttentionEvent("New job message", `${senderName}: ${message.detail || "Sent media"}`, "message", {
+    action: "message",
+    type: "message",
+    requestId,
+    messageId: message.id || "",
+  });
 
   queueAttentionModal({
     icon: "info",
@@ -5727,12 +5947,19 @@ function handleDirectMessageSaved({ userIds = [], message } = {}) {
     id: directConversationMessageKey(otherUserId, requestId),
     userId: otherUserId,
     requestId,
+    messageId: message.id,
     title: displayUserName(sender) || message.senderName || "Direct message",
     sender: senderName,
     detail: message.detail,
     createdAt: message.createdAt,
   });
-  announceAttentionEvent("New direct message", `${senderName}: ${message.detail || "Sent media"}`, "message");
+  announceAttentionEvent("New direct message", `${senderName}: ${message.detail || "Sent media"}`, "message", {
+    action: "direct-message",
+    type: "direct-message",
+    userId: otherUserId,
+    requestId,
+    messageId: message.id || "",
+  });
 
   queueAttentionModal({
     icon: "info",
@@ -5793,7 +6020,7 @@ function handleTypingChanged({ requestId, senderId, senderName, typing } = {}) {
   if (host) host.textContent = typing ? `${senderName} is typing...` : "";
 }
 
-function announceAttentionEvent(title, detail = "", kind = "update") {
+function announceAttentionEvent(title, detail = "", kind = "update", data = {}) {
   if (kind !== "message") addUnreadNotification();
   if (kind === "urgent") startPersistentAttention(title, detail);
   else {
@@ -5807,8 +6034,8 @@ function announceAttentionEvent(title, detail = "", kind = "update") {
     renotify: kind === "urgent",
     silent: false,
     urgency: kind,
-    data: { action: "open-notifications" },
-    actions: [{ action: "open-notifications", title: "Open KAILA" }],
+    data: Object.keys(data).length ? data : { action: "open-notifications" },
+    actions: [{ action: data.action || "open-notifications", title: kind === "message" ? "Open chat" : "Open KAILA" }],
   });
 }
 
@@ -6033,10 +6260,13 @@ async function syncUnreadMessageSummaries() {
     });
     (summary.directMessages || []).forEach((item) => {
       const message = item.message || {};
-      if (!message.id || message.senderId === state.session.id || !isUnreadConversationMessage("direct", item.userId, message)) return;
+      const key = directConversationMessageKey(item.userId, item.requestId || "");
+      if (!message.id || message.senderId === state.session.id || !isUnreadConversationMessage("direct", key, message)) return;
       addUnreadMessage({
         type: "direct",
-        id: item.userId,
+        id: key,
+        userId: item.userId,
+        requestId: item.requestId || "",
         title: item.title || chatMessageSenderName(message) || "Direct message",
         sender: chatMessageSenderName(message),
         detail: message.detail,
@@ -6813,6 +7043,18 @@ function parseAddress(value = "") {
     house: detailParts.length > 1 ? detailParts[0] : "",
     purok: detailParts.length ? detailParts[detailParts.length - 1] : "",
     barangay,
+  };
+}
+
+function notificationItemFromPushData(data = {}, notification = {}) {
+  const id = data.messageId || data.requestId || data.offerId || data.callId || data.id || `${data.type || "push"}:${Date.now()}`;
+  return {
+    type: data.type || "push",
+    id,
+    key: `${data.type || "push"}:${id}`,
+    title: data.title || notification.title || "KAILA update",
+    detail: data.body || notification.body || "",
+    createdAt: data.createdAt || new Date().toISOString(),
   };
 }
 

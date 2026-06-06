@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v128";
+const CACHE_NAME = "kaila-pwa-v129";
 const IS_NATIVE_WEBVIEW = self.location.protocol === "https:"
   && ["localhost", "127.0.0.1", "::1"].includes(self.location.hostname)
   && /\bwv\b/i.test(navigator.userAgent || "");
@@ -102,17 +102,18 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("notificationclick", (event) => {
-  const action = event.action || event.notification?.data?.action || "open-notifications";
+  const data = event.notification?.data || {};
+  const action = event.action || data.action || "open-notifications";
   event.notification.close();
   event.waitUntil((async () => {
     const clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     const appClient = clientList.find((client) => new URL(client.url).pathname.startsWith(APP_PATH));
     if (appClient) {
       await appClient.focus();
-      appClient.postMessage({ action });
+      appClient.postMessage({ ...data, action });
       return;
     }
     const opened = await self.clients.openWindow(APP_PATH || "./");
-    opened?.postMessage?.({ action });
+    opened?.postMessage?.({ ...data, action });
   })());
 });
