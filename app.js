@@ -3078,10 +3078,10 @@ async function openConversation(requestId) {
 
   await window.Swal.fire({
     customClass: { popup: "kaila-popup chat-popup" },
-    title: `${request.category} messages`,
+    title: "",
     html: conversationHtml(payload.messages, payload.writable, payload.activeUserIds, request),
     showConfirmButton: false,
-    showCloseButton: true,
+    showCloseButton: false,
     didOpen: () => bindConversationInput(requestId, payload.writable),
     willClose: () => closeConversationRoom(requestId),
   });
@@ -3105,36 +3105,167 @@ function conversationHtml(messages, writable, activeUserIds = [], request = null
 
   return `
     <div class="chat-shell">
+      ${chatHeaderHtml(`${request?.category || "Job"} messages`)}
       ${conversationIdentityHtml(request)}
-      ${writable && state.session?.role !== SUPPORT_ROLE ? `
-        <div class="chat-call-row">
-          <span>Need to clarify the job?</span>
-          <div class="chat-call-actions">
-            <button class="btn btn-sm btn-outline-primary" type="button" data-audio-call="${request?.id || ""}">
-              <i class="fa-solid fa-phone"></i> Audio Call
-            </button>
-            <button class="btn btn-sm btn-outline-primary" type="button" data-video-call="${request?.id || ""}">
-              <i class="fa-solid fa-video"></i> Video Call
-            </button>
-          </div>
-        </div>
-      ` : ""}
+      ${chatToolbarHtml(
+        writable && state.session?.role !== SUPPORT_ROLE ? "Need to clarify the job?" : "Conversation",
+        {
+          audioAttr: writable && state.session?.role !== SUPPORT_ROLE ? `data-chat-audio-call="${request?.id || ""}"` : "",
+          videoAttr: writable && state.session?.role !== SUPPORT_ROLE ? `data-chat-video-call="${request?.id || ""}"` : "",
+          options: conversationOptionsHtml(request),
+        },
+      )}
       <div class="chat-presence" data-chat-presence>${conversationPresenceText(activeUserIds)}</div>
       <div class="chat-transcript" data-chat-transcript>${transcript}</div>
       <div class="chat-typing" data-chat-typing></div>
       ${writable ? `
-        <div class="chat-compose direct-chat-compose">
-          <textarea class="form-control" rows="2" maxlength="2000" placeholder="Write a message" data-chat-input></textarea>
-          <label class="btn btn-outline-secondary direct-media-button" title="Attach photos or videos">
-            <i class="fa-solid fa-paperclip"></i>
-            <input type="file" data-chat-attachments accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple hidden>
-          </label>
-          <button class="btn btn-primary" type="button" data-chat-send>Send</button>
-        </div>
+        ${chatComposerHtml("job")}
         <div class="upload-preview direct-upload-preview" data-chat-attachment-preview></div>
       ` : `<div class="chat-archived">Conversation archived after job completion.</div>`}
     </div>
   `;
+}
+
+function chatHeaderHtml(title) {
+  return `
+    <div class="chat-header">
+      <button class="chat-icon-button" type="button" data-chat-close aria-label="Close messages">
+        <i class="fa-solid fa-arrow-left"></i>
+      </button>
+      <h3>${escapeHtml(title)}</h3>
+    </div>
+  `;
+}
+
+function chatToolbarHtml(label, { audioAttr = "", videoAttr = "", options = "" } = {}) {
+  const hasCallOptions = Boolean(audioAttr || videoAttr);
+  return `
+    <div class="chat-call-row">
+      <span>${escapeHtml(label)}</span>
+      <div class="chat-top-actions">
+        ${hasCallOptions ? `
+          <div class="chat-menu-wrap">
+            <button class="chat-icon-button" type="button" data-chat-call-toggle aria-label="Call options" aria-expanded="false">
+              <i class="fa-solid fa-phone"></i>
+            </button>
+            <div class="chat-popover" data-chat-call-menu hidden>
+              <button type="button" ${audioAttr}><i class="fa-solid fa-phone"></i> Audio Call</button>
+              <button type="button" ${videoAttr}><i class="fa-solid fa-video"></i> Video Call</button>
+            </div>
+          </div>
+        ` : ""}
+        <div class="chat-menu-wrap">
+          <button class="chat-icon-button" type="button" data-chat-options-toggle aria-label="Conversation options" aria-expanded="false">
+            <i class="fa-solid fa-ellipsis-vertical"></i>
+          </button>
+          <div class="chat-popover" data-chat-options-menu hidden>
+            ${options || `<span class="chat-menu-empty">No options</span>`}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function conversationOptionsHtml(request = {}) {
+  const options = [];
+  if (canReportJob(request)) {
+    options.push(`<button type="button" data-chat-report-job="${request.id}"><i class="fa-solid fa-flag"></i> Report Job</button>`);
+  }
+  return options.join("");
+}
+
+function directConversationOptionsHtml(target = {}) {
+  const options = [];
+  if (canModerateUser(target)) {
+    options.push(`<button type="button" data-chat-report-user="${target.id}"><i class="fa-solid fa-flag"></i> Report User</button>`);
+    options.push(isBlockedUser(target.id)
+      ? `<button type="button" data-chat-unblock-user="${target.id}"><i class="fa-solid fa-user-check"></i> Unblock User</button>`
+      : `<button type="button" data-chat-block-user="${target.id}"><i class="fa-solid fa-user-slash"></i> Block User</button>`);
+  }
+  return options.join("");
+}
+
+function chatComposerHtml(kind) {
+  const inputAttr = kind === "direct" ? "data-direct-chat-input" : "data-chat-input";
+  const attachmentAttr = kind === "direct" ? "data-direct-chat-attachments" : "data-chat-attachments";
+  const sendAttr = kind === "direct" ? "data-direct-chat-send" : "data-chat-send";
+  return `
+    <div class="chat-compose direct-chat-compose">
+      <div class="chat-menu-wrap chat-compose-menu-wrap">
+        <button class="chat-icon-button chat-plus-button" type="button" data-chat-compose-toggle aria-label="Attachment options" aria-expanded="false">
+          <i class="fa-solid fa-plus"></i>
+        </button>
+        <div class="chat-popover chat-compose-popover" data-chat-compose-menu hidden>
+          <label>
+            <i class="fa-solid fa-image"></i> Photos or Videos
+            <input type="file" ${attachmentAttr} accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple hidden>
+          </label>
+          <button type="button" data-chat-emoji-toggle><i class="fa-regular fa-face-smile"></i> Emoji</button>
+        </div>
+      </div>
+      <textarea class="form-control" rows="1" maxlength="2000" placeholder="Message" ${inputAttr}></textarea>
+      <button class="btn btn-primary chat-send-button" type="button" ${sendAttr}>Send</button>
+    </div>
+    <div class="chat-emoji-panel" data-chat-emoji-panel hidden>
+      ${["😀", "😂", "😊", "😍", "🙏", "👍", "👌", "❤️", "🔥", "🎉", "📍", "✅", "💬", "📷", "🛠️", "⭐"].map((emoji) => `<button type="button" data-chat-emoji="${escapeAttribute(emoji)}">${emoji}</button>`).join("")}
+    </div>
+  `;
+}
+
+function bindChatChrome(popup, inputSelector) {
+  const closeMenus = (except = null) => {
+    $$('[data-chat-call-menu], [data-chat-options-menu], [data-chat-compose-menu]', popup).forEach((menu) => {
+      if (menu === except) return;
+      menu.hidden = true;
+      const toggle = menu.parentElement?.querySelector('button[aria-expanded]');
+      toggle?.setAttribute('aria-expanded', 'false');
+    });
+  };
+  const toggleMenu = (button, menu) => {
+    if (!button || !menu) return;
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const nextHidden = !menu.hidden;
+      closeMenus(menu);
+      menu.hidden = nextHidden;
+      button.setAttribute('aria-expanded', String(!nextHidden));
+    });
+  };
+  $('[data-chat-close]', popup)?.addEventListener('click', () => window.Swal.close());
+  toggleMenu($('[data-chat-call-toggle]', popup), $('[data-chat-call-menu]', popup));
+  toggleMenu($('[data-chat-options-toggle]', popup), $('[data-chat-options-menu]', popup));
+  toggleMenu($('[data-chat-compose-toggle]', popup), $('[data-chat-compose-menu]', popup));
+  popup.addEventListener('click', (event) => {
+    if (!event.target.closest('.chat-menu-wrap')) closeMenus();
+  });
+  $$('[data-chat-call-menu] button, [data-chat-options-menu] button', popup).forEach((button) => {
+    button.addEventListener('click', () => closeMenus());
+  });
+  $$('[data-chat-report-job]', popup).forEach((button) => button.addEventListener('click', () => openReportJobModal(button.dataset.chatReportJob)));
+  $$('[data-chat-report-user]', popup).forEach((button) => button.addEventListener('click', () => openReportUserModal(button.dataset.chatReportUser)));
+  $$('[data-chat-block-user]', popup).forEach((button) => button.addEventListener('click', () => blockUser(button.dataset.chatBlockUser)));
+  $$('[data-chat-unblock-user]', popup).forEach((button) => button.addEventListener('click', () => unblockUser(button.dataset.chatUnblockUser)));
+  $('[data-chat-emoji-toggle]', popup)?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const panel = $('[data-chat-emoji-panel]', popup);
+    if (panel) panel.hidden = !panel.hidden;
+  });
+  $$('[data-chat-emoji]', popup).forEach((button) => {
+    button.addEventListener('click', () => insertComposerText(inputSelector, button.dataset.chatEmoji || ''));
+  });
+}
+
+function insertComposerText(inputSelector, text) {
+  const input = $(inputSelector);
+  if (!input || !text) return;
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  input.value = `${input.value.slice(0, start)}${text}${input.value.slice(end)}`;
+  const cursor = start + text.length;
+  input.focus();
+  input.setSelectionRange(cursor, cursor);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 function renderChatMessage(message = {}, { writable = false, reactions = false } = {}) {
@@ -3225,11 +3356,12 @@ function bindConversationInput(requestId, writable) {
       openDirectMediaViewer(attachments, Number(button.dataset.directMediaOpen || 0));
     });
   });
-  $("[data-audio-call]")?.addEventListener("click", () => startAudioCall(requestId));
-  $("[data-video-call]")?.addEventListener("click", () => startVideoCall(requestId));
+  $("[data-chat-audio-call]", popup)?.addEventListener("click", () => startAudioCall(requestId));
+  $("[data-chat-video-call]", popup)?.addEventListener("click", () => startVideoCall(requestId));
+  bindChatChrome(popup, "[data-chat-input]");
   if (!writable) return;
-  const input = $("[data-chat-input]");
-  $("[data-chat-send]")?.addEventListener("click", () => sendConversationMessage(requestId));
+  const input = $("[data-chat-input]", popup);
+  $("[data-chat-send]", popup)?.addEventListener("click", () => sendConversationMessage(requestId));
   bindAttachmentPreview("[data-chat-attachments]", "[data-chat-attachment-preview]", 3);
   $$("[data-chat-react]").forEach((button) => button.addEventListener("click", () => toggleMessageReaction(requestId, button.dataset.chatReact)));
   input?.addEventListener("input", () => handleConversationKeystroke(requestId));
@@ -3370,10 +3502,10 @@ async function openDirectConversation(userId, requestId = "") {
 
   await window.Swal.fire({
     customClass: { popup: "kaila-popup chat-popup" },
-    title: directConversationTitle(target, payload.requestContext),
+    title: "",
     html: directConversationHtml(payload.messages, payload.writable, payload.activeUserIds, payload.target || target, payload.requestContext),
     showConfirmButton: false,
-    showCloseButton: true,
+    showCloseButton: false,
     didOpen: () => bindDirectConversationInput(userId, payload.writable, requestId),
     willClose: () => closeDirectConversationRoom(userId),
   });
@@ -3401,32 +3533,20 @@ function directConversationHtml(messages, writable, activeUserIds = [], target =
 
   return `
     <div class="chat-shell">
+      ${chatHeaderHtml(directConversationTitle(target, requestContext))}
       <div class="chat-reputation">${renderIdentity(displayTarget.name || "Direct contact", displayTarget.photoUrl, `${roleLabel(displayTarget.role || "user")} account`, displayReputationForUser(displayTarget), "compact")}</div>
       ${requestContext ? directConversationTopicHtml(requestContext) : ""}
       ${canDirectCall(target) ? `
-        <div class="chat-call-row">
-          <span>${escapeHtml(roleLabel(displayTarget.role || "contact"))} direct line</span>
-          <div class="chat-call-actions">
-            <button class="btn btn-sm btn-outline-primary" type="button" data-direct-audio-call="${target.id || ""}">
-              <i class="fa-solid fa-phone"></i> Audio Call
-            </button>
-            <button class="btn btn-sm btn-outline-primary" type="button" data-direct-video-call="${target.id || ""}">
-              <i class="fa-solid fa-video"></i> Video Call
-            </button>
-          </div>
-        </div>
-      ` : ""}
+        ${chatToolbarHtml(`${roleLabel(displayTarget.role || "contact")} direct line`, {
+          audioAttr: `data-chat-direct-audio-call="${target.id || ""}"`,
+          videoAttr: `data-chat-direct-video-call="${target.id || ""}"`,
+          options: directConversationOptionsHtml(target),
+        })}
+      ` : chatToolbarHtml("Conversation", { options: directConversationOptionsHtml(target) })}
       <div class="chat-presence" data-direct-chat-presence>${conversationPresenceText(activeUserIds)}</div>
       <div class="chat-transcript" data-chat-transcript>${transcript}</div>
       ${writable ? `
-        <div class="chat-compose direct-chat-compose">
-          <textarea class="form-control" rows="2" maxlength="2000" placeholder="Write a message" data-direct-chat-input></textarea>
-          <label class="btn btn-outline-secondary direct-media-button" title="Attach photos or videos">
-            <i class="fa-solid fa-paperclip"></i>
-            <input type="file" data-direct-chat-attachments accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple hidden>
-          </label>
-          <button class="btn btn-primary" type="button" data-direct-chat-send>Send</button>
-        </div>
+        ${chatComposerHtml("direct")}
         <div class="upload-preview direct-upload-preview" data-direct-chat-attachment-preview></div>
       ` : `<div class="chat-archived">This direct conversation is read-only.</div>`}
     </div>
@@ -3443,11 +3563,12 @@ function bindDirectConversationInput(userId, writable, requestId = "") {
       openDirectMediaViewer(attachments, Number(button.dataset.directMediaOpen || 0));
     });
   });
-  $("[data-direct-audio-call]", popup)?.addEventListener("click", () => startDirectAudioCall(userId));
-  $("[data-direct-video-call]", popup)?.addEventListener("click", () => startDirectVideoCall(userId));
+  $("[data-chat-direct-audio-call]", popup)?.addEventListener("click", () => startDirectAudioCall(userId));
+  $("[data-chat-direct-video-call]", popup)?.addEventListener("click", () => startDirectVideoCall(userId));
+  bindChatChrome(popup, "[data-direct-chat-input]");
   if (!writable) return;
-  const input = $("[data-direct-chat-input]");
-  $("[data-direct-chat-send]")?.addEventListener("click", () => sendDirectConversationMessage(userId, requestId));
+  const input = $("[data-direct-chat-input]", popup);
+  $("[data-direct-chat-send]", popup)?.addEventListener("click", () => sendDirectConversationMessage(userId, requestId));
   bindAttachmentPreview("[data-direct-chat-attachments]", "[data-direct-chat-attachment-preview]", 3);
   input?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey) return;
@@ -4609,7 +4730,7 @@ function stopCallTone() {
 function scheduleCallTimeout(call) {
   call.ringingTimer = setTimeout(() => {
     if (!state.call || state.call.callId !== call.callId || state.call.status === "connected") return;
-    emitCallSignal("hangup");
+    emitCallSignal("hangup", { reason: "timeout" });
     endAudioCall(false);
     notify("Audio call", "No answer.", "info");
   }, CALL_RING_TIMEOUT_MS);
@@ -6889,7 +7010,32 @@ function localStringVerifier(value) {
 
 function notify(title, text = "", icon = "info") {
   const timer = icon === "error" ? 5000 : icon === "warning" ? 4500 : 3500;
+  if ($(".swal2-popup.chat-popup")) {
+    showInlineToast(title, text, icon, timer);
+    return;
+  }
   window.Swal.fire({ toast: true, position: "top-end", icon, title, text, showConfirmButton: false, timer, timerProgressBar: true });
+}
+
+function showInlineToast(title, text = "", icon = "info", timer = 3500) {
+  let stack = $("[data-inline-toast-stack]");
+  if (!stack) {
+    stack = document.createElement("div");
+    stack.dataset.inlineToastStack = "";
+    stack.className = "inline-toast-stack";
+    document.body.appendChild(stack);
+  }
+  const toast = document.createElement("div");
+  toast.className = `inline-toast ${icon}`;
+  toast.innerHTML = `
+    <i class="fa-solid ${icon === "error" ? "fa-circle-xmark" : icon === "warning" ? "fa-triangle-exclamation" : icon === "success" ? "fa-circle-check" : "fa-circle-info"}"></i>
+    <div><strong>${escapeHtml(title)}</strong>${text ? `<span>${escapeHtml(text)}</span>` : ""}</div>
+  `;
+  stack.appendChild(toast);
+  setTimeout(() => {
+    toast.classList.add("leaving");
+    setTimeout(() => toast.remove(), 180);
+  }, timer);
 }
 
 function readJson(key, fallback) {

@@ -1686,7 +1686,6 @@ async function recordMissedCall({ caller, recipientId, requestId = "", directUse
 async function recordMissedCallForBoth({ caller, targetUserId, requestId = "", directUserId = "", callType = "audio", contextTitle = "" } = {}) {
   if (!caller?.id || !targetUserId) return;
   await recordMissedCall({ caller, recipientId: targetUserId, requestId, directUserId, callType, contextTitle });
-  await recordMissedCall({ caller, recipientId: caller.id, requestId, directUserId, callType, contextTitle });
   await recordCallLogMessage({
     caller,
     targetUserId,
@@ -2119,6 +2118,9 @@ app.post("/api/push-token", requireUser, async (req, res) => {
   if (!token || token.length < 20) return res.status(400).json({ error: "Push token is required" });
   const hash = tokenHash(token);
   const timestamp = nowMysql();
+  if (deviceId) {
+    await pool.query("DELETE FROM push_tokens WHERE device_id = ? AND token_hash <> ?", [deviceId, hash]);
+  }
   await pool.query(
     `INSERT INTO push_tokens (id, user_id, token, token_hash, platform, device_id, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -3177,13 +3179,13 @@ socketServer.on("connection", (socket) => {
         }).catch((error) => console.warn("Incoming-call push failed:", error.message));
       }
       const activeCall = activeCalls.get(callId);
-      if (type === "hangup" && activeCall && !activeCall.answeredByUserId) {
+      if (type === "hangup" && activeCall && !activeCall.answeredByUserId && payload.reason === "timeout") {
         const caller = user.id === activeCall.callerId ? user : await getUser(activeCall.callerId);
         await recordMissedCallForBoth({
           caller,
           targetUserId: activeCall.targetUserId || targetUserId,
           requestId: activeCall.requestId || requestId,
-          directUserId: directUserId || "",
+          directUserId: activeCall.directUserIds?.find((item) => item !== activeCall.callerId) || directUserId || "",
           callType: activeCall.callType || "audio",
           contextTitle: activeCall.contextTitle || "",
         });
@@ -3247,6 +3249,7 @@ socketServer.on("connection", (socket) => {
         description: payload.description || null,
         candidate: payload.candidate || null,
         withVideo: Boolean(payload.withVideo),
+        reason: payload.reason || "",
       });
       acknowledge({ ok: true });
     } catch (error) {
