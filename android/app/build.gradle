@@ -1,6 +1,25 @@
 apply plugin: 'com.android.application'
 
 def kailaRootDir = rootProject.projectDir.parentFile
+def kailaSocketEnvFile = new File(kailaRootDir, "socket/.env")
+def kailaSocketEnv = [:]
+if (kailaSocketEnvFile.exists()) {
+    kailaSocketEnvFile.eachLine { line ->
+        def trimmed = line.trim()
+        if (!trimmed || trimmed.startsWith("#") || !trimmed.contains("=")) return
+        def separator = trimmed.indexOf("=")
+        def key = trimmed.substring(0, separator).trim()
+        def value = trimmed.substring(separator + 1).trim()
+        if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.substring(1, value.length() - 1)
+        }
+        kailaSocketEnv[key] = value
+    }
+}
+def kailaConfigValue = { String name, String socketEnvName = null, String fallback = "" ->
+    def socketName = socketEnvName ?: name
+    return findProperty(name) ?: System.getenv(name) ?: kailaSocketEnv[socketName] ?: fallback
+}
 def prepareKailaWebAssets = tasks.register('prepareKailaWebAssets', Exec) {
     workingDir kailaRootDir
     if (System.getProperty('os.name').toLowerCase().contains('windows')) {
@@ -18,12 +37,12 @@ android {
     namespace = "com.kaila.marketplace"
     compileSdk = rootProject.ext.compileSdkVersion
 
-    def kailaVersionCode = (findProperty("KAILA_VERSION_CODE") ?: System.getenv("KAILA_VERSION_CODE") ?: "1") as Integer
-    def kailaVersionName = findProperty("KAILA_VERSION_NAME") ?: System.getenv("KAILA_VERSION_NAME") ?: "1.0.0"
-    def kailaKeystorePath = findProperty("KAILA_RELEASE_STORE_FILE") ?: System.getenv("KAILA_RELEASE_STORE_FILE")
-    def kailaKeystorePassword = findProperty("KAILA_RELEASE_STORE_PASSWORD") ?: System.getenv("KAILA_RELEASE_STORE_PASSWORD")
-    def kailaKeyAlias = findProperty("KAILA_RELEASE_KEY_ALIAS") ?: System.getenv("KAILA_RELEASE_KEY_ALIAS")
-    def kailaKeyPassword = findProperty("KAILA_RELEASE_KEY_PASSWORD") ?: System.getenv("KAILA_RELEASE_KEY_PASSWORD")
+    def kailaVersionCode = (kailaConfigValue("KAILA_VERSION_CODE", "KAILA_ANDROID_LATEST_VERSION_CODE", "1")) as Integer
+    def kailaVersionName = kailaConfigValue("KAILA_VERSION_NAME", "KAILA_ANDROID_LATEST_VERSION_NAME", "1.0.0")
+    def kailaKeystorePath = kailaConfigValue("KAILA_RELEASE_STORE_FILE")
+    def kailaKeystorePassword = kailaConfigValue("KAILA_RELEASE_STORE_PASSWORD")
+    def kailaKeyAlias = kailaConfigValue("KAILA_RELEASE_KEY_ALIAS")
+    def kailaKeyPassword = kailaConfigValue("KAILA_RELEASE_KEY_PASSWORD")
 
     signingConfigs {
         release {

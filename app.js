@@ -449,12 +449,15 @@ async function checkMobileUpdate({ force = false } = {}) {
       fetch(mobileUpdateUrl(), { cache: "no-store" }).then((response) => response.ok ? response.json() : null),
     ]);
     const currentVersionCode = Number(info?.versionCode || 0);
+    const currentVersionName = String(info?.versionName || "").trim();
     const latestVersionCode = Number(update?.latestVersionCode || 0);
+    const latestVersionName = String(update?.latestVersionName || "").trim();
     if (!update?.enabled || !update?.apkUrl || !currentVersionCode || latestVersionCode <= currentVersionCode) return;
+    if (currentVersionName && latestVersionName && currentVersionName === latestVersionName) return;
     rememberMobileUpdateCheck({ latestVersionCode });
     if (!force && !shouldPromptMobileUpdate(latestVersionCode)) return;
     rememberMobileUpdateCheck({ promptedVersionCode: latestVersionCode, promptedAt: Date.now() });
-    promptMobileUpdate({ ...update, currentVersionCode, currentVersionName: info?.versionName || "" });
+    promptMobileUpdate({ ...update, currentVersionCode, currentVersionName });
   } catch (error) {
     console.warn("KAILA mobile update check failed:", error);
   }
