@@ -68,6 +68,7 @@ const state = {
   pendingNativeCallAction: "",
   pendingNativeCallId: "",
   lastStateRefreshAt: 0,
+  providerDistanceLocationRefreshing: false,
   userInteracted: false,
   attentionQueue: [],
   unreadNotifications: 0,
@@ -1430,10 +1431,11 @@ function renderAdminRequestMetricDetail(request) {
 
 function renderRequestDistanceMeta(request) {
   if (state.session?.role === "provider") {
-    const distance = state.deviceLocation && request.jobLocation ? cachedRouteDistanceKm(state.deviceLocation, request.jobLocation) : null;
-    if (distance !== null) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-location-dot"></i> Job site pinned · Route ${escapeHtml(formatDistanceKm(distance))}</span>`;
-    if (state.deviceLocation && request.jobLocation) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-location-dot"></i> Job site pinned · Calculating route distance...</span>`;
-    if (request.jobLocation) return `<span><i class="fa-solid fa-location-dot"></i> Job site pinned</span>`;
+    const origin = providerRouteOriginForRequest(request);
+    const distance = origin && request.jobLocation ? cachedRouteDistanceKm(origin, request.jobLocation) : null;
+    if (distance !== null) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-location-dot"></i> Job site pinned · Route ${escapeHtml(formatDistanceKm(distance))} from you</span>`;
+    if (origin && request.jobLocation) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-location-dot"></i> Job site pinned · Calculating route distance from you...</span>`;
+    if (request.jobLocation) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-location-dot"></i> Job site pinned · Allow GPS for route distance</span>`;
   }
   if (state.session?.role === "client" && request.clientId === state.session.id && request.jobLocation) {
     return `<span><i class="fa-solid fa-location-dot"></i> Job site pinned</span>`;
@@ -1442,7 +1444,7 @@ function renderRequestDistanceMeta(request) {
 }
 
 function canUpdateRequestDistance(request = {}) {
-  return Boolean(state.session?.role === "provider" && request.jobLocation && !state.deviceLocation);
+  return Boolean(state.session?.role === "provider" && request.jobLocation && !providerRouteOriginForRequest(request));
 }
 
 function navigationTargetForRequest(request = {}) {
@@ -7487,6 +7489,16 @@ function visibleOffers(request) {
   return request.offers.filter((offer) => !passedProviderIds.has(offer.providerId));
 }
 
+function providerOwnOfferForRequest(request = {}) {
+  if (state.session?.role !== "provider" || !request?.offers?.length) return null;
+  return visibleOffers(request).find((offer) => offer.providerId === state.session.id) || null;
+}
+
+function providerRouteOriginForRequest(request = {}) {
+  if (state.session?.role !== "provider") return null;
+  return normalizeLocation(state.deviceLocation) || normalizeLocation(providerOwnOfferForRequest(request)?.providerLocation);
+}
+
 function routeDistanceKey(from, to) {
   return [from, to].map((point) => {
     const clean = normalizeLocation(point);
@@ -8004,13 +8016,32 @@ function hydrateOfferRouteDistances(host = document) {
 function hydrateRequestRouteDistances(host = document) {
   $$("[data-request-route-distance]", host).forEach((element) => {
     const request = state.requests.find((item) => item.id === element.dataset.requestRouteDistance);
-    if (!request?.jobLocation || !state.deviceLocation) return;
-    routeDistanceKm(state.deviceLocation, request.jobLocation).then((value) => {
+    const origin = providerRouteOriginForRequest(request);
+    if (!request?.jobLocation || !origin) return;
+    routeDistanceKm(origin, request.jobLocation).then((value) => {
       element.innerHTML = value !== null
-        ? `<i class="fa-solid fa-location-dot"></i> Job site pinned · Route ${escapeHtml(formatDistanceKm(value))}`
+        ? `<i class="fa-solid fa-location-dot"></i> Job site pinned · Route ${escapeHtml(formatDistanceKm(value))} from you`
         : `<i class="fa-solid fa-location-dot"></i> Job site pinned · Route distance unavailable`;
     });
   });
+  requestProviderLocationForRouteDistances(host);
+}
+
+function requestProviderLocationForRouteDistances(host = document) {
+  if (state.session?.role !== "provider" || state.deviceLocation || state.providerDistanceLocationRefreshing) return;
+  const needsOrigin = $$("[data-request-route-distance]", host).some((element) => {
+    const request = state.requests.find((item) => item.id === element.dataset.requestRouteDistance);
+    return request?.jobLocation && !providerRouteOriginForRequest(request);
+  });
+  if (!needsOrigin) return;
+  state.providerDistanceLocationRefreshing = true;
+  getDeviceLocation({ maximumAge: 30000, timeout: 8000, silent: true })
+    .then((location) => {
+      if (location) hydrateRequestRouteDistances(host);
+    })
+    .finally(() => {
+      state.providerDistanceLocationRefreshing = false;
+    });
 }
 
 function canViewConversation(request) {
