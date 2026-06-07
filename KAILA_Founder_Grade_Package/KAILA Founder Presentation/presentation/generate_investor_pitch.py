@@ -1,4 +1,6 @@
 from pathlib import Path
+import shutil
+import subprocess
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -165,29 +167,29 @@ SLIDES = [
     {
         "type": "financial",
         "kicker": "Financial Projections",
-        "title": "Lean 3-year model: founder-led pilot before paid marketplace.",
+        "title": "Lean 3-year model: micro-budget pilot before paid marketplace.",
         "headers": ["Metric", "Year 1", "Year 2", "Year 3"],
         "rows": [
             ("Active providers", "150", "600", "1,800"),
             ("Completed jobs", "900", "7,200", "32,400"),
             ("GMV", "PHP 0.9M", "PHP 8.6M", "PHP 48.6M"),
             ("Revenue", "PHP 0.2M", "PHP 1.7M", "PHP 7.3M"),
-            ("Expenses", "PHP 0.3M", "PHP 0.9M", "PHP 1.8M"),
-            ("Profit / Loss", "(PHP 0.1M)", "PHP 0.8M", "PHP 5.5M"),
+            ("Expenses", "PHP 36K", "PHP 60K", "PHP 120K"),
+            ("Profit / Loss", "PHP 144K", "PHP 1.67M", "PHP 7.17M"),
         ],
         "note": "Assumptions are included in the investor package workbook and should be updated after the Gingoog pilot.",
     },
     {
         "type": "funding",
         "kicker": "Funding Ask",
-        "title": "Seeking lean pilot support after building the first browser MVP and native wrapper.",
+        "title": "No large raise needed: optional micro-budget support for the pilot.",
         "metrics": [
-            ("20%", "MVP polish", "PHP 100,000"),
-            ("35%", "Local marketing", "PHP 175,000"),
-            ("30%", "Operations", "PHP 150,000"),
-            ("15%", "Legal/Admin", "PHP 75,000"),
+            ("10%", "MVP polish", "PHP 5,000"),
+            ("40%", "Page/content boosts", "PHP 20,000"),
+            ("30%", "Field ops", "PHP 15,000"),
+            ("20%", "Admin buffer", "PHP 10,000"),
         ],
-        "note": "Use free resources first; paid spend should support only field validation, page growth, support, and essential app polish.",
+        "note": "Use free resources first; this optional PHP 50,000 ceiling covers only small boosts, field validation, and essentials.",
     },
     {
         "type": "team",
@@ -470,6 +472,17 @@ def build_pdf_fallback():
     pages[0].save(PDF_PATH, save_all=True, append_images=pages[1:], resolution=144)
 
 
+def build_pdf():
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        build_pdf_fallback()
+        return
+    subprocess.run(
+        [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(ROOT), str(PPTX_PATH)],
+        check=True,
+    )
+
+
 def write_markdown(path, title, body):
     path.write_text(f"# {title}\n\n{body.strip()}\n", encoding="utf-8")
 
@@ -615,28 +628,28 @@ Operations:
         PACKAGE_DIR / "Funding_Scenarios.md",
         "Funding Scenarios",
         """
-Lean validation: PHP 50,000-150,000
+Lean validation: PHP 5,000-50,000
 
-- Manual Gingoog City pilot
-- Provider recruitment and verification
-- Survey work and field operations
-- Existing browser MVP/native wrapper support and light polish
+- Existing browser MVP and native wrapper
+- In-app survey and interview forms
+- Facebook page concierge posting
+- Organic outreach, Messenger follow-up, and founder-led operations
 
-Base support: PHP 300,000-500,000
+Base support: PHP 50,000-150,000
 
-- 20% MVP polish
-- 35% local marketing
-- 30% operations
-- 15% legal/admin
+- Small Facebook page/content boosts
+- Field transport/load/printing when needed
+- Provider recruitment and verification support
+- Essential hosting/domain/admin costs only
 
-Accelerated city rollout: PHP 1,000,000-2,000,000
+Accelerated city rollout: PHP 300,000-500,000
 
 - Wider app rollout and reliability work
 - Stronger local marketing
 - Dedicated operations support
 - More categories and adjacent-area testing
 
-Recommended current approach: spend very lean during validation because the MVP, survey, and interview forms already exist.
+Recommended current approach: avoid a big raise during validation because the MVP, survey, and interview forms already exist.
 """,
     )
 
@@ -648,7 +661,7 @@ def build_financial_model():
     ws.title = "Assumptions"
     data = [
         ("Pilot city", PILOT_CITY),
-        ("Lean pilot support target", 500000),
+        ("Optional micro-budget ceiling", 50000),
         ("Starting active providers", 50),
         ("Year 1 active providers", 150),
         ("Year 2 active providers", 600),
@@ -674,8 +687,8 @@ def build_financial_model():
         ("Completed jobs", 900, 7200, 32400),
         ("GMV", 900000, 8640000, 48600000),
         ("Revenue", 180000, 1728000, 7290000),
-        ("Expenses", 300000, 900000, 1800000),
-        ("Profit / Loss", -120000, 828000, 5490000),
+        ("Expenses", 36000, 60000, 120000),
+        ("Profit / Loss", 144000, 1668000, 7170000),
     ]
     for row in summary_rows:
         summary.append(row)
@@ -683,10 +696,10 @@ def build_financial_model():
     use = wb.create_sheet("Use of Funds")
     use.append(["Category", "Percent", "Amount"])
     for row in [
-        ("Development", 0.40, 800000),
-        ("Marketing", 0.35, 700000),
-        ("Operations", 0.15, 300000),
-        ("Legal/Admin", 0.10, 200000),
+        ("MVP polish", 0.10, 5000),
+        ("Page/content boosts", 0.40, 20000),
+        ("Field operations", 0.30, 15000),
+        ("Admin buffer", 0.20, 10000),
     ]:
         use.append(row)
 
@@ -705,7 +718,7 @@ def build_financial_model():
 
 if __name__ == "__main__":
     build_pptx()
-    build_pdf_fallback()
+    build_pdf()
     build_docs()
     build_financial_model()
     print(PPTX_PATH)
