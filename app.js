@@ -82,6 +82,7 @@ const state = {
   activeConversationId: null,
   activeDirectConversationUserId: null,
   activeDirectConversationRequestId: "",
+  activeWorkspaceCleanup: null,
   conversationDraftVersion: 0,
   directConversationDraftVersion: 0,
   messageSummarySyncing: false,
@@ -697,6 +698,7 @@ function applyTheme(theme = "system") {
     : state.theme;
   document.documentElement.dataset.theme = resolved;
   document.documentElement.dataset.themeMode = state.theme;
+  document.documentElement.dataset.bsTheme = resolved;
   document.querySelector("meta[name='theme-color']")?.setAttribute("content", resolved === "dark" ? "#10191d" : "#0f3e46");
 }
 
@@ -2665,7 +2667,6 @@ async function deleteAccount() {
     `,
     showCancelButton: true,
     confirmButtonText: "Delete Account",
-    confirmButtonColor: "#dc3545",
     preConfirm: () => {
       const confirmation = $("#delete-account-confirmation")?.value || "";
       if (confirmation.trim().toUpperCase() !== "DELETE") {
@@ -2918,7 +2919,6 @@ async function deleteValidationEntry(entryId) {
     text: `${entry.subjectName || "This entry"} will be removed from the Ops tracker.`,
     showCancelButton: true,
     confirmButtonText: "Delete",
-    confirmButtonColor: "#dc3545",
     reverseButtons: true,
   });
   if (!result.isConfirmed) return;
@@ -3607,8 +3607,7 @@ async function openRequestModal(existing = null) {
   let selectedJobLocation = normalizeLocation(existing?.jobLocation);
   let selectedLocationSource = existing?.jobLocationSource || existing?.jobLocation?.source || (selectedJobLocation ? "map" : "");
   const existingSchedule = parseRequestSchedule(existing?.preferredSchedule || "");
-  const result = await modal({
-    width: "min(96vw, 880px)",
+  const result = await workspaceForm({
     title: editing ? "Edit request" : "Post request",
     html: `
       <div class="swal-form two">
@@ -3715,9 +3714,7 @@ async function openRequestModal(existing = null) {
 
 async function openProviderModal() {
   const existing = state.providers.find((provider) => provider.userId === state.session.id);
-  const result = await modal({
-    width: "min(96vw, 1040px)",
-    customClass: { popup: "profile-popup" },
+  const result = await workspaceForm({
     title: existing ? "Update provider" : "Provider profile",
     html: `
       <div class="swal-form two">
@@ -3935,6 +3932,47 @@ async function confirmRequest(requestId, offerId) {
   }
 }
 
+function openWorkspacePanel(html, { onOpen, onClose } = {}) {
+  closeWorkspacePanel();
+  const panel = $("[data-workspace-panel]");
+  const body = $("[data-workspace-panel-body]", panel);
+  if (!panel || !body) return null;
+  body.innerHTML = html;
+  panel.hidden = false;
+  document.body.classList.add("workspace-open");
+  state.activeWorkspaceCleanup = onClose || null;
+  onOpen?.(panel);
+  return panel;
+}
+
+function closeWorkspacePanel({ silent = false } = {}) {
+  const panel = $("[data-workspace-panel]");
+  const body = panel ? $("[data-workspace-panel-body]", panel) : null;
+  if (!panel || panel.hidden) return;
+  const cleanup = state.activeWorkspaceCleanup;
+  state.activeWorkspaceCleanup = null;
+  if (!silent) cleanup?.();
+  panel.hidden = true;
+  panel.classList.remove("workspace-panel-form");
+  if (body) body.innerHTML = "";
+  document.body.classList.remove("workspace-open");
+}
+
+function activeChatScope() {
+  return $("[data-workspace-panel]:not([hidden]) .chat-shell")?.closest("[data-workspace-panel]")
+    || window.Swal.getPopup?.()
+    || document;
+}
+
+function isWorkspaceChatOpen() {
+  return Boolean($("[data-workspace-panel]:not([hidden]) .chat-shell"));
+}
+
+function closeChatSurface() {
+  if (isWorkspaceChatOpen()) closeWorkspacePanel();
+  else window.Swal.close();
+}
+
 async function openConversation(requestId) {
   const request = state.requests.find((item) => item.id === requestId);
   if (!request) return;
@@ -3948,16 +3986,13 @@ async function openConversation(requestId) {
   }
   markConversationRead("job", requestId, payload.messages);
 
-  await window.Swal.fire({
-    customClass: { popup: "kaila-popup chat-popup" },
-    title: "",
-    html: conversationHtml(payload.messages, payload.writable, payload.activeUserIds, request),
-    showConfirmButton: false,
-    showCloseButton: false,
-    didOpen: () => bindConversationInput(requestId, payload.writable),
-    willClose: () => closeConversationRoom(requestId),
+  openWorkspacePanel(conversationHtml(payload.messages, payload.writable, payload.activeUserIds, request), {
+    onOpen: () => bindConversationInput(requestId, payload.writable),
+    onClose: () => {
+      closeConversationRoom(requestId);
+      state.activeConversationId = null;
+    },
   });
-  state.activeConversationId = null;
 }
 
 async function fetchConversation(requestId) {
@@ -4104,7 +4139,7 @@ function bindChatChrome(popup, inputSelector) {
       button.setAttribute('aria-expanded', String(!nextHidden));
     });
   };
-  $('[data-chat-close]', popup)?.addEventListener('click', () => window.Swal.close());
+  $('[data-chat-close]', popup)?.addEventListener('click', closeChatSurface);
   toggleMenu($('[data-chat-call-toggle]', popup), $('[data-chat-call-menu]', popup));
   toggleMenu($('[data-chat-options-toggle]', popup), $('[data-chat-options-menu]', popup));
   toggleMenu($('[data-chat-compose-toggle]', popup), $('[data-chat-compose-menu]', popup));
@@ -4221,7 +4256,7 @@ function conversationIdentityHtml(request) {
 function bindConversationInput(requestId, writable) {
   scrollConversationToBottom();
   startConversationPolling(requestId);
-  const popup = window.Swal.getPopup?.() || document;
+  const popup = activeChatScope();
   $$("[data-direct-media-open]", popup).forEach((button) => {
     button.addEventListener("click", () => {
       const attachments = readJsonFromString(button.dataset.directMediaItems, []);
@@ -4235,7 +4270,7 @@ function bindConversationInput(requestId, writable) {
   const input = $("[data-chat-input]", popup);
   $("[data-chat-send]", popup)?.addEventListener("click", () => sendConversationMessage(requestId));
   bindAttachmentPreview("[data-chat-attachments]", "[data-chat-attachment-preview]", 3);
-  $$("[data-chat-react]").forEach((button) => button.addEventListener("click", () => toggleMessageReaction(requestId, button.dataset.chatReact)));
+  $$("[data-chat-react]", popup).forEach((button) => button.addEventListener("click", () => toggleMessageReaction(requestId, button.dataset.chatReact)));
   input?.addEventListener("input", () => handleConversationKeystroke(requestId));
   input?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey) return;
@@ -4264,7 +4299,7 @@ async function sendConversationMessage(requestId) {
 }
 
 async function refreshConversation(requestId, options = {}) {
-  if (state.activeConversationId !== requestId || !window.Swal.isVisible()) return;
+  if (state.activeConversationId !== requestId || !isWorkspaceChatOpen()) return;
   const draftVersion = state.conversationDraftVersion;
   const input = $("[data-chat-input]");
   const draft = input?.value || "";
@@ -4346,7 +4381,7 @@ function stopConversationPolling() {
 }
 
 async function updateConversationPresence(requestId) {
-  if (state.activeConversationId !== requestId || !window.Swal.isVisible()) return;
+  if (state.activeConversationId !== requestId || !isWorkspaceChatOpen()) return;
   const payload = await fetchConversation(requestId);
   const host = $("[data-chat-presence]");
   if (payload && host) host.textContent = conversationPresenceText(payload.activeUserIds);
@@ -4372,17 +4407,14 @@ async function openDirectConversation(userId, requestId = "") {
   }
   markConversationRead("direct", directConversationMessageKey(userId, requestId), payload.messages);
 
-  await window.Swal.fire({
-    customClass: { popup: "kaila-popup chat-popup" },
-    title: "",
-    html: directConversationHtml(payload.messages, payload.writable, payload.activeUserIds, payload.target || target, payload.requestContext),
-    showConfirmButton: false,
-    showCloseButton: false,
-    didOpen: () => bindDirectConversationInput(userId, payload.writable, requestId),
-    willClose: () => closeDirectConversationRoom(userId),
+  openWorkspacePanel(directConversationHtml(payload.messages, payload.writable, payload.activeUserIds, payload.target || target, payload.requestContext), {
+    onOpen: () => bindDirectConversationInput(userId, payload.writable, requestId),
+    onClose: () => {
+      closeDirectConversationRoom(userId);
+      state.activeDirectConversationUserId = null;
+      state.activeDirectConversationRequestId = "";
+    },
   });
-  state.activeDirectConversationUserId = null;
-  state.activeDirectConversationRequestId = "";
 }
 
 async function fetchDirectConversation(userId, requestId = "") {
@@ -4428,7 +4460,7 @@ function directConversationHtml(messages, writable, activeUserIds = [], target =
 function bindDirectConversationInput(userId, writable, requestId = "") {
   scrollConversationToBottom();
   startDirectConversationPolling(userId);
-  const popup = window.Swal.getPopup?.() || document;
+  const popup = activeChatScope();
   $$("[data-direct-media-open]", popup).forEach((button) => {
     button.addEventListener("click", () => {
       const attachments = readJsonFromString(button.dataset.directMediaItems, []);
@@ -4504,7 +4536,7 @@ async function sendDirectConversationMessage(userId, requestId = "") {
 
 async function refreshDirectConversation(userId, options = {}) {
   const requestId = options.requestId ?? state.activeDirectConversationRequestId ?? "";
-  if (state.activeDirectConversationUserId !== userId || state.activeDirectConversationRequestId !== requestId || !window.Swal.isVisible()) return;
+  if (state.activeDirectConversationUserId !== userId || state.activeDirectConversationRequestId !== requestId || !isWorkspaceChatOpen()) return;
   const draftVersion = state.directConversationDraftVersion;
   const input = $("[data-direct-chat-input]");
   const draft = input?.value || "";
@@ -4554,7 +4586,7 @@ function startDirectConversationPolling(userId) {
 
 async function updateDirectConversationPresence(userIds = []) {
   const otherUserId = userIds.find((userId) => userId !== state.session?.id);
-  if (!otherUserId || state.activeDirectConversationUserId !== otherUserId || !window.Swal.isVisible()) return;
+  if (!otherUserId || state.activeDirectConversationUserId !== otherUserId || !isWorkspaceChatOpen()) return;
   const payload = await fetchDirectConversation(otherUserId, state.activeDirectConversationRequestId || "");
   const host = $("[data-direct-chat-presence]");
   if (payload && host) host.textContent = conversationPresenceText(payload.activeUserIds);
@@ -8061,7 +8093,6 @@ async function blockUser(userId) {
     icon: "warning",
     showCancelButton: true,
     confirmButtonText: "Block User",
-    confirmButtonColor: "#dc3545",
   });
   if (!result.isConfirmed) return;
   try {
@@ -8407,6 +8438,82 @@ function modal(options) {
       didOpen?.(popup);
     },
     ...modalOptions,
+  });
+}
+
+function workspaceForm(options) {
+  const {
+    title = "Workspace",
+    html = "",
+    confirmButtonText = "Save",
+    cancelButtonText = "Cancel",
+    didOpen,
+    preConfirm,
+  } = options;
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+      closeWorkspacePanel({ silent: true });
+    };
+    const panel = openWorkspacePanel(`
+      <section class="workspace-form">
+        <header class="workspace-form-header">
+          <button class="chat-icon-button" type="button" data-workspace-cancel aria-label="Close">
+            <i class="fa-solid fa-arrow-left"></i>
+          </button>
+          <h2>${escapeHtml(title)}</h2>
+        </header>
+        <div class="workspace-form-body">${html}</div>
+        <div class="workspace-validation" data-workspace-validation hidden></div>
+        <footer class="workspace-form-actions">
+          <button class="btn btn-outline-secondary" type="button" data-workspace-cancel>${escapeHtml(cancelButtonText)}</button>
+          <button class="btn btn-primary" type="button" data-workspace-submit>${escapeHtml(confirmButtonText)}</button>
+        </footer>
+      </section>
+    `, {
+      onOpen: (workspacePanel) => {
+        const validation = $("[data-workspace-validation]", workspacePanel);
+        const showValidation = (message) => {
+          if (!validation) return;
+          validation.textContent = String(message || "Check the highlighted fields.");
+          validation.hidden = false;
+        };
+        const submit = async () => {
+          if (validation) validation.hidden = true;
+          const originalShowValidation = window.Swal?.showValidationMessage;
+          const hadShowValidation = Boolean(window.Swal && "showValidationMessage" in window.Swal);
+          if (window.Swal) window.Swal.showValidationMessage = showValidation;
+          try {
+            const value = preConfirm ? await preConfirm() : true;
+            if (value === false) return;
+            settle({ isConfirmed: true, value });
+          } catch (error) {
+            showValidation(error.message || "Something went wrong.");
+          } finally {
+            if (window.Swal && hadShowValidation) {
+              window.Swal.showValidationMessage = originalShowValidation;
+            } else if (window.Swal) {
+              delete window.Swal.showValidationMessage;
+            }
+          }
+        };
+        tuneFormDensity(workspacePanel);
+        didOpen?.(workspacePanel);
+        $$("[data-workspace-cancel]", workspacePanel).forEach((button) => button.addEventListener("click", () => settle({ isDismissed: true })));
+        $("[data-workspace-submit]", workspacePanel)?.addEventListener("click", submit);
+      },
+      onClose: () => {
+        if (!settled) {
+          settled = true;
+          resolve({ isDismissed: true });
+        }
+      },
+    });
+    panel?.classList.add("workspace-panel-form");
+    if (!panel) settle({ isDismissed: true });
   });
 }
 
