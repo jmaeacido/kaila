@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v149-workspace-forms";
+const CACHE_NAME = "kaila-pwa-v150-job-location-picker";
 const IS_NATIVE_WEBVIEW = self.location.protocol === "https:"
   && ["localhost", "127.0.0.1", "::1"].includes(self.location.hostname)
   && /\bwv\b/i.test(navigator.userAgent || "");

@@ -3388,18 +3388,18 @@ function placeQuestionGuide(button) {
   button.dataset.vertical = rect.top - 96 < bounds.top + 16 ? "below" : "above";
 }
 
-function bindJobLocationPicker({ initialLocation = null, getLocation, setLocation }) {
-  const popup = document.querySelector(".swal2-popup");
-  if (!popup) return;
-  const status = $("[data-location-status]", popup);
-  const mapEl = $("[data-job-map]", popup);
-  const mapWrap = $("[data-job-map-wrap]", popup);
-  const mapModeToggle = $("[data-map-mode-toggle]", popup);
-  const zoomInButton = $("[data-map-zoom-in]", popup);
-  const zoomOutButton = $("[data-map-zoom-out]", popup);
-  const currentButton = $("[data-use-current-location]", popup);
-  const mapButton = $("[data-show-location-map]", popup);
-  const clearButton = $("[data-clear-job-location]", popup);
+function bindJobLocationPicker({ root = null, initialLocation = null, getLocation, setLocation }) {
+  const formRoot = root || document.querySelector(".swal2-popup") || document.querySelector("[data-workspace-panel]");
+  if (!formRoot) return;
+  const status = $("[data-location-status]", formRoot);
+  const mapEl = $("[data-job-map]", formRoot);
+  const mapWrap = $("[data-job-map-wrap]", formRoot);
+  const mapModeToggle = $("[data-map-mode-toggle]", formRoot);
+  const zoomInButton = $("[data-map-zoom-in]", formRoot);
+  const zoomOutButton = $("[data-map-zoom-out]", formRoot);
+  const currentButton = $("[data-use-current-location]", formRoot);
+  const mapButton = $("[data-show-location-map]", formRoot);
+  const clearButton = $("[data-clear-job-location]", formRoot);
   let map = null;
   let marker = null;
   let activeBaseLayer = "street";
@@ -3439,7 +3439,7 @@ function bindJobLocationPicker({ initialLocation = null, getLocation, setLocatio
   };
 
   const bindMapModeButtons = () => {
-    $$("[data-map-mode]", popup).forEach((button) => {
+    $$("[data-map-mode]", formRoot).forEach((button) => {
       button.addEventListener("click", () => {
         setMapMode(button.dataset.mapMode || "street");
       });
@@ -3447,7 +3447,7 @@ function bindJobLocationPicker({ initialLocation = null, getLocation, setLocatio
   };
 
   const updateMapModeButtons = () => {
-    $$("[data-map-mode]", popup).forEach((button) => {
+    $$("[data-map-mode]", formRoot).forEach((button) => {
       button.classList.toggle("active", button.dataset.mapMode === activeBaseLayer);
     });
   };
@@ -3587,18 +3587,18 @@ function parseRequestSchedule(value = "") {
   return match ? { date: match[1], time: match[2] } : { date: "", time: "" };
 }
 
-function bindScheduledRequestFields() {
-  const urgency = $("#request-urgency");
-  const fields = $("[data-scheduled-fields]");
+function bindScheduledRequestFields(scope = document) {
+  const urgency = $("#request-urgency", scope);
+  const fields = $("[data-scheduled-fields]", scope);
   const sync = () => fields?.classList.toggle("d-none", urgency?.value !== "Scheduled");
   urgency?.addEventListener("change", sync);
   sync();
 }
 
-function requestScheduleValue() {
-  if ($("#request-urgency")?.value !== "Scheduled") return "";
-  const date = $("#request-schedule-date")?.value || "";
-  const time = $("#request-schedule-time")?.value || "";
+function requestScheduleValue(scope = document) {
+  if ($("#request-urgency", scope)?.value !== "Scheduled") return "";
+  const date = $("#request-schedule-date", scope)?.value || "";
+  const time = $("#request-schedule-time", scope)?.value || "";
   return date && time ? `${date} ${time}` : "";
 }
 
@@ -3606,6 +3606,7 @@ async function openRequestModal(existing = null) {
   const editing = Boolean(existing?.id);
   let selectedJobLocation = normalizeLocation(existing?.jobLocation);
   let selectedLocationSource = existing?.jobLocationSource || existing?.jobLocation?.source || (selectedJobLocation ? "map" : "");
+  let requestFormRoot = document;
   const existingSchedule = parseRequestSchedule(existing?.preferredSchedule || "");
   const result = await workspaceForm({
     title: editing ? "Edit request" : "Post request",
@@ -3655,9 +3656,11 @@ async function openRequestModal(existing = null) {
       </div>
     `,
     confirmButtonText: editing ? "Save Changes" : "Post",
-    didOpen: () => {
-      bindScheduledRequestFields();
+    didOpen: (workspacePanel) => {
+      requestFormRoot = workspacePanel || document;
+      bindScheduledRequestFields(requestFormRoot);
       bindJobLocationPicker({
+        root: requestFormRoot,
         initialLocation: selectedJobLocation,
         getLocation: () => selectedJobLocation,
         setLocation: (location, source) => {
@@ -3665,24 +3668,25 @@ async function openRequestModal(existing = null) {
           selectedLocationSource = selectedJobLocation ? source : "";
         },
       });
-      if (!editing) bindAttachmentPreview("#request-attachments", "[data-request-attachment-preview]", 3);
+      if (!editing) bindAttachmentPreview("#request-attachments", "[data-request-attachment-preview]", 3, requestFormRoot);
     },
     preConfirm: async () => {
-      const attachments = editing ? [] : await readMediaAttachments("#request-attachments");
+      const scope = requestFormRoot || document;
+      const attachments = editing ? [] : await readMediaAttachments("#request-attachments", scope);
       if (!attachments) return false;
       const request = {
-        category: $("#request-category").value,
-        urgency: $("#request-urgency").value,
+        category: $("#request-category", scope).value,
+        urgency: $("#request-urgency", scope).value,
         area: existing?.area || state.session.area || "Pinned job site",
-        budget: normalizeCurrencyInput($("#request-budget").value) || "Open",
-        preferredSchedule: requestScheduleValue(),
-        contactMethod: $("#request-contact-method").value.trim(),
+        budget: normalizeCurrencyInput($("#request-budget", scope).value) || "Open",
+        preferredSchedule: requestScheduleValue(scope),
+        contactMethod: $("#request-contact-method", scope).value.trim(),
         exactLocationNotes: "",
         jobLocation: selectedJobLocation,
         jobLocationSource: selectedLocationSource,
-        permissionToForward: $("#request-forward-consent").checked,
-        consentToRate: $("#request-rate-consent").checked,
-        details: $("#request-details").value.trim(),
+        permissionToForward: $("#request-forward-consent", scope).checked,
+        consentToRate: $("#request-rate-consent", scope).checked,
+        details: $("#request-details", scope).value.trim(),
         attachments,
       };
       if (!request.category || !request.details || !request.permissionToForward || !request.consentToRate) {
@@ -3714,6 +3718,7 @@ async function openRequestModal(existing = null) {
 
 async function openProviderModal() {
   const existing = state.providers.find((provider) => provider.userId === state.session.id);
+  let providerFormRoot = document;
   const result = await workspaceForm({
     title: existing ? "Update provider" : "Provider profile",
     html: `
@@ -3741,35 +3746,37 @@ async function openProviderModal() {
       </div>
     `,
     confirmButtonText: "Save",
-    didOpen: () => {
-      bindCategoryChips("provider-category");
-      bindCategoryChips("provider-days");
-      bindCategoryChips("provider-coverage");
-      bindAddressGroup("provider-address");
+    didOpen: (workspacePanel) => {
+      providerFormRoot = workspacePanel || document;
+      bindCategoryChips("provider-category", providerFormRoot);
+      bindCategoryChips("provider-days", providerFormRoot);
+      bindCategoryChips("provider-coverage", providerFormRoot);
+      bindAddressGroup("provider-address", providerFormRoot);
     },
     preConfirm: () => {
+      const scope = providerFormRoot || document;
       const provider = {
-        category: selectedCategoryChips("provider-category"),
-        area: addressValue("provider-address"),
-        availability: $("#provider-availability").value,
-        skills: $("#provider-services").value.trim(),
-        displayName: $("#provider-display-name").value.trim(),
-        providerType: $("#provider-type").value,
-        specificServices: $("#provider-services").value.trim(),
-        yearsExperience: $("#provider-experience").value,
-        coverageArea: selectedCategoryChips("provider-coverage").join(", "),
-        emergencyAvailability: $("#provider-emergency").value,
-        availableDays: selectedCategoryChips("provider-days").join(", "),
-        availableTime: timeRangeValue("#provider-time-start", "#provider-time-end"),
-        travelLimits: $("#provider-travel").value.trim(),
-        minimumFee: normalizeCurrencyInput($("#provider-minimum-fee").value),
-        priceRange: priceRangeValue("#provider-price-range-min", "#provider-price-range-max"),
-        workSamples: $("#provider-work-samples").value.trim(),
-        certificateProof: $("#provider-certificate").value.trim(),
-        validIdConsent: $("#provider-valid-id").checked,
-        consentRequests: $("#provider-consent-requests").checked,
-        consentRatings: $("#provider-consent-ratings").checked,
-        rulesAgreement: $("#provider-rules").checked,
+        category: selectedCategoryChips("provider-category", scope),
+        area: addressValue("provider-address", scope),
+        availability: $("#provider-availability", scope).value,
+        skills: $("#provider-services", scope).value.trim(),
+        displayName: $("#provider-display-name", scope).value.trim(),
+        providerType: $("#provider-type", scope).value,
+        specificServices: $("#provider-services", scope).value.trim(),
+        yearsExperience: $("#provider-experience", scope).value,
+        coverageArea: selectedCategoryChips("provider-coverage", scope).join(", "),
+        emergencyAvailability: $("#provider-emergency", scope).value,
+        availableDays: selectedCategoryChips("provider-days", scope).join(", "),
+        availableTime: timeRangeValue("#provider-time-start", "#provider-time-end", scope),
+        travelLimits: $("#provider-travel", scope).value.trim(),
+        minimumFee: normalizeCurrencyInput($("#provider-minimum-fee", scope).value),
+        priceRange: priceRangeValue("#provider-price-range-min", "#provider-price-range-max", scope),
+        workSamples: $("#provider-work-samples", scope).value.trim(),
+        certificateProof: $("#provider-certificate", scope).value.trim(),
+        validIdConsent: $("#provider-valid-id", scope).checked,
+        consentRequests: $("#provider-consent-requests", scope).checked,
+        consentRatings: $("#provider-consent-ratings", scope).checked,
+        rulesAgreement: $("#provider-rules", scope).checked,
       };
       if (!provider.category.length || !provider.area || !provider.specificServices || !provider.coverageArea || !provider.consentRequests || !provider.consentRatings || !provider.rulesAgreement) {
         window.Swal.showValidationMessage("Category, area, services, coverage, request consent, rating consent, and rules agreement are required.");
@@ -5865,8 +5872,8 @@ async function disputePrompt() {
   return result.isConfirmed ? result.value : null;
 }
 
-async function readMediaAttachments(selector) {
-  const files = Array.from($(selector)?.files || []);
+async function readMediaAttachments(selector, scope = document) {
+  const files = Array.from($(selector, scope)?.files || []);
   if (files.length > 3) {
     window.Swal.showValidationMessage("Upload up to 3 attachments.");
     return null;
@@ -5931,9 +5938,9 @@ function loadImageFile(file) {
   });
 }
 
-function bindAttachmentPreview(inputSelector, previewSelector, limit = 3) {
-  const input = $(inputSelector);
-  const preview = $(previewSelector);
+function bindAttachmentPreview(inputSelector, previewSelector, limit = 3, scope = document) {
+  const input = $(inputSelector, scope);
+  const preview = $(previewSelector, scope);
   if (!input || !preview) return;
   let urls = [];
   const clearUrls = () => {
@@ -8254,27 +8261,27 @@ function renderCategoryChips(id, selected = "") {
   }
 }
 
-function bindCategoryChips(id) {
-  const box = $(`[data-category-chip-box="${escapeCssIdentifier(id)}"]`);
+function bindCategoryChips(id, scope = document) {
+  const box = $(`[data-category-chip-box="${escapeCssIdentifier(id)}"]`, scope);
   if (!box) return;
   $$("[data-chip-action]", box).forEach((button) => button.addEventListener("click", () => {
     const options = chipOptionsForId(id);
     const action = button.dataset.chipAction;
     const next = action === "select-all" ? options : [];
     box.outerHTML = chipsForId(id, next);
-    bindCategoryChips(id);
+    bindCategoryChips(id, scope);
   }));
   $$("[data-category-chip]", box).forEach((button) => button.addEventListener("click", () => {
-    const selected = selectedCategoryChips(id);
+    const selected = selectedCategoryChips(id, scope);
     const category = button.dataset.categoryChip;
     const next = selected.includes(category) ? selected.filter((item) => item !== category) : [...selected, category];
     box.outerHTML = chipsForId(id, next);
-    bindCategoryChips(id);
+    bindCategoryChips(id, scope);
   }));
 }
 
-function selectedCategoryChips(id) {
-  const box = $(`[data-category-chip-box="${escapeCssIdentifier(id)}"]`);
+function selectedCategoryChips(id, scope = document) {
+  const box = $(`[data-category-chip-box="${escapeCssIdentifier(id)}"]`, scope);
   if (!box) return [];
   return $$("[data-category-selected] .category-chip", box).map((button) => button.dataset.categoryChip).filter(Boolean);
 }
@@ -8306,8 +8313,8 @@ function addressFields(id, value = "") {
   `;
 }
 
-function bindAddressGroup(id) {
-  const group = $(`[data-address-group="${escapeCssIdentifier(id)}"]`);
+function bindAddressGroup(id, scope = document) {
+  const group = $(`[data-address-group="${escapeCssIdentifier(id)}"]`, scope);
   if (!group) return;
   const city = $(`#${id}-city`, group);
   const barangay = $(`#${id}-barangay`, group);
@@ -8321,8 +8328,8 @@ function sortedBarangays(barangays = []) {
     .sort((left, right) => BARANGAY_COLLATOR.compare(left, right));
 }
 
-function addressValue(id) {
-  const group = $(`[data-address-group="${escapeCssIdentifier(id)}"]`);
+function addressValue(id, scope = document) {
+  const group = $(`[data-address-group="${escapeCssIdentifier(id)}"]`, scope);
   if (!group) return "";
   const barangay = $(`#${id}-barangay`, group)?.value || "";
   if (!barangay) return "";
@@ -8362,9 +8369,9 @@ function selectedValues(selector) {
   return element ? Array.from(element.selectedOptions).map((option) => option.value).filter(Boolean) : [];
 }
 
-function timeRangeValue(startSelector, endSelector) {
-  const start = $(startSelector)?.value || "";
-  const end = $(endSelector)?.value || "";
+function timeRangeValue(startSelector, endSelector, scope = document) {
+  const start = $(startSelector, scope)?.value || "";
+  const end = $(endSelector, scope)?.value || "";
   if (!start && !end) return "";
   return [start || "Any", end || "Any"].join(" - ");
 }
@@ -8374,9 +8381,9 @@ function parseTimeRange(value = "") {
   return { start, end };
 }
 
-function priceRangeValue(minSelector, maxSelector) {
-  const min = normalizeCurrencyInput($(minSelector)?.value || "");
-  const max = normalizeCurrencyInput($(maxSelector)?.value || "");
+function priceRangeValue(minSelector, maxSelector, scope = document) {
+  const min = normalizeCurrencyInput($(minSelector, scope)?.value || "");
+  const max = normalizeCurrencyInput($(maxSelector, scope)?.value || "");
   if (min && max) return `${min} - ${max}`;
   return min || max || "";
 }
