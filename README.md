@@ -99,6 +99,17 @@ so `./gradlew assembleDebug` refreshes Android web assets as a final guard.
 The generated APK is written to
 `android/app/build/outputs/apk/debug/app-debug.apk`.
 
+The native app checks `/api/mobile-update` on launch and prompts Android users
+when the backend reports a higher APK version code than the installed app. If a
+user taps Later, the same update prompt is held back until the next day.
+KAILA's current manual APK distribution link is configured through
+`KAILA_ANDROID_APK_URL`; keep pointing it at the stable Google Drive APK file.
+After replacing the APK in Drive, update `KAILA_ANDROID_LATEST_VERSION_CODE` in
+`socket/.env` to the APK's Android `versionCode` value. This is the Gradle
+`KAILA_VERSION_CODE` used when building, not Google Drive's file revision label.
+For example, build with `KAILA_VERSION_CODE=37` and set
+`KAILA_ANDROID_LATEST_VERSION_CODE=37`.
+
 Build a Play Store upload bundle:
 
 ```bash

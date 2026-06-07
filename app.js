@@ -12,6 +12,7 @@ const STORAGE = {
   messageReads: "kaila.deploy.messageReads",
   notificationReads: "kaila.deploy.notificationReads",
   pushDeviceId: "kaila.deploy.pushDeviceId",
+  mobileUpdateCheck: "kaila.deploy.mobileUpdateCheck",
 };
 const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Cellphone repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
@@ -46,6 +47,7 @@ const GEOGRAPHY_SOURCE = "assets/Gingoog City PSGC.xlsx";
 const DEFAULT_MAP_CENTER = { lat: 8.826, lng: 125.117 };
 const ROUTE_DISTANCE_CACHE_MS = 6 * 60 * 60 * 1000;
 const ROUTE_DISTANCE_DIRECT_URL = "https://router.project-osrm.org/route/v1/driving";
+const MOBILE_UPDATE_PROMPT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FALLBACK_GEOGRAPHY = {
   region: "Region X (Northern Mindanao)",
   city: "City of Gingoog",
@@ -141,6 +143,7 @@ async function init() {
   syncQueuedValidationEntries();
   route(initialRoute());
   connectSocket();
+  checkMobileUpdate();
   consumeNativeLaunchAction();
 }
 
@@ -380,6 +383,89 @@ async function nativeFirebaseAvailable() {
   } catch {
     return false;
   }
+}
+
+async function nativeAppInfo() {
+  const bridge = nativeKailaBridge();
+  if (!bridge?.getAppInfo) return null;
+  try {
+    return await bridge.getAppInfo();
+  } catch {
+    return null;
+  }
+}
+
+async function openExternalUrl(url) {
+  if (!url) return;
+  const bridge = nativeKailaBridge();
+  if (bridge?.openUrl) {
+    try {
+      await bridge.openUrl({ url });
+      return;
+    } catch (error) {
+      console.warn("KAILA native URL open failed:", error);
+    }
+  }
+  window.open(url, "_blank", "noopener");
+}
+
+function mobileUpdateMemory() {
+  return readJson(STORAGE.mobileUpdateCheck, {});
+}
+
+function rememberMobileUpdateCheck(extra = {}) {
+  localStorage.setItem(STORAGE.mobileUpdateCheck, JSON.stringify({ ...mobileUpdateMemory(), checkedAt: Date.now(), ...extra }));
+}
+
+function shouldPromptMobileUpdate(latestVersionCode) {
+  const memory = mobileUpdateMemory();
+  if (Number(memory.promptedVersionCode || 0) !== Number(latestVersionCode)) return true;
+  const promptedAt = Number(memory.promptedAt || 0);
+  return !promptedAt || Date.now() - promptedAt > MOBILE_UPDATE_PROMPT_INTERVAL_MS;
+}
+
+async function checkMobileUpdate({ force = false } = {}) {
+  if (!isNativeApp()) return;
+  rememberMobileUpdateCheck();
+  try {
+    const [info, update] = await Promise.all([
+      nativeAppInfo(),
+      fetch(`${apiBase()}/api/mobile-update`, { cache: "no-store" }).then((response) => response.ok ? response.json() : null),
+    ]);
+    const currentVersionCode = Number(info?.versionCode || 0);
+    const latestVersionCode = Number(update?.latestVersionCode || 0);
+    if (!update?.enabled || !update?.apkUrl || !currentVersionCode || latestVersionCode <= currentVersionCode) return;
+    rememberMobileUpdateCheck({ latestVersionCode });
+    if (!force && !shouldPromptMobileUpdate(latestVersionCode)) return;
+    rememberMobileUpdateCheck({ promptedVersionCode: latestVersionCode, promptedAt: Date.now() });
+    promptMobileUpdate({ ...update, currentVersionCode, currentVersionName: info?.versionName || "" });
+  } catch (error) {
+    console.warn("KAILA mobile update check failed:", error);
+  }
+}
+
+async function promptMobileUpdate(update = {}) {
+  const current = update.currentVersionName
+    ? `${update.currentVersionName} (${update.currentVersionCode})`
+    : `Version ${update.currentVersionCode}`;
+  const latest = update.latestVersionName
+    ? `${update.latestVersionName} (${update.latestVersionCode})`
+    : `Version ${update.latestVersionCode}`;
+  const notes = update.releaseNotes ? `<p>${escapeHtml(update.releaseNotes)}</p>` : "";
+  const result = await modal({
+    icon: "info",
+    title: "KAILA update available",
+    html: `
+      <div class="text-start">
+        <p>A newer Android app is ready.</p>
+        <p><strong>Installed:</strong> ${escapeHtml(current)}<br><strong>Latest:</strong> ${escapeHtml(latest)}</p>
+        ${notes}
+      </div>
+    `,
+    confirmButtonText: "Download Update",
+    cancelButtonText: "Later",
+  });
+  if (result.isConfirmed) openExternalUrl(update.apkUrl);
 }
 
 function isNativeApp() {

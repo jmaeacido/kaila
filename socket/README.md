@@ -68,6 +68,25 @@ incoming call invites. The Android app has a native Firebase messaging service s
 closed/backgrounded apps can still show persistent notifications and full-screen
 incoming call alerts when Android permits full-screen intent.
 
+## Android APK Update Prompt
+
+The API exposes `/api/mobile-update` for the native Android app. The app compares
+that response with its installed `versionCode` on launch and prompts users to
+download the new APK when the backend value is higher. If the user taps Later,
+the same update prompt is held back until the next day.
+
+```env
+KAILA_ANDROID_LATEST_VERSION_CODE=37
+KAILA_ANDROID_LATEST_VERSION_NAME=1.0.0
+KAILA_ANDROID_APK_URL=https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link
+KAILA_ANDROID_RELEASE_NOTES=
+```
+
+When you replace the APK in Google Drive, bump
+`KAILA_ANDROID_LATEST_VERSION_CODE` to match the APK build's Android version
+code, meaning the Gradle `KAILA_VERSION_CODE` used for that APK. This is not the
+Google Drive file revision label. The Drive file name and link can stay the same.
+
 ## Events
 
 Clients join the shared MVP pilot room:

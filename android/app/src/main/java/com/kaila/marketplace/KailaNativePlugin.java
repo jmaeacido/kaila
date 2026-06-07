@@ -6,6 +6,8 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
 import android.net.Uri;
@@ -125,6 +127,36 @@ public class KailaNativePlugin extends Plugin {
             result.put("available", false);
         }
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void getAppInfo(PluginCall call) {
+        JSObject result = new JSObject();
+        try {
+            PackageInfo info = getContext().getPackageManager().getPackageInfo(getContext().getPackageName(), 0);
+            long versionCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? info.getLongVersionCode() : info.versionCode;
+            result.put("versionCode", versionCode);
+            result.put("versionName", info.versionName);
+            result.put("packageName", getContext().getPackageName());
+        } catch (PackageManager.NameNotFoundException error) {
+            result.put("versionCode", 0);
+            result.put("versionName", "");
+            result.put("packageName", getContext().getPackageName());
+        }
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void openUrl(PluginCall call) {
+        String url = call.getString("url", "");
+        if (url.trim().isEmpty()) {
+            call.reject("URL is required");
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(intent);
+        call.resolve();
     }
 
     private void createCallChannel() {

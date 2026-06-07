@@ -44,6 +44,10 @@ const GROQ_API_KEY = sanitizeToken(process.env.GROQ_API_KEY || "");
 const GROQ_MODEL = sanitizeToken(process.env.GROQ_MODEL || "llama-3.1-8b-instant");
 const ROUTE_DISTANCE_URL = sanitizeToken(process.env.KAILA_ROUTE_DISTANCE_URL || "https://router.project-osrm.org/route/v1/driving");
 const ROUTE_DISTANCE_CACHE_MS = Number(process.env.KAILA_ROUTE_DISTANCE_CACHE_MS || 6 * 60 * 60 * 1000);
+const MOBILE_UPDATE_VERSION_CODE = Number(process.env.KAILA_ANDROID_LATEST_VERSION_CODE || 37);
+const MOBILE_UPDATE_VERSION_NAME = sanitizeToken(process.env.KAILA_ANDROID_LATEST_VERSION_NAME || "1.0.0");
+const MOBILE_UPDATE_APK_URL = sanitizeToken(process.env.KAILA_ANDROID_APK_URL || "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link");
+const MOBILE_UPDATE_RELEASE_NOTES = sanitizeToken(process.env.KAILA_ANDROID_RELEASE_NOTES || "");
 const UPLOAD_DIR = path.resolve(__dirname, "..", "uploads");
 const PROFILE_UPLOAD_DIR = path.resolve(__dirname, "..", "profile-photos");
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -2213,6 +2217,16 @@ app.get("/api/message-summary", requireUser, async (req, res) => {
 
 app.get("/api/notification-summary", requireUser, async (req, res) => {
   res.json(await notificationSummaryFor(req.user));
+});
+
+app.get("/api/mobile-update", (req, res) => {
+  res.json({
+    enabled: MOBILE_UPDATE_VERSION_CODE > 0 && Boolean(MOBILE_UPDATE_APK_URL),
+    latestVersionCode: MOBILE_UPDATE_VERSION_CODE,
+    latestVersionName: MOBILE_UPDATE_VERSION_NAME,
+    apkUrl: MOBILE_UPDATE_APK_URL,
+    releaseNotes: MOBILE_UPDATE_RELEASE_NOTES,
+  });
 });
 
 app.get("/api/route-distance", requireUser, async (req, res) => {

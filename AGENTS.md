@@ -66,6 +66,14 @@ Important environment settings:
   unreadable.
 - `GROQ_API_KEY` enables server-side AI suggestions for validation Decision
   Signal prefilling and dashboard analytics. Keep it in ignored `socket/.env`.
+- `KAILA_ANDROID_LATEST_VERSION_CODE`, `KAILA_ANDROID_LATEST_VERSION_NAME`,
+  `KAILA_ANDROID_APK_URL`, and `KAILA_ANDROID_RELEASE_NOTES` feed
+  `/api/mobile-update`. The native Android app checks this endpoint on launch
+  and prompts when the backend version code is higher than the installed APK.
+  When replacing the stable Google Drive APK file, bump
+  `KAILA_ANDROID_LATEST_VERSION_CODE` to the APK build's Android version code,
+  meaning the Gradle `KAILA_VERSION_CODE` used for that APK, not the Google
+  Drive file revision label.
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME` configure MySQL.
 
 ## Runtime Data
