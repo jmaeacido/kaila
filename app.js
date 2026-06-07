@@ -13,6 +13,7 @@ const STORAGE = {
   notificationReads: "kaila.deploy.notificationReads",
   pushDeviceId: "kaila.deploy.pushDeviceId",
   mobileUpdateCheck: "kaila.deploy.mobileUpdateCheck",
+  activeRole: "kaila.deploy.activeRole",
 };
 const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Cellphone repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
@@ -116,6 +117,7 @@ const state = {
   },
   call: null,
   adminMetric: "",
+  activeRole: localStorage.getItem(STORAGE.activeRole) || "",
   theme: localStorage.getItem(STORAGE.theme) || "system",
   geography: FALLBACK_GEOGRAPHY,
 };
@@ -680,10 +682,12 @@ async function openDirectMessageFromNotification(data = {}) {
 async function openRequestFromNotification(data = {}) {
   const requestId = data.requestId || data.id || "";
   route("app");
-  activateTab("#requests-pane");
   clearJobRequestNotification(requestId);
   await loadState({ silent: true });
-  if (requestId && state.requests.some((request) => request.id === requestId)) {
+  const request = state.requests.find((item) => item.id === requestId);
+  if (request && shouldUseProviderModeForRequest(request)) activateProviderMode();
+  activateTab("#requests-pane");
+  if (request) {
     focusRequestCard(requestId, data.offerId || "");
     return;
   }
@@ -915,6 +919,7 @@ function applyServerState(payload = {}, options = {}) {
       localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
     }
   }
+  ensureActiveRole();
   if (!options.fromCache) cacheStateSnapshot();
   render();
 }
@@ -997,7 +1002,9 @@ async function register(event) {
   }
 
   state.session = payload.user;
+  state.activeRole = defaultActiveRole();
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+  localStorage.setItem(STORAGE.activeRole, state.activeRole);
   loadAttentionBadgesForSession();
   syncSocketIdentity();
   safeApplyState(payload.state);
@@ -1026,7 +1033,9 @@ async function login(event) {
   }
 
   state.session = payload.user;
+  state.activeRole = defaultActiveRole();
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+  localStorage.setItem(STORAGE.activeRole, state.activeRole);
   loadAttentionBadgesForSession();
   syncSocketIdentity();
   safeApplyState(payload.state);
@@ -1187,7 +1196,7 @@ function renderTabs() {
   const isOps = state.session?.role === "ops";
   const isSupport = state.session?.role === SUPPORT_ROLE;
   const canViewActivity = ["admin", SUPPORT_ROLE].includes(state.session?.role);
-  const hideProviders = state.session?.role === "provider" || isOps;
+  const hideProviders = isOps;
   if (requestsTab) requestsTab.hidden = isOps;
   providersTab.hidden = hideProviders;
   if (clientsTab) clientsTab.hidden = !["admin", SUPPORT_ROLE].includes(state.session?.role);
@@ -1258,16 +1267,26 @@ function focusRequestCard(requestId, offerId = "") {
 function renderActions() {
   const row = $("[data-action-row]");
   if (!row || !state.session) return;
-  row.dataset.actionLayout = ["client", "provider"].includes(state.session.role) ? "single-row" : "default";
+  ensureActiveRole();
+  row.dataset.actionLayout = canActAsMarketplace() ? "single-row" : "default";
 
   const actions = [];
-  if (state.session.role === "client") {
+  if (canActAsMarketplace() && ownProviderProfile()) {
+    actions.push(`
+      <div class="btn-group role-switch" role="group" aria-label="Choose active marketplace role">
+        <button class="btn btn-${state.activeRole === "client" ? "primary" : "outline-primary"}" type="button" data-active-role="client"><i class="fa-solid fa-user"></i><span>Client</span></button>
+        <button class="btn btn-${state.activeRole === "provider" ? "primary" : "outline-primary"}" type="button" data-active-role="provider"><i class="fa-solid fa-screwdriver-wrench"></i><span>Provider</span></button>
+      </div>
+    `);
+  }
+  if (canActAsClient()) {
     actions.push(`<button class="btn btn-primary" type="button" data-new-request><i class="fa-solid fa-plus"></i><span>Post Request</span></button>`);
   }
-  if (state.session.role === "provider") {
-    actions.push(`<button class="btn btn-outline-primary" type="button" data-provider-profile><i class="fa-solid fa-id-card"></i><span>${state.session.role === "provider" ? "Provider Profile" : "Add Provider"}</span></button>`);
+  if (canActAsMarketplace() && (!ownProviderProfile() || state.activeRole === "provider")) {
+    const hasProviderProfile = Boolean(ownProviderProfile());
+    actions.push(`<button class="btn ${hasProviderProfile ? "btn-outline-primary" : "btn-provider-setup"}" type="button" data-provider-profile data-provider-setup="${hasProviderProfile ? "false" : "true"}"><i class="fa-solid fa-briefcase"></i><span>${hasProviderProfile ? "Provider Profile" : "Add a Provider Profile"}</span></button>`);
   }
-  if (["client", "provider"].includes(state.session.role)) {
+  if (canActAsMarketplace()) {
     actions.push(`<button class="btn btn-outline-primary" type="button" data-open-support><i class="fa-solid fa-headset"></i><span>Customer Service</span></button>`);
   }
   if (state.session.role === "admin") {
@@ -1289,6 +1308,7 @@ function renderActions() {
   }
   row.innerHTML = actions.join("");
 
+  $$("[data-active-role]", row).forEach((button) => button.addEventListener("click", () => setActiveRole(button.dataset.activeRole)));
   $("[data-new-request]")?.addEventListener("click", openRequestModal);
   $("[data-provider-profile]")?.addEventListener("click", openProviderModal);
   $("[data-admin-create-account]")?.addEventListener("click", openAdminCreateAccountModal);
@@ -1296,8 +1316,9 @@ function renderActions() {
   $("[data-provider-interview]")?.addEventListener("click", openProviderInterviewModal);
   $("[data-open-support]")?.addEventListener("click", openCustomerServicePlatform);
   $("[data-team-note]")?.addEventListener("click", openMessageModal);
-  $("[data-dashboard-title]").textContent = `${roleLabel(state.session.role)} Dashboard`;
-  $("[data-role-pill]").textContent = roleLabel(state.session.role);
+  const activeRoleLabel = state.activeRole ? roleLabel(state.activeRole) : roleLabel(state.session.role);
+  $("[data-dashboard-title]").textContent = `${activeRoleLabel} Dashboard`;
+  $("[data-role-pill]").textContent = `${activeRoleLabel}${state.activeRole && state.activeRole !== state.session.role ? ` mode · ${roleLabel(state.session.role)} account` : ""}`;
 }
 
 function renderStats() {
@@ -1383,8 +1404,8 @@ function renderRequests() {
     host.innerHTML = "";
     return;
   }
-  let visible = state.session?.role === "provider"
-    ? state.requests.filter(isVisibleToProvider)
+  let visible = canActAsProvider()
+    ? state.requests.filter((request) => request.clientId === state.session.id || isVisibleToProvider(request))
     : state.requests;
   const adminPanel = state.session?.role === "admin" ? adminRequestMetricPanel() : "";
   if (state.session?.role === "admin") visible = adminMetricRequests(visible);
@@ -1516,27 +1537,27 @@ function renderAdminRequestMetricDetail(request) {
 }
 
 function renderRequestDistanceMeta(request) {
-  if (state.session?.role === "provider") {
+  if (canActAsProvider() && request.clientId !== state.session?.id) {
     const origin = providerRouteOriginForRequest(request);
     const distance = origin && request.jobLocation ? cachedRouteDistanceKm(origin, request.jobLocation) : null;
     if (distance !== null) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-location-dot"></i> Job site pinned · Route ${escapeHtml(formatDistanceKm(distance))} from you</span>`;
     if (origin && request.jobLocation) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-location-dot"></i> Job site pinned · Calculating route distance from you...</span>`;
     if (request.jobLocation) return `<span data-request-route-distance="${escapeAttribute(request.id)}"><i class="fa-solid fa-location-dot"></i> Job site pinned · Allow GPS for route distance</span>`;
   }
-  if (state.session?.role === "client" && request.clientId === state.session.id && request.jobLocation) {
+  if (request.clientId === state.session?.id && request.jobLocation) {
     return `<span><i class="fa-solid fa-location-dot"></i> Job site pinned</span>`;
   }
   return "";
 }
 
 function canUpdateRequestDistance(request = {}) {
-  return Boolean(state.session?.role === "provider" && request.jobLocation && !providerRouteOriginForRequest(request));
+  return Boolean(canActAsProvider() && request.clientId !== state.session?.id && request.jobLocation && !providerRouteOriginForRequest(request));
 }
 
 function navigationTargetForRequest(request = {}) {
   if (!state.session || !request?.id) return null;
   if (!canNavigateRequest(request)) return null;
-  if (state.session.role === "provider" && request.acceptedProviderId === state.session.id) {
+  if (request.acceptedProviderId === state.session.id) {
     const destination = normalizeLocation(request.jobLocation);
     if (!destination) return null;
     return {
@@ -1545,7 +1566,7 @@ function navigationTargetForRequest(request = {}) {
       detail: request.exactLocationNotes || request.area || "",
     };
   }
-  if (state.session.role === "client" && request.clientId === state.session.id) {
+  if (request.clientId === state.session.id) {
     const offer = acceptedOffer(request);
     const destination = normalizeLocation(offer?.providerLocation);
     if (!destination) return null;
@@ -1585,7 +1606,7 @@ function renderNavigationCard(request = {}) {
 }
 
 function renderAcceptedProviderContact(request) {
-  const isClientOwner = state.session?.role === "client" && request.clientId === state.session.id;
+  const isClientOwner = request.clientId === state.session?.id;
   if (!isClientOwner || !request.acceptedProviderId) return "";
   const provider = userProfile(request.acceptedProviderId);
   const contact = request.acceptedProviderContact || {};
@@ -1610,7 +1631,7 @@ function renderAcceptedProviderContact(request) {
 }
 
 function renderAcceptedClientContact(request) {
-  const isAcceptedProvider = state.session?.role === "provider" && request.acceptedProviderId === state.session.id;
+  const isAcceptedProvider = request.acceptedProviderId === state.session?.id;
   if (!isAcceptedProvider) return "";
   const contact = request.clientContact || {};
   const name = contact.name || request.clientName || "Client";
@@ -1998,7 +2019,7 @@ function renderProviders() {
     return;
   }
   let providers = state.providers;
-  if (state.session?.role === "client") providers = providers.filter((provider) => !isBlockedUser(provider.userId));
+  if (canActAsMarketplace()) providers = providers.filter((provider) => !isBlockedUser(provider.userId));
   if (state.session?.role === "admin") providers = adminMetricProviders(providers);
   const adminPanel = state.session?.role === "admin" ? adminProviderMetricPanel() : "";
   if (!providers.length) {
@@ -3877,6 +3898,7 @@ async function openProviderModal() {
   try {
     const payload = await apiFetch("/api/providers", { method: "POST", body: JSON.stringify(result.value) });
     applyServerState(payload.state);
+    setActiveRole("provider");
     notify("Provider saved", "", "success");
   } catch (error) {
     notify("Provider failed", error.message, "error");
@@ -6466,13 +6488,28 @@ function upsertRequest(request = {}) {
   render();
 }
 
+function hasProviderCapability() {
+  return Boolean(ownProviderProfile());
+}
+
+function shouldUseProviderModeForRequest(request = {}) {
+  return Boolean(hasProviderCapability() && request.clientId !== state.session?.id && providerMatchesRequest(request));
+}
+
+function activateProviderMode() {
+  if (!canUseRole("provider")) return false;
+  state.activeRole = "provider";
+  localStorage.setItem(STORAGE.activeRole, "provider");
+  return true;
+}
+
 function handleRequestCreated({ request } = {}) {
   if (!request || !state.session || request.clientId === state.session.id) return;
-  if (state.session.role !== "provider") return;
-  if (state.session.role === "provider" && !providerMatchesRequest(request)) return;
+  if (!hasProviderCapability()) return;
+  if (!providerMatchesRequest(request)) return;
   upsertRequest(request);
   loadState({ silent: true }).catch(() => {});
-  if ($("#requests-pane")?.classList.contains("active")) {
+  if (canActAsProvider() && $("#requests-pane")?.classList.contains("active")) {
     clearJobRequestNotification(request.id);
     return;
   }
@@ -6483,15 +6520,22 @@ function handleRequestCreated({ request } = {}) {
     customClass: { popup: "kaila-popup attention-request-popup" },
     title: "New job request",
     confirmButtonText: "Offer/Counter",
-    onConfirm: () => openOfferModal(request.id, "offer"),
-    ...(state.session.role === "provider" ? {
-      denyButtonText: hasClientPrice(request) ? "Accept Client Price" : undefined,
-      showDenyButton: hasClientPrice(request),
-      onDeny: () => acceptClientPrice(request.id),
-      cancelButtonText: "Decline/Pass",
-      showCancelButton: true,
-      onCancel: () => persistPassRequest(request.id),
-    } : {}),
+    onConfirm: () => {
+      activateProviderMode();
+      openOfferModal(request.id, "offer");
+    },
+    denyButtonText: hasClientPrice(request) ? "Accept Client Price" : undefined,
+    showDenyButton: hasClientPrice(request),
+    onDeny: () => {
+      activateProviderMode();
+      acceptClientPrice(request.id);
+    },
+    cancelButtonText: "Decline/Pass",
+    showCancelButton: true,
+    onCancel: () => {
+      activateProviderMode();
+      persistPassRequest(request.id);
+    },
     html: `
       <div class="attention-request">
         ${renderAttentionProfile(request.clientName, request.clientPhotoUrl || client.photoUrl, "Client reputation", request.clientReputation || client.reputation)}
@@ -6939,6 +6983,9 @@ function addUnreadNotification(item = null) {
 
 function clearUnreadNotifications() {
   if (!unreadNotificationCount()) return;
+  state.unreadNotificationItems.forEach((item) => {
+    if (item?.type && item.createdAt) markNotificationTypeReadAt(item.type, item.createdAt);
+  });
   markNotificationsRead();
   state.unreadNotifications = 0;
   state.unreadNotificationItems = [];
@@ -6962,6 +7009,9 @@ function clearUnreadMessage(type, id) {
   const key = `${type}:${id}`;
   const nextMessages = state.unreadMessages.filter((item) => item.key !== key);
   if (nextMessages.length === state.unreadMessages.length) return;
+  state.unreadMessages
+    .filter((item) => item.key === key && item.createdAt)
+    .forEach((item) => markConversationReadAt(item.type, item.id, item.createdAt));
   state.unreadMessages = nextMessages;
   persistAttentionBadges();
   renderAttentionBadges();
@@ -7137,8 +7187,8 @@ function latestMessageCreatedAt(messages = []) {
 
 function openNotificationBell() {
   if (!state.session) return;
-  route("app");
   const activityOpen = $("#activity-pane")?.classList.contains("active");
+  route("app");
   activateTab(activityOpen ? fallbackDashboardTab() : "#activity-pane");
   clearUnreadNotifications();
 }
@@ -7499,7 +7549,7 @@ function addActivity(title, detail) {
 }
 
 function canOffer(request) {
-  return state.session?.role === "provider" && ["Posted", "Offers Received", "Countered"].includes(request.status);
+  return canActAsProvider() && request.clientId !== state.session?.id && ["Posted", "Offers Received", "Countered"].includes(request.status);
 }
 
 function hasClientPrice(request) {
@@ -7507,11 +7557,11 @@ function hasClientPrice(request) {
 }
 
 function canAcceptClientPrice(request) {
-  return state.session?.role === "provider" && hasClientPrice(request) && canOffer(request);
+  return canActAsProvider() && hasClientPrice(request) && canOffer(request);
 }
 
 function canPass(request) {
-  return state.session?.role === "provider" && ["Posted", "Offers Received", "Countered"].includes(request.status);
+  return canActAsProvider() && request.clientId !== state.session?.id && ["Posted", "Offers Received", "Countered"].includes(request.status);
 }
 
 function isVisibleToProvider(request) {
@@ -7555,18 +7605,18 @@ function clearJobRequestNotification(requestId = "") {
 }
 
 function clearVisibleProviderJobNotifications() {
-  if (state.session?.role !== "provider") return;
+  if (!canActAsProvider()) return;
   state.requests
     .filter((request) => ["Posted", "Offers Received", "Countered"].includes(request.status) && providerMatchesRequest(request))
     .forEach((request) => clearJobRequestNotification(request.id));
 }
 
 function canSelectOffer(request) {
-  return state.session?.role === "client" && request.clientId === state.session.id && visibleOffers(request).length > 0 && ["Offers Received", "Countered"].includes(request.status);
+  return request.clientId === state.session?.id && visibleOffers(request).length > 0 && ["Offers Received", "Countered"].includes(request.status);
 }
 
 function canEditRequest(request = {}) {
-  return Boolean(state.session?.role === "client" && request.clientId === state.session.id && ["Posted", "Offers Received", "Countered"].includes(request.status));
+  return Boolean(request.clientId === state.session?.id && ["Posted", "Offers Received", "Countered"].includes(request.status));
 }
 
 function visibleOffers(request) {
@@ -7576,12 +7626,12 @@ function visibleOffers(request) {
 }
 
 function providerOwnOfferForRequest(request = {}) {
-  if (state.session?.role !== "provider" || !request?.offers?.length) return null;
+  if (!canActAsProvider() || !request?.offers?.length) return null;
   return visibleOffers(request).find((offer) => offer.providerId === state.session.id) || null;
 }
 
 function providerRouteOriginForRequest(request = {}) {
-  if (state.session?.role !== "provider") return null;
+  if (!canActAsProvider()) return null;
   return normalizeLocation(state.deviceLocation) || normalizeLocation(providerOwnOfferForRequest(request)?.providerLocation);
 }
 
@@ -8114,7 +8164,7 @@ function hydrateRequestRouteDistances(host = document) {
 }
 
 function requestProviderLocationForRouteDistances(host = document) {
-  if (state.session?.role !== "provider" || state.deviceLocation || state.providerDistanceLocationRefreshing) return;
+  if (!canActAsProvider() || state.deviceLocation || state.providerDistanceLocationRefreshing) return;
   const needsOrigin = $$("[data-request-route-distance]", host).some((element) => {
     const request = state.requests.find((item) => item.id === element.dataset.requestRouteDistance);
     return request?.jobLocation && !providerRouteOriginForRequest(request);
@@ -8141,7 +8191,7 @@ function canReportJob(request = {}) {
   if (["admin", SUPPORT_ROLE].includes(state.session.role)) return true;
   if (request.clientId === state.session.id) return false;
   if (request.acceptedProviderId === state.session.id) return true;
-  return state.session.role === "provider" && providerMatchesRequest(request);
+  return canActAsProvider() && providerMatchesRequest(request);
 }
 
 async function openReportUserModal(userId) {
@@ -8241,8 +8291,8 @@ async function unblockUser(userId) {
 function jobActionButtons(request) {
   if (!state.session) return "";
   const buttons = [];
-  const isClient = state.session.role === "client" && request.clientId === state.session.id;
-  const isProvider = state.session.role === "provider" && request.acceptedProviderId === state.session.id;
+  const isClient = request.clientId === state.session.id;
+  const isProvider = request.acceptedProviderId === state.session.id;
   const isSupport = state.session.role === SUPPORT_ROLE;
   const add = (action, label, style = "outline-secondary") => {
     buttons.push(`<button class="btn btn-sm btn-${style}" data-request-id="${request.id}" data-job-action="${action}">${label}</button>`);
@@ -8795,6 +8845,59 @@ function capitalize(value) {
 function roleLabel(role) {
   if (role === SUPPORT_ROLE) return SUPPORT_LABEL;
   return capitalize(String(role || "user"));
+}
+
+function ownProviderProfile() {
+  if (!state.session?.id) return null;
+  return state.providers.find((provider) => provider.userId === state.session.id && (provider.status || "Active") === "Active") || null;
+}
+
+function defaultActiveRole() {
+  return ["client", "provider"].includes(state.session?.role) ? state.session.role : "";
+}
+
+function ensureActiveRole() {
+  if (!state.session) {
+    state.activeRole = "";
+    localStorage.removeItem(STORAGE.activeRole);
+    return;
+  }
+  const fallback = defaultActiveRole();
+  if (!fallback) {
+    state.activeRole = "";
+    localStorage.removeItem(STORAGE.activeRole);
+    return;
+  }
+  if (!["client", "provider"].includes(state.activeRole)) state.activeRole = fallback;
+  if (state.activeRole === "provider" && !ownProviderProfile()) state.activeRole = fallback === "provider" ? "provider" : "client";
+  localStorage.setItem(STORAGE.activeRole, state.activeRole);
+}
+
+function setActiveRole(role) {
+  if (!["client", "provider"].includes(role) || !canUseRole(role)) return;
+  state.activeRole = role;
+  localStorage.setItem(STORAGE.activeRole, role);
+  render();
+}
+
+function canUseRole(role) {
+  if (!["client", "provider"].includes(state.session?.role)) return false;
+  if (role === "client") return true;
+  return Boolean(ownProviderProfile());
+}
+
+function canActAsMarketplace() {
+  return ["client", "provider"].includes(state.session?.role);
+}
+
+function canActAsClient() {
+  ensureActiveRole();
+  return canActAsMarketplace() && state.activeRole === "client";
+}
+
+function canActAsProvider() {
+  ensureActiveRole();
+  return canActAsMarketplace() && state.activeRole === "provider" && Boolean(ownProviderProfile());
 }
 
 function accountRoleValue(role) {

@@ -1482,6 +1482,21 @@ select[multiple].form-select {
   white-space: nowrap;
 }
 
+.action-row .btn-provider-setup {
+  border: 1px solid #156f68;
+  background: #156f68;
+  color: #fff;
+  box-shadow: 0 0.35rem 0.9rem rgba(21, 111, 104, 0.22);
+}
+
+.action-row .btn-provider-setup:hover,
+.action-row .btn-provider-setup:focus-visible {
+  border-color: #0f5c56;
+  background: #0f5c56;
+  color: #fff;
+  box-shadow: 0 0 0 0.16rem rgba(21, 111, 104, 0.2);
+}
+
 .action-row[data-action-layout="single-row"] {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -1506,6 +1521,10 @@ select[multiple].form-select {
     gap: 0.2rem;
     padding-inline: 0.2rem;
     font-size: 0.7rem;
+  }
+
+  .action-row[data-action-layout="single-row"] .btn-provider-setup {
+    grid-column: span 2;
   }
 }
 

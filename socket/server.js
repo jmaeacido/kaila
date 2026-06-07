@@ -325,6 +325,16 @@ function hasCategory(categories, category) {
   return normalizeCategories(categories).split(",").map((item) => item.trim().toLowerCase()).includes(target);
 }
 
+async function activeProviderProfileFor(userId) {
+  if (!userId) return null;
+  const [rows] = await pool.query("SELECT * FROM providers WHERE user_id = ? AND status = 'Active' LIMIT 1", [userId]);
+  return rows[0] || null;
+}
+
+function canUseMarketplaceRole(user) {
+  return ["client", "provider"].includes(user?.role);
+}
+
 function normalizeAccountRole(role) {
   const cleanRole = String(role || "").trim().toLowerCase();
   if (["customer_service", "customer-service", "customer service", "support"].includes(cleanRole)) return "customer_service";
@@ -1665,10 +1675,11 @@ async function getState(viewer = null) {
 
   const offersByRequest = new Map();
   const acceptedProviderByRequest = new Map(requestRows.map((row) => [row.id, row.accepted_provider_id]));
+  const clientByRequest = new Map(requestRows.map((row) => [row.id, row.client_id]));
   const passedOfferKeys = new Set(passRows.map((row) => `${row.request_id}:${row.provider_id}`));
   for (const row of offerRows) {
     if (passedOfferKeys.has(`${row.request_id}:${row.provider_id}`)) continue;
-    if (viewer?.role === "provider" && row.provider_id !== viewer.id) continue;
+    if (viewer && !["admin", "customer_service"].includes(viewer.role) && clientByRequest.get(row.request_id) !== viewer.id && row.provider_id !== viewer.id) continue;
     const acceptedProviderId = acceptedProviderByRequest.get(row.request_id);
     if (acceptedProviderId && row.provider_id !== acceptedProviderId) continue;
     const offer = mapOffer(row, reputations.get(row.provider_id) || emptyReputation(), profiles.get(row.provider_id)?.photoUrl || "");
@@ -2266,9 +2277,7 @@ app.get("/api/push-status", requireUser, async (req, res) => {
     "SELECT platform, device_id, updated_at FROM push_tokens WHERE user_id = ? ORDER BY updated_at DESC",
     [req.user.id]
   );
-  const provider = req.user.role === "provider"
-    ? (await pool.query("SELECT status, category FROM providers WHERE user_id = ? LIMIT 1", [req.user.id]))[0][0] || null
-    : null;
+  const provider = await activeProviderProfileFor(req.user.id);
   res.json({
     firebase: Boolean(firebaseMessaging),
     tokenCount: tokenRows.length,
@@ -2415,7 +2424,8 @@ app.post("/api/reports/job", requireUser, async (req, res) => {
   if (!rows.length) return res.status(404).json({ error: "Request not found" });
   const request = rows[0];
   const involved = request.client_id === req.user.id || request.accepted_provider_id === req.user.id || ["admin", "customer_service"].includes(req.user.role);
-  const matchingProvider = req.user.role === "provider" && hasCategory(req.user.category, request.category);
+  const provider = await activeProviderProfileFor(req.user.id);
+  const matchingProvider = Boolean(provider && hasCategory(provider.category, request.category));
   if (!involved && !matchingProvider) return res.status(403).json({ error: "You cannot report this job" });
   if (!reason) return res.status(400).json({ error: "Report reason is required" });
   const timestamp = nowMysql();
@@ -2453,7 +2463,7 @@ app.delete("/api/blocks/:userId", requireUser, async (req, res) => {
 });
 
 app.post("/api/providers", requireUser, async (req, res) => {
-  if (req.user.role !== "provider") return res.status(403).json({ error: "Only providers can save provider profiles" });
+  if (!canUseMarketplaceRole(req.user)) return res.status(403).json({ error: "Only marketplace accounts can save provider profiles" });
   const {
     category, area, availability, skills, displayName, providerType, specificServices, yearsExperience, coverageArea,
     emergencyAvailability, availableDays, availableTime, travelLimits, minimumFee, priceRange, workSamples,
@@ -2502,7 +2512,7 @@ app.post("/api/providers", requireUser, async (req, res) => {
 });
 
 app.post("/api/requests", requireUser, async (req, res) => {
-  if (req.user.role !== "client") return res.status(403).json({ error: "Only clients can post requests" });
+  if (!canUseMarketplaceRole(req.user)) return res.status(403).json({ error: "Only marketplace accounts can post requests" });
   const {
     category, urgency, area, budget, preferredSchedule, contactMethod, exactLocationNotes,
     jobLocation, jobLocationSource, permissionToForward, consentToRate, details, attachments = [],
@@ -2579,7 +2589,7 @@ app.post("/api/requests", requireUser, async (req, res) => {
 });
 
 app.put("/api/requests/:id", requireUser, async (req, res) => {
-  if (req.user.role !== "client") return res.status(403).json({ error: "Only clients can edit requests" });
+  if (!canUseMarketplaceRole(req.user)) return res.status(403).json({ error: "Only marketplace accounts can edit requests" });
   const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
   if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
   const existing = requestRows[0];
@@ -2618,12 +2628,13 @@ app.put("/api/requests/:id", requireUser, async (req, res) => {
 });
 
 app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
-  if (req.user.role !== "provider") return res.status(403).json({ error: "Only providers can send offers" });
+  if (!canUseMarketplaceRole(req.user)) return res.status(403).json({ error: "Only marketplace accounts can send offers" });
   const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
   if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
+  if (requestRows[0].client_id === req.user.id) return res.status(400).json({ error: "You cannot send an offer to your own request" });
   if (!["Posted", "Offers Received", "Countered"].includes(requestRows[0].status)) return res.status(400).json({ error: "This request is no longer accepting offers" });
-  const [providerRows] = await pool.query("SELECT category FROM providers WHERE user_id = ? LIMIT 1", [req.user.id]);
-  if (!providerRows.length || !hasCategory(providerRows[0].category, requestRows[0].category)) return res.status(403).json({ error: "This request does not match your provider categories" });
+  const provider = await activeProviderProfileFor(req.user.id);
+  if (!provider || !hasCategory(provider.category, requestRows[0].category)) return res.status(403).json({ error: "This request does not match your provider categories" });
   const [passRows] = await pool.query("SELECT request_id FROM request_passes WHERE request_id = ? AND provider_id = ? LIMIT 1", [req.params.id, req.user.id]);
   if (passRows.length) return res.status(400).json({ error: "You already passed this request" });
   const { amount, schedule, notes, type, providerLocation } = req.body || {};
@@ -2666,9 +2677,13 @@ app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
 });
 
 app.post("/api/requests/:id/pass", requireUser, async (req, res) => {
-  if (req.user.role !== "provider") return res.status(403).json({ error: "Only providers can pass requests" });
-  const [requestRows] = await pool.query("SELECT status FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
+  if (!canUseMarketplaceRole(req.user)) return res.status(403).json({ error: "Only marketplace accounts can pass requests" });
+  const [requestRows] = await pool.query("SELECT status, client_id, category FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
   if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
+  if (requestRows[0].client_id === req.user.id) return res.status(400).json({ error: "You cannot pass your own request" });
+  const provider = await activeProviderProfileFor(req.user.id);
+  if (!provider) return res.status(403).json({ error: "Create a provider profile before passing requests" });
+  if (!hasCategory(provider.category, requestRows[0].category)) return res.status(403).json({ error: "This request does not match your provider categories" });
   if (!["Posted", "Offers Received", "Countered"].includes(requestRows[0].status)) return res.status(400).json({ error: "This request can no longer be passed" });
   const timestamp = nowMysql();
   await pool.query(
@@ -2690,7 +2705,7 @@ app.post("/api/requests/:id/confirm", requireUser, async (req, res) => {
   const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
   if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
   const request = requestRows[0];
-  if (req.user.role !== "client" || request.client_id !== req.user.id) return res.status(403).json({ error: "Only the client can confirm this job" });
+  if (request.client_id !== req.user.id) return res.status(403).json({ error: "Only the client can confirm this job" });
   const offerId = String(req.body?.offerId || "");
   if (!offerId) return res.status(400).json({ error: "Select an offer first" });
   const [offerRows] = await pool.query("SELECT provider_id FROM offers WHERE id = ? AND request_id = ? LIMIT 1", [offerId, req.params.id]);
@@ -2721,8 +2736,8 @@ app.post("/api/requests/:id/action", requireUser, async (req, res) => {
   const note = String(req.body?.note || "").trim();
   const score = Number(req.body?.score || 0);
   const timestamp = nowMysql();
-  const isClient = req.user.role === "client" && request.client_id === req.user.id;
-  const isProviderForJob = req.user.role === "provider" && request.accepted_provider_id === req.user.id;
+  const isClient = request.client_id === req.user.id;
+  const isProviderForJob = request.accepted_provider_id === req.user.id;
   const isSupport = req.user.role === "customer_service";
 
   let nextStatus = "";
