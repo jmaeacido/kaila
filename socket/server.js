@@ -2241,6 +2241,9 @@ app.get("/api/notification-summary", requireUser, async (req, res) => {
 });
 
 app.get("/api/mobile-update", (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
   res.json({
     enabled: MOBILE_UPDATE_VERSION_CODE > 0 && Boolean(MOBILE_UPDATE_APK_URL),
     latestVersionCode: MOBILE_UPDATE_VERSION_CODE,

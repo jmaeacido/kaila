@@ -145,7 +145,8 @@ async function init() {
   syncQueuedValidationEntries();
   route(initialRoute());
   connectSocket();
-  checkMobileUpdate();
+  setupMobileUpdateChecks();
+  checkMobileUpdate({ force: true });
   consumeNativeLaunchAction();
 }
 
@@ -426,13 +427,26 @@ function shouldPromptMobileUpdate(latestVersionCode) {
   return !promptedAt || Date.now() - promptedAt > MOBILE_UPDATE_PROMPT_INTERVAL_MS;
 }
 
+function mobileUpdateUrl() {
+  return `${apiBase()}/api/mobile-update?_=${Date.now()}`;
+}
+
+function setupMobileUpdateChecks() {
+  if (!isNativeApp() || state.mobileUpdateChecksBound) return;
+  state.mobileUpdateChecksBound = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkMobileUpdate();
+  });
+  window.addEventListener("focus", () => checkMobileUpdate());
+}
+
 async function checkMobileUpdate({ force = false } = {}) {
   if (!isNativeApp()) return;
   rememberMobileUpdateCheck();
   try {
     const [info, update] = await Promise.all([
       nativeAppInfo(),
-      fetch(`${apiBase()}/api/mobile-update`, { cache: "no-store" }).then((response) => response.ok ? response.json() : null),
+      fetch(mobileUpdateUrl(), { cache: "no-store" }).then((response) => response.ok ? response.json() : null),
     ]);
     const currentVersionCode = Number(info?.versionCode || 0);
     const latestVersionCode = Number(update?.latestVersionCode || 0);
