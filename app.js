@@ -1404,9 +1404,11 @@ function renderRequests() {
     host.innerHTML = "";
     return;
   }
-  let visible = canActAsProvider()
-    ? state.requests.filter((request) => request.clientId === state.session.id || isVisibleToProvider(request))
-    : state.requests;
+  let visible = state.session?.role === "admin" || state.session?.role === SUPPORT_ROLE
+    ? state.requests
+    : canActAsProvider()
+      ? state.requests.filter((request) => request.clientId === state.session.id || isVisibleToProvider(request))
+      : state.requests.filter((request) => request.clientId === state.session?.id);
   const adminPanel = state.session?.role === "admin" ? adminRequestMetricPanel() : "";
   if (state.session?.role === "admin") visible = adminMetricRequests(visible);
 

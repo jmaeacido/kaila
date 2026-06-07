@@ -1696,11 +1696,21 @@ async function getState(viewer = null) {
     if (!attachmentsByRequest.has(row.request_id)) attachmentsByRequest.set(row.request_id, []);
     attachmentsByRequest.get(row.request_id).push(mapAttachment(row));
   }
+  const viewerProvider = canUseMarketplaceRole(viewer) ? providerRows.find((row) => row.user_id === viewer?.id && row.status === "Active") : null;
+  const visibleRequestRows = requestRows.filter((row) => {
+    if (!viewer || ["admin", "customer_service"].includes(viewer.role)) return true;
+    if (row.client_id === viewer.id || row.accepted_provider_id === viewer.id) return true;
+    if (!viewerProvider) return false;
+    if (row.accepted_provider_id) return false;
+    if (!["Posted", "Offers Received", "Countered"].includes(row.status)) return false;
+    if (passedOfferKeys.has(`${row.id}:${viewer.id}`)) return false;
+    return hasCategory(viewerProvider.category, row.category);
+  });
 
   return {
     users: Array.from(profiles.values()).map(publicUser),
     providers: providerRows.map((row) => mapProvider(row, reputations.get(row.user_id) || emptyReputation(), profiles.get(row.user_id)?.photoUrl || "")),
-    requests: requestRows.map((row) => mapRequest(row, offersByRequest.get(row.id) || [], passesByRequest.get(row.id) || [], attachmentsByRequest.get(row.id) || [], reputations, profiles)),
+    requests: visibleRequestRows.map((row) => mapRequest(row, offersByRequest.get(row.id) || [], passesByRequest.get(row.id) || [], attachmentsByRequest.get(row.id) || [], reputations, profiles)),
     activities: activityRows.map(mapActivity),
     blocks: blockRows,
     reports: reportRows.map(mapReport),
