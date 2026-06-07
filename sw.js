@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v145-chip-bulk-actions";
+const CACHE_NAME = "kaila-pwa-v146-brand-refresh";
 const IS_NATIVE_WEBVIEW = self.location.protocol === "https:"
   && ["localhost", "127.0.0.1", "::1"].includes(self.location.hostname)
   && /\bwv\b/i.test(navigator.userAgent || "");
@@ -15,8 +15,8 @@ const APP_SHELL = [
   "./assets/android-chrome-192x192.png",
   "./assets/android-chrome-512x512.png",
   "./assets/apple-touch-icon.png",
-  "./assets/kaila-icon.svg",
-  "./assets/kaila-logo.svg",
+  "./assets/kaila-icon.png",
+  "./assets/kaila-logo.png",
   "./assets/kaila-customer-service-avatar.png",
   "./assets/kaila-preview.png"
 ];
