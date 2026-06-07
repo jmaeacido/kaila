@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v157-client-request-privacy";
+const CACHE_NAME = "kaila-pwa-v158-separated-walls";
 const IS_NATIVE_WEBVIEW = self.location.protocol === "https:"
   && ["localhost", "127.0.0.1", "::1"].includes(self.location.hostname)
   && /\bwv\b/i.test(navigator.userAgent || "");
