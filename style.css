@@ -3825,7 +3825,10 @@ body.call-overlay-open {
 
 .chat-transcript {
   display: grid;
+  align-content: start;
+  align-items: start;
   gap: 0.78rem;
+  grid-auto-rows: max-content;
   max-height: 52svh;
   overflow-y: auto;
   padding: 0.2rem 0.05rem 0.35rem;
@@ -3837,6 +3840,7 @@ body.call-overlay-open {
 
 .chat-message {
   max-width: min(88%, 24rem);
+  min-height: 0;
   padding: 0.72rem 0.85rem;
   border-radius: 8px;
   background: var(--surface-2);
