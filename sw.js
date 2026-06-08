@@ -1,7 +1,9 @@
-const CACHE_NAME = "kaila-pwa-v161-login-tooltips";
-const IS_NATIVE_WEBVIEW = self.location.protocol === "https:"
-  && ["localhost", "127.0.0.1", "::1"].includes(self.location.hostname)
-  && /\bwv\b/i.test(navigator.userAgent || "");
+const CACHE_NAME = "kaila-pwa-v162-native-socket-url";
+const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
+const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
+  && (self.location.protocol === "capacitor:"
+    || self.location.hostname === "kaila-app.duckdns.org"
+    || ["localhost", "127.0.0.1", "::1"].includes(self.location.hostname));
 const APP_PATH = new URL("./", self.location.href).pathname;
 const APP_SHELL = [
   "./",

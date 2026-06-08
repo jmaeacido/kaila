@@ -32,7 +32,9 @@ const SUPPORT_LABEL = "Customer Service";
 const SUPPORT_AVATAR = "assets/kaila-customer-service-avatar.png";
 const STAFF_ROLES = ["admin", "ops", SUPPORT_ROLE];
 const APP_TIME_ZONE = "Asia/Manila";
-const NATIVE_SOCKET_URL = "https://kaila-app.duckdns.org/kaila-api";
+const PRODUCTION_HOST = "kaila-app.duckdns.org";
+const PRODUCTION_API_PATH = "/kaila-api";
+const NATIVE_SOCKET_URL = `https://${PRODUCTION_HOST}${PRODUCTION_API_PATH}`;
 const CALL_RING_TIMEOUT_MS = 60000;
 const CALL_SIGNAL_TIMEOUT_MS = 20000;
 const CALL_CANDIDATE_TIMEOUT_MS = 10000;
@@ -7536,6 +7538,7 @@ function normalizeSocketUrl(value) {
   if (!value) return "";
   try {
     const url = new URL(value);
+    if (url.hostname === PRODUCTION_HOST) return NATIVE_SOCKET_URL;
     if (isNativeAppOrigin() && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return "";
     const localHosts = ["localhost", "127.0.0.1", "::1"];
     const isLocalPage = localHosts.includes(window.location.hostname);
