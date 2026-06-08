@@ -67,13 +67,12 @@ Important environment settings:
 - `GROQ_API_KEY` enables server-side AI suggestions for validation Decision
   Signal prefilling and dashboard analytics. Keep it in ignored `socket/.env`.
 - `KAILA_ANDROID_LATEST_VERSION_CODE`, `KAILA_ANDROID_LATEST_VERSION_NAME`,
-  `KAILA_ANDROID_APK_URL`, and `KAILA_ANDROID_RELEASE_NOTES` feed
-  `/api/mobile-update`. The native Android app checks this endpoint on launch
-  and prompts when the backend version code is higher than the installed APK.
-  When replacing the stable Google Drive APK file, bump
-  `KAILA_ANDROID_LATEST_VERSION_CODE` to the APK build's Android version code,
-  meaning the Gradle `KAILA_VERSION_CODE` used for that APK, not the Google
-  Drive file revision label.
+  `KAILA_ANDROID_APK_URL`, and `KAILA_ANDROID_RELEASE_NOTES` are fallback/manual
+  settings for `/api/mobile-update`. The normal path is to keep
+  `KAILA_ANDROID_APK_URL` pointed at the stable Google Drive APK file, build the
+  APK, and let Gradle write ignored `socket/mobile-update.json` with the fresh
+  auto-generated Android version code/name. The backend reads that JSON on every
+  update check.
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME` configure MySQL.
 
 ## Runtime Data
@@ -84,6 +83,7 @@ Important environment settings:
 | `profile-photos/` | Ignored user-uploaded profile images. |
 | `kaila_mvp.sql` | Local ignored database dump when present. Do not edit it for schema changes. |
 | `native-www/` | Ignored generated Capacitor web bundle. Recreate it with `npm run native:prepare` or `npm run native:sync`. |
+| `socket/mobile-update.json` | Ignored generated Android update metadata. Recreated by Gradle APK/AAB builds and served by `/api/mobile-update`. |
 
 Do not commit runtime uploads, local database dumps, secrets, or `node_modules/`.
 

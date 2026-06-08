@@ -454,9 +454,7 @@ async function checkMobileUpdate({ force = false } = {}) {
     const currentVersionCode = Number(info?.versionCode || 0);
     const currentVersionName = String(info?.versionName || "").trim();
     const latestVersionCode = Number(update?.latestVersionCode || 0);
-    const latestVersionName = String(update?.latestVersionName || "").trim();
     if (!update?.enabled || !update?.apkUrl || !currentVersionCode || latestVersionCode <= currentVersionCode) return;
-    if (currentVersionName && latestVersionName && currentVersionName === latestVersionName) return;
     rememberMobileUpdateCheck({ latestVersionCode });
     if (!force && !shouldPromptMobileUpdate(latestVersionCode)) return;
     rememberMobileUpdateCheck({ promptedVersionCode: latestVersionCode, promptedAt: Date.now() });

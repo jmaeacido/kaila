@@ -1,3 +1,5 @@
+import groovy.json.JsonOutput
+
 apply plugin: 'com.android.application'
 
 def kailaRootDir = rootProject.projectDir.parentFile
@@ -20,12 +22,31 @@ def kailaConfigValue = { String name, String socketEnvName = null, String fallba
     def socketName = socketEnvName ?: name
     return findProperty(name) ?: System.getenv(name) ?: kailaSocketEnv[socketName] ?: fallback
 }
+def kailaExplicitVersionCode = findProperty("KAILA_VERSION_CODE") ?: System.getenv("KAILA_VERSION_CODE")
+def kailaVersionCode = (kailaExplicitVersionCode ?: String.valueOf((System.currentTimeMillis() / 1000) as Integer)) as Integer
+def kailaVersionName = findProperty("KAILA_VERSION_NAME") ?: System.getenv("KAILA_VERSION_NAME") ?: "1.0.${kailaVersionCode}"
+def kailaUpdateApkUrl = kailaConfigValue("KAILA_ANDROID_APK_URL")
+def kailaUpdateReleaseNotes = kailaConfigValue("KAILA_ANDROID_RELEASE_NOTES")
 def prepareKailaWebAssets = tasks.register('prepareKailaWebAssets', Exec) {
     workingDir kailaRootDir
     if (System.getProperty('os.name').toLowerCase().contains('windows')) {
         commandLine 'cmd', '/c', 'node', 'scripts\\prepare-capacitor-web.js'
     } else {
         commandLine 'node', 'scripts/prepare-capacitor-web.js'
+    }
+}
+def writeKailaMobileUpdateMetadata = tasks.register('writeKailaMobileUpdateMetadata') {
+    doLast {
+        def metadataFile = new File(kailaRootDir, "socket/mobile-update.json")
+        def metadata = [
+            latestVersionCode: kailaVersionCode,
+            latestVersionName: kailaVersionName,
+            apkUrl: kailaUpdateApkUrl,
+            releaseNotes: kailaUpdateReleaseNotes,
+            generatedAt: new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"),
+            source: kailaExplicitVersionCode ? "explicit" : "auto"
+        ]
+        metadataFile.text = JsonOutput.prettyPrint(JsonOutput.toJson(metadata)) + System.lineSeparator()
     }
 }
 
@@ -37,8 +58,6 @@ android {
     namespace = "com.kaila.marketplace"
     compileSdk = rootProject.ext.compileSdkVersion
 
-    def kailaVersionCode = (kailaConfigValue("KAILA_VERSION_CODE", "KAILA_ANDROID_LATEST_VERSION_CODE", "1")) as Integer
-    def kailaVersionName = kailaConfigValue("KAILA_VERSION_NAME", "KAILA_ANDROID_LATEST_VERSION_NAME", "1.0.0")
     def kailaKeystorePath = kailaConfigValue("KAILA_RELEASE_STORE_FILE")
     def kailaKeystorePassword = kailaConfigValue("KAILA_RELEASE_STORE_PASSWORD")
     def kailaKeyAlias = kailaConfigValue("KAILA_RELEASE_KEY_ALIAS")
@@ -103,6 +122,7 @@ afterEvaluate {
 
         tasks.named("assemble${capitalizedVariantName}") {
             finalizedBy copyTaskName
+            finalizedBy writeKailaMobileUpdateMetadata
         }
 
         def bundleTaskName = "bundle${capitalizedVariantName}"
@@ -121,6 +141,7 @@ afterEvaluate {
 
             tasks.named(bundleTaskName) {
                 finalizedBy copyBundleTaskName
+                finalizedBy writeKailaMobileUpdateMetadata
             }
         }
     }

@@ -44,6 +44,7 @@ const GROQ_API_KEY = sanitizeToken(process.env.GROQ_API_KEY || "");
 const GROQ_MODEL = sanitizeToken(process.env.GROQ_MODEL || "llama-3.1-8b-instant");
 const ROUTE_DISTANCE_URL = sanitizeToken(process.env.KAILA_ROUTE_DISTANCE_URL || "https://router.project-osrm.org/route/v1/driving");
 const ROUTE_DISTANCE_CACHE_MS = Number(process.env.KAILA_ROUTE_DISTANCE_CACHE_MS || 6 * 60 * 60 * 1000);
+const MOBILE_UPDATE_METADATA_FILE = path.resolve(__dirname, "mobile-update.json");
 const MOBILE_UPDATE_VERSION_CODE = Number(process.env.KAILA_ANDROID_LATEST_VERSION_CODE || 0);
 const MOBILE_UPDATE_VERSION_NAME = sanitizeToken(process.env.KAILA_ANDROID_LATEST_VERSION_NAME || "");
 const MOBILE_UPDATE_APK_URL = sanitizeToken(process.env.KAILA_ANDROID_APK_URL || "");
@@ -89,6 +90,34 @@ app.use(express.json({ limit: "35mb" }));
 
 function sanitizeToken(value) {
   return String(value || "").trim().replace(/^['"]|['"]$/g, "");
+}
+
+function readMobileUpdateMetadata() {
+  let metadata = {};
+  let hasMetadataFile = false;
+  try {
+    hasMetadataFile = fs.existsSync(MOBILE_UPDATE_METADATA_FILE);
+    if (hasMetadataFile) metadata = JSON.parse(fs.readFileSync(MOBILE_UPDATE_METADATA_FILE, "utf8"));
+  } catch (error) {
+    console.warn("Mobile update metadata read failed:", error.message);
+  }
+
+  const metadataVersionCode = Number(metadata.latestVersionCode);
+  const latestVersionCode = Number.isFinite(metadataVersionCode) && metadataVersionCode > 0
+    ? metadataVersionCode
+    : MOBILE_UPDATE_VERSION_CODE;
+  const latestVersionName = sanitizeToken(metadata.latestVersionName || MOBILE_UPDATE_VERSION_NAME || "");
+  const apkUrl = sanitizeToken(metadata.apkUrl || MOBILE_UPDATE_APK_URL || "");
+  const releaseNotes = sanitizeToken(metadata.releaseNotes || MOBILE_UPDATE_RELEASE_NOTES || "");
+  return {
+    enabled: latestVersionCode > 0 && Boolean(apkUrl),
+    latestVersionCode,
+    latestVersionName,
+    apkUrl,
+    releaseNotes,
+    generatedAt: sanitizeToken(metadata.generatedAt || ""),
+    source: sanitizeToken(metadata.source || (hasMetadataFile ? "metadata" : "env")),
+  };
 }
 
 function parseMessageEncryptionKey(value) {
@@ -2244,13 +2273,7 @@ app.get("/api/mobile-update", (req, res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
-  res.json({
-    enabled: MOBILE_UPDATE_VERSION_CODE > 0 && Boolean(MOBILE_UPDATE_APK_URL),
-    latestVersionCode: MOBILE_UPDATE_VERSION_CODE,
-    latestVersionName: MOBILE_UPDATE_VERSION_NAME,
-    apkUrl: MOBILE_UPDATE_APK_URL,
-    releaseNotes: MOBILE_UPDATE_RELEASE_NOTES,
-  });
+  res.json(readMobileUpdateMetadata());
 });
 
 app.get("/api/route-distance", requireUser, async (req, res) => {

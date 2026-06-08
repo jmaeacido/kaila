@@ -104,16 +104,18 @@ when the backend reports a higher APK version code than the installed app. If a
 user taps Later, the same update prompt is held back until the next day.
 KAILA's current manual APK distribution link is configured through
 `KAILA_ANDROID_APK_URL`; keep pointing it at the stable Google Drive APK file.
-After replacing the APK in Drive, update `KAILA_ANDROID_LATEST_VERSION_CODE` in
-`socket/.env` to the APK's Android `versionCode` value. This is the Gradle
-`KAILA_VERSION_CODE` used when building, not Google Drive's file revision label.
-For example, build with `KAILA_VERSION_CODE=37` and set
-`KAILA_ANDROID_LATEST_VERSION_CODE=37`.
+Every Gradle build now creates a fresh Android `versionCode` automatically and
+writes `socket/mobile-update.json`. The backend reads that JSON on every update
+check, so the normal release flow is: build the APK, replace the old Drive file
+with the new APK at the same link, and make sure the generated
+`socket/mobile-update.json` is present on the server. Optional
+`KAILA_VERSION_CODE` / `KAILA_VERSION_NAME` values still work for manual
+release numbering.
 
 Build a Play Store upload bundle:
 
 ```bash
-KAILA_VERSION_CODE=1 KAILA_VERSION_NAME=1.0.0 npm run native:bundle
+npm run native:bundle
 ```
 
 For a signed release bundle, provide the keystore values through environment
@@ -124,7 +126,7 @@ export KAILA_RELEASE_STORE_FILE=/secure/path/kaila-release.keystore
 export KAILA_RELEASE_STORE_PASSWORD=...
 export KAILA_RELEASE_KEY_ALIAS=...
 export KAILA_RELEASE_KEY_PASSWORD=...
-KAILA_VERSION_CODE=1 KAILA_VERSION_NAME=1.0.0 npm run native:bundle
+npm run native:bundle
 ```
 
 The Play-uploadable AAB is copied to

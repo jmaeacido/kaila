@@ -76,16 +76,18 @@ download the new APK when the backend value is higher. If the user taps Later,
 the same update prompt is held back until the next day.
 
 ```env
-KAILA_ANDROID_LATEST_VERSION_CODE=37
-KAILA_ANDROID_LATEST_VERSION_NAME=1.0.0
 KAILA_ANDROID_APK_URL=https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link
 KAILA_ANDROID_RELEASE_NOTES=
 ```
 
-When you replace the APK in Google Drive, bump
-`KAILA_ANDROID_LATEST_VERSION_CODE` to match the APK build's Android version
-code, meaning the Gradle `KAILA_VERSION_CODE` used for that APK. This is not the
-Google Drive file revision label. The Drive file name and link can stay the same.
+Keep `KAILA_ANDROID_APK_URL` pointed at the stable Google Drive APK file. Each
+Android Gradle build auto-generates a fresh `versionCode` and `versionName`, then
+writes them to ignored `socket/mobile-update.json`. `/api/mobile-update` reads
+that file on every request, so replacing the APK in Drive with the same link is
+enough as long as the build was created from this project. If the generated JSON
+is missing, the endpoint falls back to optional
+`KAILA_ANDROID_LATEST_VERSION_CODE` and `KAILA_ANDROID_LATEST_VERSION_NAME`
+values from `socket/.env`.
 
 ## Events
 
