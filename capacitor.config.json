@@ -3,7 +3,7 @@
   "appName": "KAILA",
   "webDir": "native-www",
   "server": {
-    "hostname": "kaila-app.duckdns.org",
+    "hostname": "localhost",
     "androidScheme": "https"
   },
   "plugins": {
