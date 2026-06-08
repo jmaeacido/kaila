@@ -1,0 +1,24 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.kaila.marketplace",
+      "sha256_cert_fingerprints": [
+        "D0:52:84:DC:0D:DB:5D:5E:E4:10:4B:6E:30:E7:B0:C2:5D:3F:5F:BB:B8:F6:75:E3:5E:A5:B3:57:20:FB:9A:59"
+      ]
+    }
+  },
+  {
+    "relation": [
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "web",
+      "site": "https://kaila-app.duckdns.org"
+    }
+  }
+]
