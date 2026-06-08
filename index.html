@@ -38,7 +38,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
-  <link rel="stylesheet" href="style.css?v=20260608-native-socket-url">
+  <link rel="stylesheet" href="style.css?v=20260608-login-badges">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -369,6 +369,10 @@
                 <i class="fa-solid fa-eye"></i>
               </button>
             </div>
+            <div class="saved-login-row">
+              <label class="consent-line mb-0"><input type="checkbox" name="rememberLogin" value="yes" data-remember-login> Remember login</label>
+              <button class="btn btn-sm btn-link p-0" type="button" data-forget-saved-login hidden>Forget</button>
+            </div>
             <button class="btn btn-primary w-100" type="submit">Login</button>
             <p class="small text-muted text-center mb-0">Use only your KAILA pilot username and password. KAILA will never ask for your Google or Facebook password.</p>
             <button class="btn btn-sm btn-link justify-self-center" type="button" data-forgot-password>Need account help?</button>
@@ -509,6 +513,6 @@
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=20260608-native-socket-url"></script>
+  <script src="app.js?v=20260608-login-badges"></script>
 </body>
 </html>

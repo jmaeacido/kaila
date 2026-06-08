@@ -8,6 +8,7 @@ const STORAGE = {
   stateSnapshot: "kaila.deploy.stateSnapshot",
   validationQueue: "kaila.deploy.validationQueue",
   offlineCredentials: "kaila.deploy.offlineCredentials",
+  savedLogin: "kaila.deploy.savedLogin",
   attentionBadges: "kaila.deploy.attentionBadges",
   messageReads: "kaila.deploy.messageReads",
   notificationReads: "kaila.deploy.notificationReads",
@@ -139,7 +140,7 @@ async function init() {
   setupPullToRefresh();
   initializeTheme();
   bindEvents();
-  hydrateLoginCredentials();
+  setupLoginCredentialFill();
   initializeSocketUrl();
   await loadGeography();
   renderRegisterAddress();
@@ -958,6 +959,7 @@ function route(name) {
   $$("[data-view]").forEach((view) => view.classList.toggle("active", view.dataset.view === name));
   document.body.classList.toggle("app-mode", name === "app");
   toggleProviderCategory();
+  if (name === "login") hydrateSavedLoginCredentials();
   render();
 }
 
@@ -1044,6 +1046,7 @@ async function login(event) {
     });
   } catch (error) {
     if (error.offline && await tryOfflineLogin(data)) {
+      persistSavedLoginChoice(data);
       form.reset();
       return;
     }
@@ -1058,6 +1061,7 @@ async function login(event) {
   loadAttentionBadgesForSession();
   syncSocketIdentity();
   safeApplyState(payload.state);
+  persistSavedLoginChoice(data);
   form.reset();
   runPostAuthTasks(data.username, data.password, payload.user);
   await successRedirect("Logged in", `Welcome back, ${displayUserName(state.session)}.`);
@@ -1078,11 +1082,46 @@ function runPostAuthTasks(username, password, user) {
   });
 }
 
-async function hydrateLoginCredentials() {
-  if (!isNativeApp()) return;
-  if (!navigator.credentials?.get || !window.PasswordCredential) return;
+function setupLoginCredentialFill() {
   const form = $("[data-login-form]");
   if (!form) return;
+  if (isNativeApp()) suppressNativePasswordManager(form);
+  hydrateSavedLoginCredentials(form);
+  bindSavedLoginControls(form);
+  hydratePasswordManagerCredentials(form);
+}
+
+function suppressNativePasswordManager(form) {
+  form.setAttribute("autocomplete", "off");
+  form.elements.username?.setAttribute("autocomplete", "off");
+  form.elements.password?.setAttribute("autocomplete", "new-password");
+}
+
+function hydrateSavedLoginCredentials(form = $("[data-login-form]")) {
+  if (!form) return;
+  const saved = savedLoginCredentials();
+  const remember = form.elements.rememberLogin;
+  if (remember) remember.checked = Boolean(saved);
+  const forgetButton = $("[data-forget-saved-login]", form);
+  if (forgetButton) forgetButton.hidden = !saved;
+  if (!saved) return;
+  if (form.elements.username && !form.elements.username.value) form.elements.username.value = saved.username;
+  if (form.elements.password && !form.elements.password.value) form.elements.password.value = saved.password;
+}
+
+function bindSavedLoginControls(form) {
+  const remember = form.elements.rememberLogin;
+  const forgetButton = $("[data-forget-saved-login]", form);
+  remember?.addEventListener("change", () => {
+    if (remember.checked) return;
+    clearSavedLogin(form, { notifyUser: true });
+  });
+  forgetButton?.addEventListener("click", () => clearSavedLogin(form, { notifyUser: true, clearUsername: true }));
+}
+
+async function hydratePasswordManagerCredentials(form = $("[data-login-form]")) {
+  if (isNativeApp()) return;
+  if (!navigator.credentials?.get || !window.PasswordCredential || !form) return;
   try {
     const credential = await navigator.credentials.get({ password: true, mediation: "optional" });
     if (!credential || credential.type !== "password") return;
@@ -1092,7 +1131,7 @@ async function hydrateLoginCredentials() {
 }
 
 async function offerPasswordSave(username, password, user = {}) {
-  if (!isNativeApp()) return;
+  if (isNativeApp()) return;
   if (!navigator.credentials?.store || !window.PasswordCredential || !username || !password) return;
   try {
     const credential = new window.PasswordCredential({
@@ -1103,6 +1142,49 @@ async function offerPasswordSave(username, password, user = {}) {
     });
     await navigator.credentials.store(credential);
   } catch {}
+}
+
+function persistSavedLoginChoice(data = {}) {
+  const form = $("[data-login-form]");
+  const remember = form?.elements?.rememberLogin;
+  if (!remember?.checked) {
+    localStorage.removeItem(STORAGE.savedLogin);
+    updateSavedLoginControls(form);
+    return;
+  }
+  const username = String(data.username || "").trim();
+  const password = String(data.password || "");
+  if (!username || !password) return;
+  localStorage.setItem(STORAGE.savedLogin, JSON.stringify({
+    username,
+    password,
+    updatedAt: new Date().toISOString(),
+  }));
+  updateSavedLoginControls(form);
+}
+
+function savedLoginCredentials() {
+  const saved = readJson(STORAGE.savedLogin, null);
+  if (!saved || typeof saved !== "object") return null;
+  const username = String(saved.username || "").trim();
+  const password = String(saved.password || "");
+  if (!username || !password) return null;
+  return { username, password };
+}
+
+function clearSavedLogin(form = $("[data-login-form]"), options = {}) {
+  localStorage.removeItem(STORAGE.savedLogin);
+  if (options.clearUsername && form?.elements?.username) form.elements.username.value = "";
+  if (form?.elements?.password) form.elements.password.value = "";
+  updateSavedLoginControls(form);
+  if (options.notifyUser) notify("Saved login cleared", "KAILA removed the saved password from this device.", "success");
+}
+
+function updateSavedLoginControls(form = $("[data-login-form]")) {
+  const saved = savedLoginCredentials();
+  const forgetButton = form ? $("[data-forget-saved-login]", form) : null;
+  if (forgetButton) forgetButton.hidden = !saved;
+  if (form?.elements?.rememberLogin) form.elements.rememberLogin.checked = Boolean(saved);
 }
 
 async function openForgotPasswordModal() {
@@ -6937,8 +7019,9 @@ function loadAttentionBadgesForSession() {
   const sessionId = state.session?.id;
   if (!sessionId) return;
   const userBadges = saved[sessionId] || {};
-  state.unreadNotifications = Number(userBadges.notifications || 0);
   state.unreadNotificationItems = Array.isArray(userBadges.notificationItems) ? userBadges.notificationItems : [];
+  state.unreadNotificationItems = state.unreadNotificationItems.filter((item) => isStoredNotificationUnread(item));
+  state.unreadNotifications = state.unreadNotificationItems.length;
   let badgesChanged = false;
   if (!shouldBadgeActivityNotifications()) {
     const beforeCount = state.unreadNotificationItems.length;
@@ -6947,7 +7030,21 @@ function loadAttentionBadgesForSession() {
     badgesChanged = beforeCount !== state.unreadNotificationItems.length;
   }
   state.unreadMessages = Array.isArray(userBadges.messages) ? userBadges.messages : [];
+  const beforeMessageCount = state.unreadMessages.length;
+  state.unreadMessages = state.unreadMessages.filter((message) => isStoredMessageUnread(message));
+  if (beforeMessageCount !== state.unreadMessages.length) badgesChanged = true;
+  if (Number(userBadges.notifications || 0) !== state.unreadNotifications) badgesChanged = true;
   if (badgesChanged) persistAttentionBadges();
+}
+
+function isStoredNotificationUnread(item = {}) {
+  if (!item?.key || !item.type || !item.createdAt) return false;
+  return isUnreadNotification(item.type, item.createdAt);
+}
+
+function isStoredMessageUnread(message = {}) {
+  if (!message?.type || !message.id || !message.createdAt) return false;
+  return isUnreadConversationMessage(message.type, message.id, message);
 }
 
 function persistAttentionBadges() {

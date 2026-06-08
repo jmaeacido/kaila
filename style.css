@@ -1147,6 +1147,18 @@ body.app-mode > .navbar {
   outline-offset: 1px;
 }
 
+.saved-login-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 1.75rem;
+}
+
+.saved-login-row .consent-line {
+  flex: 1;
+}
+
 .form-control,
 .form-select,
 .form-check-input,

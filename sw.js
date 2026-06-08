@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v162-native-socket-url";
+const CACHE_NAME = "kaila-pwa-v163-login-badges";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"
