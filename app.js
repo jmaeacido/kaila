@@ -3504,16 +3504,27 @@ function bindQuestionGuides() {
 
 function placeQuestionGuide(button) {
   const rect = button.getBoundingClientRect();
-  const container = button.closest(".swal2-popup")?.getBoundingClientRect();
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-  const bounds = container || { left: 0, right: viewportWidth, top: 0 };
-  const tooltipWidth = Math.min(272, Math.max(180, Math.min(viewportWidth - 32, bounds.right - bounds.left - 32)));
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  const edgeGap = 12;
+  const tooltipWidth = Math.min(320, Math.max(184, viewportWidth - edgeGap * 2));
   const center = rect.left + rect.width / 2;
+  let left = Math.min(viewportWidth - edgeGap, Math.max(edgeGap, center));
   let placement = "center";
-  if (center - tooltipWidth / 2 < bounds.left + 16) placement = "left";
-  if (center + tooltipWidth / 2 > bounds.right - 16) placement = "right";
+  if (center - tooltipWidth / 2 < edgeGap) {
+    left = edgeGap;
+    placement = "left";
+  } else if (center + tooltipWidth / 2 > viewportWidth - edgeGap) {
+    left = viewportWidth - edgeGap;
+    placement = "right";
+  }
+  const showBelow = rect.top < Math.min(156, viewportHeight * 0.28);
+  const top = showBelow ? rect.bottom + 8 : rect.top - 8;
+  button.style.setProperty("--guide-left", `${left}px`);
+  button.style.setProperty("--guide-top", `${top}px`);
+  button.style.setProperty("--guide-width", `${tooltipWidth}px`);
   button.dataset.placement = placement;
-  button.dataset.vertical = rect.top - 96 < bounds.top + 16 ? "below" : "above";
+  button.dataset.vertical = showBelow ? "below" : "above";
 }
 
 function bindJobLocationPicker({ root = null, initialLocation = null, getLocation, setLocation }) {
