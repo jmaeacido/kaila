@@ -9,7 +9,6 @@ socket/node_modules/
 socket/.env
 socket/.env.*
 !socket/.env.example
-socket/mobile-update.json
 kaila-firebase/
 *firebase-adminsdk*.json
 *service-account*.json

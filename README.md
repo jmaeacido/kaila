@@ -102,15 +102,14 @@ The generated APK is written to
 The native app checks `/api/mobile-update` on launch and prompts Android users
 when the backend reports a higher APK version code than the installed app. If a
 user taps Later, the same update prompt is held back until the next day.
-KAILA's current manual APK distribution link is configured through
-`KAILA_ANDROID_APK_URL`; keep pointing it at the stable Google Drive APK file.
-Every Gradle build now creates a fresh Android `versionCode` automatically and
-writes `socket/mobile-update.json`. The backend reads that JSON on every update
-check, so the normal release flow is: build the APK, replace the old Drive file
-with the new APK at the same link, and make sure the generated
-`socket/mobile-update.json` is present on the server. Optional
-`KAILA_VERSION_CODE` / `KAILA_VERSION_NAME` values still work for manual
-release numbering.
+KAILA's current manual APK distribution link is stored in
+`socket/mobile-update.json`; keep it pointed at the stable Google Drive APK
+file. Every Gradle build creates a fresh Android `versionCode` automatically and
+rewrites that manifest. The backend reads the manifest on every update check, so
+the normal release flow is: build the APK, replace the old Drive file with the
+new APK at the same link, commit the updated `socket/mobile-update.json`, and
+pull it on the server. Optional `KAILA_VERSION_CODE` / `KAILA_VERSION_NAME`
+values still work for manual release numbering.
 
 Build a Play Store upload bundle:
 

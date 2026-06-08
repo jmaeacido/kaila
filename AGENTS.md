@@ -68,11 +68,11 @@ Important environment settings:
   Signal prefilling and dashboard analytics. Keep it in ignored `socket/.env`.
 - `KAILA_ANDROID_LATEST_VERSION_CODE`, `KAILA_ANDROID_LATEST_VERSION_NAME`,
   `KAILA_ANDROID_APK_URL`, and `KAILA_ANDROID_RELEASE_NOTES` are fallback/manual
-  settings for `/api/mobile-update`. The normal path is to keep
-  `KAILA_ANDROID_APK_URL` pointed at the stable Google Drive APK file, build the
-  APK, and let Gradle write ignored `socket/mobile-update.json` with the fresh
-  auto-generated Android version code/name. The backend reads that JSON on every
-  update check.
+  settings for `/api/mobile-update`. The normal path is to keep the stable
+  Google Drive APK URL in tracked `socket/mobile-update.json`, build the APK on
+  any Android-capable machine, commit the updated manifest, and let the server
+  receive it through `git pull`. The backend reads that JSON on every update
+  check.
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME` configure MySQL.
 
 ## Runtime Data
@@ -83,7 +83,7 @@ Important environment settings:
 | `profile-photos/` | Ignored user-uploaded profile images. |
 | `kaila_mvp.sql` | Local ignored database dump when present. Do not edit it for schema changes. |
 | `native-www/` | Ignored generated Capacitor web bundle. Recreate it with `npm run native:prepare` or `npm run native:sync`. |
-| `socket/mobile-update.json` | Ignored generated Android update metadata. Recreated by Gradle APK/AAB builds and served by `/api/mobile-update`. |
+| `socket/mobile-update.json` | Tracked Android update release manifest. Rewritten by Gradle APK/AAB builds and served by `/api/mobile-update`. |
 
 Do not commit runtime uploads, local database dumps, secrets, or `node_modules/`.
 

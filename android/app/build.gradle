@@ -1,4 +1,5 @@
 import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
 
 apply plugin: 'com.android.application'
 
@@ -22,11 +23,20 @@ def kailaConfigValue = { String name, String socketEnvName = null, String fallba
     def socketName = socketEnvName ?: name
     return findProperty(name) ?: System.getenv(name) ?: kailaSocketEnv[socketName] ?: fallback
 }
+def kailaMobileUpdateMetadataFile = new File(kailaRootDir, "socket/mobile-update.json")
+def kailaExistingMobileUpdateMetadata = [:]
+if (kailaMobileUpdateMetadataFile.exists()) {
+    try {
+        kailaExistingMobileUpdateMetadata = new JsonSlurper().parse(kailaMobileUpdateMetadataFile) as Map
+    } catch (ignored) {
+        kailaExistingMobileUpdateMetadata = [:]
+    }
+}
 def kailaExplicitVersionCode = findProperty("KAILA_VERSION_CODE") ?: System.getenv("KAILA_VERSION_CODE")
 def kailaVersionCode = (kailaExplicitVersionCode ?: String.valueOf((System.currentTimeMillis() / 1000) as Integer)) as Integer
 def kailaVersionName = findProperty("KAILA_VERSION_NAME") ?: System.getenv("KAILA_VERSION_NAME") ?: "1.0.${kailaVersionCode}"
-def kailaUpdateApkUrl = kailaConfigValue("KAILA_ANDROID_APK_URL")
-def kailaUpdateReleaseNotes = kailaConfigValue("KAILA_ANDROID_RELEASE_NOTES")
+def kailaUpdateApkUrl = kailaConfigValue("KAILA_ANDROID_APK_URL", null, String.valueOf(kailaExistingMobileUpdateMetadata.apkUrl ?: ""))
+def kailaUpdateReleaseNotes = kailaConfigValue("KAILA_ANDROID_RELEASE_NOTES", null, String.valueOf(kailaExistingMobileUpdateMetadata.releaseNotes ?: ""))
 def prepareKailaWebAssets = tasks.register('prepareKailaWebAssets', Exec) {
     workingDir kailaRootDir
     if (System.getProperty('os.name').toLowerCase().contains('windows')) {
@@ -37,7 +47,6 @@ def prepareKailaWebAssets = tasks.register('prepareKailaWebAssets', Exec) {
 }
 def writeKailaMobileUpdateMetadata = tasks.register('writeKailaMobileUpdateMetadata') {
     doLast {
-        def metadataFile = new File(kailaRootDir, "socket/mobile-update.json")
         def metadata = [
             latestVersionCode: kailaVersionCode,
             latestVersionName: kailaVersionName,
@@ -46,7 +55,7 @@ def writeKailaMobileUpdateMetadata = tasks.register('writeKailaMobileUpdateMetad
             generatedAt: new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX"),
             source: kailaExplicitVersionCode ? "explicit" : "auto"
         ]
-        metadataFile.text = JsonOutput.prettyPrint(JsonOutput.toJson(metadata)) + System.lineSeparator()
+        kailaMobileUpdateMetadataFile.text = JsonOutput.prettyPrint(JsonOutput.toJson(metadata)) + System.lineSeparator()
     }
 }
 

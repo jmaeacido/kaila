@@ -80,14 +80,13 @@ KAILA_ANDROID_APK_URL=https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVui
 KAILA_ANDROID_RELEASE_NOTES=
 ```
 
-Keep `KAILA_ANDROID_APK_URL` pointed at the stable Google Drive APK file. Each
-Android Gradle build auto-generates a fresh `versionCode` and `versionName`, then
-writes them to ignored `socket/mobile-update.json`. `/api/mobile-update` reads
-that file on every request, so replacing the APK in Drive with the same link is
-enough as long as the build was created from this project. If the generated JSON
-is missing, the endpoint falls back to optional
-`KAILA_ANDROID_LATEST_VERSION_CODE` and `KAILA_ANDROID_LATEST_VERSION_NAME`
-values from `socket/.env`.
+Keep the stable Google Drive APK URL in tracked `socket/mobile-update.json`.
+Each Android Gradle build auto-generates a fresh `versionCode` and `versionName`,
+then rewrites that manifest while preserving the existing URL when `.env` does
+not define one. `/api/mobile-update` reads the manifest on every request, so a
+server without the Android SDK only needs the committed manifest from `git pull`.
+If the manifest is missing, the endpoint falls back to optional
+`KAILA_ANDROID_*` values from `socket/.env`.
 
 ## Events
 
