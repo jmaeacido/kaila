@@ -37,7 +37,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:scheme="https"
-                    android:host="kaila-app.duckdns.org" />
+                    android:host="kaila-app.com" />
             </intent-filter>
 
         </activity>

@@ -1,8 +1,8 @@
-const CACHE_NAME = "kaila-pwa-v163-login-badges";
+const CACHE_NAME = "kaila-pwa-v164-domain";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"
-    || self.location.hostname === "kaila-app.duckdns.org"
+    || self.location.hostname === "kaila-app.com"
     || ["localhost", "127.0.0.1", "::1"].includes(self.location.hostname));
 const APP_PATH = new URL("./", self.location.href).pathname;
 const APP_SHELL = [

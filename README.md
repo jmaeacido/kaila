@@ -65,7 +65,7 @@ app bundles the existing PWA files from the repository root and uses the live
 HTTPS API/socket endpoint by default:
 
 ```text
-https://kaila-app.duckdns.org/kaila-api
+https://kaila-app.com/kaila-api
 ```
 
 Prepare and sync the Android project:
@@ -141,9 +141,9 @@ Repository-side release hardening:
 - Camera and microphone are declared as optional hardware features.
 - Full-screen notification permission is reserved for incoming KAILA audio/video
   calls; job alerts use high-priority notifications without full-screen launch.
-- Public legal pages are available at `https://kaila-app.duckdns.org/?route=privacy`,
-  `https://kaila-app.duckdns.org/?route=terms`, and
-  `https://kaila-app.duckdns.org/?route=support`.
+- Public legal pages are available at `https://kaila-app.com/?route=privacy`,
+  `https://kaila-app.com/?route=terms`, and
+  `https://kaila-app.com/?route=support`.
 
 Play Console items still required outside this repository:
 
@@ -153,7 +153,7 @@ Play Console items still required outside this repository:
   content/messages/media, ratings, reports/blocks, device identifiers/push
   tokens, diagnostics, camera, microphone, and notifications.
 - Add the privacy-policy URL:
-  `https://kaila-app.duckdns.org/?route=privacy`.
+  `https://kaila-app.com/?route=privacy`.
 - Complete content rating and target audience declarations for a local-services
   marketplace.
 - Complete the `USE_FULL_SCREEN_INTENT` declaration for incoming audio/video
@@ -175,10 +175,10 @@ Run `npm run native:sync` after changing `index.html`, `style.css`, `app.js`,
 On this server, nginx serves KAILA over HTTPS at:
 
 ```text
-https://kaila-app.duckdns.org/
+https://kaila-app.com/
 ```
 
-The nginx site config lives in `deploy/nginx/kaila-https.conf` and is installed at `/etc/nginx/sites-available/kaila`. It serves the static PWA from `/var/www/kaila` and reverse-proxies API, media, and Socket.IO traffic from `https://kaila-app.duckdns.org/kaila-api/` to the Node service on `http://127.0.0.1:6002`.
+The nginx site config lives in `deploy/nginx/kaila-https.conf` and is installed at `/etc/nginx/sites-available/kaila`. It serves the static PWA from `/var/www/kaila` and reverse-proxies API, media, and Socket.IO traffic from `https://kaila-app.com/kaila-api/` to the Node service on `http://127.0.0.1:6002`.
 
 Run KAILA's MySQL-backed API/socket:
 
