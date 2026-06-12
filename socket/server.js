@@ -1393,7 +1393,7 @@ function feedReactionSummary(reactions = [], viewerId = "") {
 
 function canModerateFeedComment(row = {}, post = {}, viewer = null) {
   if (!viewer?.id) return false;
-  return row.author_id === viewer.id || post.author_id === viewer.id;
+  return row.author_id === viewer.id || post.author_id === viewer.id || canPostOfficial(viewer);
 }
 
 function mapFeedComment(row, { post = {}, reactions = [], viewer = null, replies = [] } = {}) {
@@ -1599,7 +1599,7 @@ function canViewFeedPost(post = {}, user = {}) {
 
 function canModerateFeedCommentAction(comment = {}, user = {}) {
   if (!comment?.id || !user?.id) return false;
-  return comment.author_id === user.id || comment.post_author_id === user.id;
+  return comment.author_id === user.id || comment.post_author_id === user.id || canPostOfficial(user);
 }
 
 async function createFeedNotification({ recipientId, actor, postId, commentId = null, type, title, body } = {}) {
@@ -3119,9 +3119,11 @@ app.post("/api/feed/:id/reactions", requireUser, async (req, res) => {
   const post = await loadFeedPostForAction(req.params.id);
   if (!post) return res.status(404).json({ error: "Post not found" });
   if (!canViewFeedPost(post, req.user)) return res.status(403).json({ error: "Private post" });
-  const [existing] = await pool.query("SELECT reaction FROM feed_post_reactions WHERE post_id = ? AND user_id = ? AND reaction = ? LIMIT 1", [req.params.id, req.user.id, reaction]);
-  if (existing.length) {
-    await pool.query("DELETE FROM feed_post_reactions WHERE post_id = ? AND user_id = ? AND reaction = ?", [req.params.id, req.user.id, reaction]);
+  const [existing] = await pool.query("SELECT reaction FROM feed_post_reactions WHERE post_id = ? AND user_id = ?", [req.params.id, req.user.id]);
+  const hasSameReaction = existing.some((row) => row.reaction === reaction);
+  await pool.query("DELETE FROM feed_post_reactions WHERE post_id = ? AND user_id = ?", [req.params.id, req.user.id]);
+  if (hasSameReaction) {
+    // Same reaction toggles off.
   } else {
     await pool.query("INSERT INTO feed_post_reactions (post_id, user_id, reaction, created_at) VALUES (?, ?, ?, ?)", [req.params.id, req.user.id, reaction, nowMysql()]);
     await createFeedNotification({
@@ -3203,9 +3205,11 @@ app.post("/api/feed/:id/comments/:commentId/reactions", requireUser, async (req,
   const comment = await loadFeedCommentForAction(req.params.commentId);
   if (!comment || comment.post_id !== post.id) return res.status(404).json({ error: "Comment not found" });
   if (comment.hidden_at || comment.deleted_at) return res.status(400).json({ error: "This comment cannot receive reactions" });
-  const [existing] = await pool.query("SELECT reaction FROM feed_comment_reactions WHERE comment_id = ? AND user_id = ? AND reaction = ? LIMIT 1", [comment.id, req.user.id, reaction]);
-  if (existing.length) {
-    await pool.query("DELETE FROM feed_comment_reactions WHERE comment_id = ? AND user_id = ? AND reaction = ?", [comment.id, req.user.id, reaction]);
+  const [existing] = await pool.query("SELECT reaction FROM feed_comment_reactions WHERE comment_id = ? AND user_id = ?", [comment.id, req.user.id]);
+  const hasSameReaction = existing.some((row) => row.reaction === reaction);
+  await pool.query("DELETE FROM feed_comment_reactions WHERE comment_id = ? AND user_id = ?", [comment.id, req.user.id]);
+  if (hasSameReaction) {
+    // Same reaction toggles off.
   } else {
     await pool.query("INSERT INTO feed_comment_reactions (comment_id, user_id, reaction, created_at) VALUES (?, ?, ?, ?)", [comment.id, req.user.id, reaction, nowMysql()]);
     await createFeedNotification({
@@ -3225,15 +3229,19 @@ app.post("/api/feed/:id/comments/:commentId/reactions", requireUser, async (req,
 
 app.post("/api/feed/:id/comments/:commentId/moderation", requireUser, async (req, res) => {
   const action = String(req.body?.action || "").trim().toLowerCase();
-  if (!["hide", "delete"].includes(action)) return res.status(400).json({ error: "Invalid moderation action" });
+  if (!["hide", "unhide", "delete"].includes(action)) return res.status(400).json({ error: "Invalid moderation action" });
   const post = await loadFeedPostForAction(req.params.id);
   if (!post) return res.status(404).json({ error: "Post not found" });
   const comment = await loadFeedCommentForAction(req.params.commentId);
   if (!comment || comment.post_id !== post.id) return res.status(404).json({ error: "Comment not found" });
-  if (!canModerateFeedCommentAction(comment, req.user)) return res.status(403).json({ error: "Only the comment author or post owner can moderate this comment" });
+  if (!canModerateFeedCommentAction(comment, req.user)) return res.status(403).json({ error: "Only the comment author, post owner, or staff can moderate this comment" });
   if (action === "delete") {
     await pool.query("UPDATE feed_post_comments SET deleted_by = ?, deleted_at = COALESCE(deleted_at, ?) WHERE id = ?", [req.user.id, nowMysql(), comment.id]);
+  } else if (action === "unhide") {
+    if (comment.deleted_at) return res.status(400).json({ error: "Deleted comments cannot be unhidden" });
+    await pool.query("UPDATE feed_post_comments SET hidden_by = NULL, hidden_at = NULL WHERE id = ?", [comment.id]);
   } else {
+    if (comment.deleted_at) return res.status(400).json({ error: "Deleted comments cannot be hidden" });
     await pool.query("UPDATE feed_post_comments SET hidden_by = ?, hidden_at = COALESCE(hidden_at, ?) WHERE id = ?", [req.user.id, nowMysql(), comment.id]);
   }
   const postsForUser = await feedPostsFor(req.user);
@@ -3259,6 +3267,10 @@ app.post("/api/feed/:id/share", async (req, res) => {
   }
   broadcast("kaila.feed.updated", { postId: req.params.id, action: "share" });
   res.json({ ok: true });
+});
+
+app.use("/api/feed", (req, res) => {
+  res.status(404).json({ error: `Feed route not found: ${req.method} ${req.originalUrl}` });
 });
 
 app.get("/api/message-summary", requireUser, async (req, res) => {

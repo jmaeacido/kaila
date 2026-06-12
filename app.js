@@ -815,6 +815,7 @@ function bindEvents() {
   });
   document.addEventListener("click", (event) => {
     if (!event.target.closest("[data-feed-audience]")) closeFeedAudienceMenus();
+    if (!event.target.closest(".feed-comment-more, [data-feed-comment-floating-menu]")) closeFeedCommentMoreMenus();
   });
 }
 
@@ -1729,9 +1730,8 @@ function renderFeedComment(comment = {}, post = {}, options = {}) {
           <p>${escapeHtml(comment.body)}</p>
           <div class="feed-comment-actions">
             ${renderFeedCommentReactionButtons(comment, publicOnly)}
-            ${isReply || comment.hidden || comment.deleted ? "" : `<button type="button" data-feed-reply-toggle ${publicOnly ? "data-auth-required" : ""}>Reply</button>`}
-            ${comment.canModerate && !comment.hidden && !comment.deleted ? `<button type="button" data-feed-comment-moderate="hide">Hide</button>` : ""}
-            ${comment.canModerate && !comment.deleted ? `<button type="button" data-feed-comment-moderate="delete">Delete</button>` : ""}
+            ${isReply || comment.hidden || comment.deleted ? "" : `<button type="button" data-feed-reply-toggle title="Reply" aria-label="Reply" ${publicOnly ? "data-auth-required" : ""}><span aria-hidden="true">💬</span></button>`}
+            ${renderFeedCommentMoreMenu(comment)}
           </div>
         </div>
       </div>
@@ -1746,12 +1746,30 @@ function renderFeedComment(comment = {}, post = {}, options = {}) {
 
 function renderFeedCommentReactionButtons(comment = {}, publicOnly = false) {
   if (comment.hidden || comment.deleted) return "";
+  const labels = { like: "Like", helpful: "Helpful", interested: "Interested" };
+  const icons = { like: "👍", helpful: "🙌", interested: "⭐" };
   return ["like", "helpful", "interested"].map((reaction) => `
-    <button class="${comment.viewerReactions?.includes(reaction) ? "active" : ""}" type="button" data-feed-comment-reaction="${reaction}" ${publicOnly ? "data-auth-required" : ""}>
-      ${escapeHtml(reaction === "like" ? "Like" : reaction === "helpful" ? "Helpful" : "Interested")}
+    <button class="${comment.viewerReactions?.includes(reaction) ? "active" : ""}" type="button" data-feed-comment-reaction="${reaction}" title="${escapeAttribute(labels[reaction])}" aria-label="${escapeAttribute(labels[reaction])}" ${publicOnly ? "data-auth-required" : ""}>
+      <span aria-hidden="true">${escapeHtml(icons[reaction])}</span>
       <b>${Number(comment.reactions?.[reaction] || 0)}</b>
     </button>
   `).join("");
+}
+
+function renderFeedCommentMoreMenu(comment = {}) {
+  if (!comment.canModerate || comment.deleted) return "";
+  const actions = [
+    comment.hidden && !comment.deleted ? `<button type="button" data-feed-comment-moderate="unhide" role="menuitem">Unhide</button>` : "",
+    !comment.hidden && !comment.deleted ? `<button type="button" data-feed-comment-moderate="hide" role="menuitem">Hide</button>` : "",
+    !comment.deleted ? `<button type="button" data-feed-comment-moderate="delete" role="menuitem">Delete</button>` : "",
+  ].filter(Boolean).join("");
+  if (!actions) return "";
+  return `
+    <span class="feed-comment-more">
+      <button type="button" data-feed-comment-more title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true">⋮</span></button>
+      <span class="feed-comment-more-menu" data-feed-comment-more-menu role="menu" hidden>${actions}</span>
+    </span>
+  `;
 }
 
 function renderFeedMedia(media = []) {
@@ -1803,6 +1821,17 @@ function bindFeedPostActions(scope, options = {}) {
       button.dataset.feedCommentReaction
     ));
   });
+  $$("[data-feed-comment-more]", scope).forEach((button) => {
+    if (options.publicOnly) return;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const menu = button.closest(".feed-comment-more")?.querySelector("[data-feed-comment-more-menu]");
+      const opening = button.getAttribute("aria-expanded") !== "true";
+      closeFeedCommentMoreMenus();
+      if (!menu) return;
+      if (opening) openFeedCommentMoreMenu(button, menu);
+    });
+  });
   $$("[data-feed-comment-moderate]", scope).forEach((button) => {
     if (options.publicOnly) return;
     button.addEventListener("click", () => moderateFeedComment(
@@ -1814,6 +1843,68 @@ function bindFeedPostActions(scope, options = {}) {
   $$("[data-feed-share]", scope).forEach((button) => {
     button.addEventListener("click", () => shareFeedPost(button.closest("[data-feed-post]")?.dataset.feedPost, button.dataset.feedShare));
   });
+}
+
+function closeFeedCommentMoreMenus() {
+  $$("[data-feed-comment-more-menu]").forEach((menu) => {
+    menu.hidden = true;
+  });
+  const floatingMenu = $("[data-feed-comment-floating-menu]");
+  if (floatingMenu) {
+    floatingMenu.hidden = true;
+    floatingMenu.innerHTML = "";
+  }
+  $$("[data-feed-comment-more]").forEach((button) => button.setAttribute("aria-expanded", "false"));
+}
+
+function feedCommentFloatingMenu() {
+  let menu = $("[data-feed-comment-floating-menu]");
+  if (menu) return menu;
+  menu = document.createElement("div");
+  menu.className = "feed-comment-more-menu feed-comment-floating-menu";
+  menu.dataset.feedCommentFloatingMenu = "";
+  menu.setAttribute("role", "menu");
+  menu.hidden = true;
+  document.body.appendChild(menu);
+  return menu;
+}
+
+function openFeedCommentMoreMenu(button, sourceMenu) {
+  const postId = button.closest("[data-feed-post]")?.dataset.feedPost;
+  const commentId = button.closest("[data-feed-comment-wrap]")?.dataset.feedComment;
+  const menu = feedCommentFloatingMenu();
+  menu.innerHTML = sourceMenu.innerHTML;
+  menu.hidden = false;
+  menu.style.visibility = "hidden";
+  $$("[data-feed-comment-moderate]", menu).forEach((item) => {
+    item.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const action = item.dataset.feedCommentModerate;
+      closeFeedCommentMoreMenus();
+      moderateFeedComment(postId, commentId, action);
+    });
+  });
+  positionFeedCommentMoreMenu(button, menu);
+  sourceMenu.hidden = true;
+  button.setAttribute("aria-expanded", "true");
+}
+
+function positionFeedCommentMoreMenu(button, menu) {
+  const margin = 8;
+  const rect = button.getBoundingClientRect();
+  const size = menu.getBoundingClientRect();
+  const width = Math.min(size.width || 128, window.innerWidth - (margin * 2));
+  const height = Math.min(size.height || 88, window.innerHeight - (margin * 2));
+  let left = rect.right - width;
+  let top = rect.bottom + 6;
+  if (left < margin) left = rect.left;
+  left = Math.min(Math.max(margin, left), window.innerWidth - width - margin);
+  if (top + height > window.innerHeight - margin) top = rect.top - height - 6;
+  top = Math.min(Math.max(margin, top), window.innerHeight - height - margin);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.style.maxWidth = `${window.innerWidth - (margin * 2)}px`;
+  menu.style.visibility = "visible";
 }
 
 async function createFeedPost(event) {
@@ -1902,7 +1993,7 @@ async function toggleFeedReaction(postId, reaction) {
     state.feedPosts = result.posts || state.feedPosts;
     renderFeed();
   } catch (error) {
-    notify("Reaction failed", error.message || "Try again.", "error");
+    notify("Reaction failed", feedActionErrorMessage(error, "post reaction"), "error");
   }
 }
 
@@ -1939,7 +2030,7 @@ async function submitFeedReply(event) {
     state.feedPosts = result.posts || state.feedPosts;
     renderFeed();
   } catch (error) {
-    notify("Reply failed", error.message || "Try again.", "error");
+    notify("Reply failed", feedActionErrorMessage(error, "reply"), "error");
   }
 }
 
@@ -1953,17 +2044,45 @@ async function toggleFeedCommentReaction(postId, commentId, reaction) {
     state.feedPosts = result.posts || state.feedPosts;
     renderFeed();
   } catch (error) {
-    notify("Reaction failed", error.message || "Try again.", "error");
+    notify("Reaction failed", feedActionErrorMessage(error, "comment reaction"), "error");
   }
 }
 
+function feedActionErrorMessage(error, actionLabel = "feed action") {
+  if (error?.status === 404) return error.message || `The ${actionLabel} route or item was not found. Restart the KAILA socket service if this just changed.`;
+  return error?.message || "Try again.";
+}
+
 async function moderateFeedComment(postId, commentId, action) {
-  if (!postId || !commentId || !["hide", "delete"].includes(action)) return;
+  if (!postId || !commentId || !["hide", "unhide", "delete"].includes(action)) return;
+  const copy = {
+    hide: {
+      icon: "question",
+      title: "Hide comment?",
+      text: "The comment will be hidden from normal feed view.",
+      confirm: "Hide",
+      done: "Comment hidden",
+    },
+    unhide: {
+      icon: "question",
+      title: "Unhide comment?",
+      text: "The comment will appear normally in the feed again.",
+      confirm: "Unhide",
+      done: "Comment unhidden",
+    },
+    delete: {
+      icon: "warning",
+      title: "Delete comment?",
+      text: "The comment will be removed from normal feed view.",
+      confirm: "Delete",
+      done: "Comment deleted",
+    },
+  }[action];
   const result = await modal({
-    icon: action === "delete" ? "warning" : "question",
-    title: action === "delete" ? "Delete comment?" : "Hide comment?",
-    text: action === "delete" ? "The comment will be removed from normal feed view." : "The comment will be hidden from normal feed view.",
-    confirmButtonText: action === "delete" ? "Delete" : "Hide",
+    icon: copy.icon,
+    title: copy.title,
+    text: copy.text,
+    confirmButtonText: copy.confirm,
   });
   if (!result.isConfirmed) return;
   try {
@@ -1973,7 +2092,7 @@ async function moderateFeedComment(postId, commentId, action) {
     });
     state.feedPosts = response.posts || state.feedPosts;
     renderFeed();
-    notify(action === "delete" ? "Comment deleted" : "Comment hidden", "Feed moderation updated.", "success");
+    notify(copy.done, "Feed moderation updated.", "success");
   } catch (error) {
     notify("Moderation failed", error.message || "Try again.", "error");
   }

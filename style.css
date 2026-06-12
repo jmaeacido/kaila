@@ -1929,7 +1929,12 @@ select[multiple].form-select {
 
 .feed-comment-wrap.hidden .feed-comment > div,
 .feed-comment-wrap.deleted .feed-comment > div {
-  opacity: 0.82;
+  opacity: 0.9;
+}
+
+.feed-comment-wrap.hidden .feed-comment p,
+.feed-comment-wrap.deleted .feed-comment p {
+  color: var(--muted);
   font-style: italic;
 }
 
@@ -1945,8 +1950,10 @@ select[multiple].form-select {
   display: inline-flex;
   gap: 0.25rem;
   align-items: center;
+  justify-content: center;
   min-height: 1.55rem;
-  padding: 0.12rem 0.4rem;
+  min-width: 1.55rem;
+  padding: 0.12rem 0.36rem;
   border: 0;
   border-radius: 999px;
   color: var(--muted);
@@ -1964,6 +1971,55 @@ select[multiple].form-select {
 
 .feed-comment-actions b {
   font-size: 0.68rem;
+}
+
+.feed-comment-more {
+  position: relative;
+  display: inline-flex;
+}
+
+.feed-comment-more-menu {
+  position: fixed;
+  z-index: 2100;
+  min-width: 7rem;
+  max-width: calc(100vw - 1rem);
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 14px 32px var(--shadow);
+}
+
+.feed-comment-more .feed-comment-more-menu {
+  display: none;
+}
+
+.feed-comment-more-menu[hidden] {
+  display: none;
+}
+
+.feed-comment-more-menu button {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  justify-content: flex-start;
+  min-height: 2rem;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink);
+  background: transparent;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-align: left;
+}
+
+.feed-comment-more-menu button:hover,
+.feed-comment-more-menu button:focus-visible {
+  color: var(--brand);
+  background: var(--surface-2);
 }
 
 .feed-replies {
