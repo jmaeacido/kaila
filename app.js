@@ -56,6 +56,7 @@ const NAVIGATION_MIN_MOVE_METERS = 12;
 const NAVIGATION_STALE_MS = 45000;
 const NAVIGATION_SPEED_KMH = 22;
 const NAVIGATION_START_TIMEOUT_MS = 20000;
+const NAVIGATION_GPS_START_TIMEOUT_MS = 9000;
 const MOBILE_UPDATE_PROMPT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FALLBACK_GEOGRAPHY = {
   region: "Region X (Northern Mindanao)",
@@ -109,9 +110,12 @@ const state = {
   deviceLocation: null,
   deviceLocationCheckedAt: 0,
   navigationWatchId: null,
+  navigationWatchSource: "",
   navigationSession: null,
   navigationLastSentAt: 0,
   navigationLastSentLocation: null,
+  navigationLocationStatus: "",
+  navigationLocationError: "",
   routeDistanceCache: new Map(),
   validationSyncing: false,
   typingTimer: null,
@@ -379,11 +383,30 @@ function nativePushNotifications() {
   return window.Capacitor?.Plugins?.PushNotifications || null;
 }
 
+function nativeGeolocation() {
+  if (!isNativeApp() && !isCapacitorPluginAvailable("Geolocation")) return null;
+  return window.Capacitor?.Plugins?.Geolocation || null;
+}
+
 function isCapacitorPluginAvailable(name) {
   try {
     return Boolean(window.Capacitor?.isPluginAvailable?.(name) || window.Capacitor?.Plugins?.[name]);
   } catch {
     return false;
+  }
+}
+
+function navigationDebug(step, details = {}) {
+  try {
+    console.info(`[KAILA navigation] ${step}`, {
+      native: isNativeApp(),
+      capacitorGeolocation: isCapacitorPluginAvailable("Geolocation"),
+      browserGeolocation: Boolean(navigator.geolocation),
+      socketConnected: Boolean(state.socket?.connected),
+      ...details,
+    });
+  } catch {
+    console.info(`[KAILA navigation] ${step}`);
   }
 }
 
@@ -1716,6 +1739,8 @@ function navigationStatusText(nav = {}) {
   if (status === "paused") return "Tracking paused";
   if (status === "stopped") return "Tracking stopped";
   if (status === "requesting_permission") return "Checking GPS permission";
+  if (status === "waiting_gps_permission") return "Waiting for GPS permission";
+  if (status === "waiting_gps_signal") return "Waiting for GPS signal";
   if (status === "starting") return "Starting travel";
   if (status === "failed") return "Travel needs attention";
   return "Waiting to start travel";
@@ -1727,7 +1752,7 @@ function navigationStatusClass(nav = {}) {
   if (status === "nearby") return "nearby";
   if (status === "on_the_way") return "on-way";
   if (status === "stopped" || status === "paused") return "paused";
-  if (status === "requesting_permission" || status === "starting") return "starting";
+  if (status === "requesting_permission" || status === "waiting_gps_permission" || status === "waiting_gps_signal" || status === "starting") return "starting";
   if (status === "failed") return "failed";
   return "waiting";
 }
@@ -1750,6 +1775,8 @@ function navigationDisplayState(session = {}) {
   const nav = session.navigationState || {};
   const phase = navigationPhase(session);
   if (phase === "requesting_permission") return { ...nav, status: "requesting_permission", arrivalState: "requesting_permission" };
+  if (phase === "waiting_gps_permission") return { ...nav, status: "waiting_gps_permission", arrivalState: "waiting_gps_permission" };
+  if (phase === "waiting_gps_signal") return { ...nav, status: "waiting_gps_signal", arrivalState: "waiting_gps_signal" };
   if (phase === "starting" || phase === "waiting_to_start") return { ...nav, status: "starting", arrivalState: "starting" };
   if (phase === "failed") return { ...nav, status: "failed", arrivalState: "failed" };
   return nav;
@@ -1763,6 +1790,8 @@ function navigationUpdatedText(session = {}, route = null) {
     return `${stale ? "Stale update" : "Last updated"} ${formatRelativeTime(timestamp)}`;
   }
   if (navigationPhase(session) === "requesting_permission") return "Requesting GPS permission";
+  if (navigationPhase(session) === "waiting_gps_permission") return "Route ready - waiting for GPS permission";
+  if (navigationPhase(session) === "waiting_gps_signal") return "Route ready - waiting for GPS signal";
   if (navigationPhase(session) === "starting" || navigationPhase(session) === "waiting_to_start") return "Confirming travel start";
   if (route) return "Route ready - waiting for live GPS";
   if (session.providerLocation || nav.providerLocation) return "Route ready - waiting for live GPS";
@@ -6596,11 +6625,20 @@ function connectSocket(force = false) {
     state.socket.on("kaila.message.reaction", ({ requestId }) => refreshConversation(requestId));
     state.socket.on("kaila.presence.changed", ({ requestId }) => updateConversationPresence(requestId));
     state.socket.on("kaila.direct-presence.changed", ({ userIds }) => updateDirectConversationPresence(userIds));
-    state.socket.on("kaila.navigation.start", handleNavigationStateUpdate);
-    state.socket.on("kaila.navigation.location", handleNavigationStateUpdate);
+    state.socket.on("kaila.navigation.start", (payload) => {
+      navigationDebug("kaila.navigation.start received", { requestId: payload?.requestId, hasState: Boolean(payload?.navigationState) });
+      handleNavigationStateUpdate(payload);
+    });
+    state.socket.on("kaila.navigation.location", (payload) => {
+      navigationDebug("kaila.navigation.location received", { requestId: payload?.requestId, hasState: Boolean(payload?.navigationState) });
+      handleNavigationStateUpdate(payload);
+    });
     state.socket.on("kaila.navigation.arrival_state", handleNavigationStateUpdate);
     state.socket.on("kaila.navigation.stop", handleNavigationStateUpdate);
-    state.socket.on("kaila.navigation.state", handleNavigationStateUpdate);
+    state.socket.on("kaila.navigation.state", (payload) => {
+      navigationDebug("kaila.navigation.state event received", { requestId: payload?.requestId, hasState: Boolean(payload?.navigationState) });
+      handleNavigationStateUpdate(payload);
+    });
     state.socket.on("kaila.socket.identified", ({ userId } = {}) => {
       state.socketIdentityUserId = userId || "";
     });
@@ -6647,11 +6685,17 @@ function ensureSocketConnected(timeout = 12000) {
 }
 
 async function emitNavigationEvent(event, payload = {}, timeout = 10000) {
+  navigationDebug(`${event} emit requested`, { requestId: payload.requestId, hasLocation: Boolean(payload.location), timeout });
   const connected = await ensureSocketConnected(timeout);
   if (!connected || !state.socket?.connected) throw new Error("Live navigation is offline. Check your connection and try again.");
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
     state.socket.timeout(timeout).emit(event, payload, (error, response = {}) => {
-      if (error) return reject(new Error("Navigation update timed out"));
+      if (error) {
+        navigationDebug(`${event} acknowledgement timeout`, { requestId: payload.requestId, elapsedMs: Date.now() - startedAt, message: error?.message });
+        return reject(new Error("Navigation update timed out"));
+      }
+      navigationDebug(`${event} acknowledgement received`, { requestId: payload.requestId, elapsedMs: Date.now() - startedAt, ok: response.ok, error: response.error });
       if (!response.ok) return reject(new Error(response.error || "Navigation update failed"));
       resolve(response);
     });
@@ -6727,6 +6771,13 @@ function upsertRequest(request = {}) {
 
 function handleNavigationStateUpdate({ requestId, navigationState } = {}) {
   if (!requestId || !navigationState) return;
+  navigationDebug("kaila.navigation.state received", {
+    requestId,
+    status: navigationState.status,
+    arrivalState: navigationState.arrivalState,
+    startedAt: navigationState.startedAt,
+    hasProviderLocation: Boolean(navigationState.providerLocation),
+  });
   const request = state.requests.find((item) => item.id === requestId);
   if (request) request.navigationState = navigationState;
   if (state.navigationSession?.request?.id === requestId) {
@@ -8183,7 +8234,10 @@ function bindNavigationMap(session) {
       renderRoute();
       session.pipRender?.();
     });
-    $("[data-navigation-start]", actions)?.addEventListener("click", () => startProviderTravel(session));
+    $("[data-navigation-start]", actions)?.addEventListener("click", () => {
+      navigationDebug("Start Travel button click fired", { requestId: session.request?.id, phase: navigationPhase(session) });
+      startProviderTravel(session);
+    });
     $("[data-navigation-track]", actions)?.addEventListener("click", () => startNavigationWatch(session));
     $("[data-navigation-reload]", actions)?.addEventListener("click", () => refreshNavigationState(session.request.id));
     $("[data-navigation-close]", actions)?.addEventListener("click", () => window.Swal.close());
@@ -8194,7 +8248,7 @@ function bindNavigationMap(session) {
     const phase = navigationPhase(session);
     const active = isNavigationActive(session.navigationState || {});
     if (session.mode === "provider") {
-      const starting = ["waiting_to_start", "requesting_permission", "starting"].includes(phase);
+      const starting = ["waiting_to_start", "requesting_permission", "waiting_gps_permission", "waiting_gps_signal", "starting"].includes(phase);
       actions.innerHTML = `
         ${active ? "" : `<button class="btn btn-sm btn-primary" type="button" data-navigation-start ${starting ? "disabled" : ""}><i class="fa-solid ${starting ? "fa-spinner fa-spin" : "fa-location-arrow"}"></i> ${starting ? "Starting..." : "Start Travel"}</button>`}
         <button class="btn btn-sm btn-outline-primary" type="button" data-navigation-current ${starting ? "disabled" : ""}><i class="fa-solid fa-location-crosshairs"></i> Use My Location</button>
@@ -8309,41 +8363,81 @@ function bindNavigationMap(session) {
   renderActions();
 }
 
-function startNavigationWatch(session = state.navigationSession) {
+async function startNavigationWatch(session = state.navigationSession) {
   if (!session) return;
   if (state.navigationWatchId) {
     notify("Tracking already live", "KAILA is still updating this route.", "info");
     return;
   }
+  const handlePosition = (position) => {
+    const location = normalizeLocation({ lat: position?.coords?.latitude, lng: position?.coords?.longitude });
+    navigationDebug("navigation watch coordinate returned", {
+      source: state.navigationWatchSource || "unknown",
+      ok: Boolean(location),
+      accuracy: position?.coords?.accuracy,
+      lat: location?.lat,
+      lng: location?.lng,
+    });
+    if (location) {
+      state.deviceLocation = location;
+      state.deviceLocationCheckedAt = Date.now();
+      session.currentOrigin = location;
+      session.providerLocation = location;
+      if (session.mode === "provider") sendProviderNavigationLocation(session, position.coords);
+      session.modalRender?.();
+      session.pipRender?.();
+    }
+  };
+  const handleError = (error) => {
+    const denied = error?.code === error?.PERMISSION_DENIED || error?.code === 1 || /denied|permission/i.test(error?.message || "");
+    state.navigationLocationStatus = denied ? "permission_denied" : "signal_unavailable";
+    state.navigationLocationError = error?.message || "Location watch failed";
+    navigationDebug("navigation watch failed", { source: state.navigationWatchSource || "unknown", code: error?.code, message: error?.message, denied });
+    notify(denied ? "GPS permission denied" : "Tracking paused", denied ? "Use Open Maps for turn-by-turn navigation, or enable location permission in your device settings." : "KAILA could not refresh your location. You can still open Google Maps.", "warning");
+  };
+  const nativeGeo = nativeGeolocation();
+  if (nativeGeo?.watchPosition) {
+    try {
+      navigationDebug("Capacitor Geolocation watchPosition start", { highAccuracy: true, timeout: 20000, maximumAge: 8000 });
+      state.navigationWatchSource = "capacitor";
+      state.navigationWatchId = await nativeGeo.watchPosition(
+        { enableHighAccuracy: true, maximumAge: 8000, timeout: 20000 },
+        (position, error) => {
+          if (error) return handleError(error);
+          handlePosition(position);
+        }
+      );
+      notify("Tracking started", "KAILA will update the route until you stop navigation.", "success");
+      return;
+    } catch (error) {
+      state.navigationWatchId = null;
+      state.navigationWatchSource = "";
+      navigationDebug("Capacitor Geolocation watchPosition rejected", { code: error?.code, message: error?.message });
+    }
+  }
   if (!navigator.geolocation) {
+    navigationDebug("navigation watch unavailable");
     notify("Tracking unavailable", "This device or browser does not expose GPS location.", "warning");
     return;
   }
+  navigationDebug("navigator.geolocation.watchPosition start", { highAccuracy: true, timeout: 15000, maximumAge: 8000 });
+  state.navigationWatchSource = "browser";
   state.navigationWatchId = navigator.geolocation.watchPosition(
-    (position) => {
-      const location = normalizeLocation({ lat: position.coords.latitude, lng: position.coords.longitude });
-      if (location) {
-        state.deviceLocation = location;
-        state.deviceLocationCheckedAt = Date.now();
-        session.currentOrigin = location;
-        session.providerLocation = location;
-        if (session.mode === "provider") sendProviderNavigationLocation(session, position.coords);
-        session.modalRender?.();
-        session.pipRender?.();
-      }
-    },
-    (error) => {
-      const denied = error?.code === error?.PERMISSION_DENIED || error?.code === 1;
-      notify(denied ? "GPS permission denied" : "Tracking paused", denied ? "Use Open Maps for turn-by-turn navigation, or enable location permission in your device settings." : "KAILA could not refresh your location. You can still open Google Maps.", "warning");
-    },
+    handlePosition,
+    handleError,
     { enableHighAccuracy: true, maximumAge: 8000, timeout: 15000 }
   );
   notify("Tracking started", "KAILA will update the route until you stop navigation.", "success");
 }
 
 function stopNavigationWatch({ clearSession = false } = {}) {
-  if (state.navigationWatchId && navigator.geolocation) navigator.geolocation.clearWatch(state.navigationWatchId);
+  if (state.navigationWatchId && state.navigationWatchSource === "capacitor" && nativeGeolocation()?.clearWatch) {
+    nativeGeolocation().clearWatch({ id: state.navigationWatchId }).catch((error) => navigationDebug("Capacitor Geolocation clearWatch failed", { message: error?.message }));
+  } else if (state.navigationWatchId && navigator.geolocation) {
+    navigator.geolocation.clearWatch(state.navigationWatchId);
+  }
   state.navigationWatchId = null;
+  state.navigationWatchSource = "";
   state.navigationLastSentAt = 0;
   state.navigationLastSentLocation = null;
   if (clearSession) {
@@ -8354,15 +8448,24 @@ function stopNavigationWatch({ clearSession = false } = {}) {
 
 async function startProviderTravel(session = state.navigationSession) {
   if (!session?.request?.id || session.mode !== "provider") return;
-  if (["waiting_to_start", "requesting_permission", "starting"].includes(navigationPhase(session))) return;
+  if (["waiting_to_start", "requesting_permission", "waiting_gps_permission", "waiting_gps_signal", "starting"].includes(navigationPhase(session))) return;
+  navigationDebug("Start Travel activation path entered", { requestId: session.request.id });
   session.localNavigationPhase = "requesting_permission";
   session.modalRender?.();
   let location = state.deviceLocation || null;
   if (!location) {
-    location = await getDeviceLocation({ maximumAge: 12000, timeout: 18000, silent: true });
+    location = await getDeviceLocation({ maximumAge: 12000, timeout: NAVIGATION_GPS_START_TIMEOUT_MS, silent: true });
   }
   if (!location) {
-    notify("GPS still warming up", "KAILA will start travel now and keep waiting for a live GPS fix.", "info");
+    const permissionProblem = state.navigationLocationStatus === "permission_denied";
+    session.localNavigationPhase = permissionProblem ? "waiting_gps_permission" : "waiting_gps_signal";
+    session.modalRender?.();
+    navigationDebug("Start Travel continuing without GPS fix", {
+      requestId: session.request.id,
+      status: state.navigationLocationStatus,
+      error: state.navigationLocationError,
+    });
+    notify(permissionProblem ? "Waiting for GPS permission" : "Waiting for GPS signal", "KAILA will confirm travel start and keep waiting for live GPS.", "info");
   }
   session.localNavigationPhase = "starting";
   session.modalRender?.();
@@ -8377,9 +8480,22 @@ async function startProviderTravel(session = state.navigationSession) {
     startNavigationWatch(session);
     notify("Travel started", "Your live location and ETA are now visible to the client for this active job.", "success");
   } catch (error) {
-    session.localNavigationPhase = session.providerLocation || session.currentOrigin ? "" : "failed";
+    navigationDebug("navigation start timeout handler", {
+      requestId: session.request.id,
+      message: error?.message,
+      hasRoute: Boolean(session.lastRoute || session.providerLocation || session.currentOrigin),
+      gpsStatus: state.navigationLocationStatus,
+      gpsError: state.navigationLocationError,
+    });
+    const permissionProblem = state.navigationLocationStatus === "permission_denied";
+    const waitingForGps = permissionProblem || ["timeout", "signal_unavailable", "unavailable"].includes(state.navigationLocationStatus);
+    session.localNavigationPhase = waitingForGps ? (permissionProblem ? "waiting_gps_permission" : "waiting_gps_signal") : session.providerLocation || session.currentOrigin || session.lastRoute ? "" : "failed";
     session.modalRender?.();
-    notify("Travel not confirmed", error.message || "KAILA could not confirm live travel yet. You can try again or open Maps.", "warning");
+    notify(
+      waitingForGps ? (permissionProblem ? "Waiting for GPS permission" : "Waiting for GPS signal") : "Travel confirmation pending",
+      waitingForGps ? "The route is ready. KAILA is still waiting for live GPS before sending location updates." : (error.message || "KAILA could not confirm live travel yet. You can try again or open Maps."),
+      "warning"
+    );
   }
 }
 
@@ -8391,9 +8507,11 @@ async function confirmProviderTravelStart(session, location) {
   let lastError = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
+      navigationDebug("kaila.navigation.start emit", { requestId: payload.requestId, attempt: attempt + 1, hasLocation: Boolean(payload.location) });
       return await emitNavigationEvent("kaila.navigation.start", payload, NAVIGATION_START_TIMEOUT_MS);
     } catch (error) {
       lastError = error;
+      navigationDebug("kaila.navigation.start emit failed", { requestId: payload.requestId, attempt: attempt + 1, message: error?.message });
       const confirmed = await confirmPersistedNavigationStart(session.request.id);
       if (confirmed) return { ok: true, navigationState: confirmed };
     }
@@ -9556,36 +9674,92 @@ function formatDistanceKm(value) {
   return `${numeric < 10 ? numeric.toFixed(1) : Math.round(numeric)} km away`;
 }
 
-function getDeviceLocation(options = {}) {
+async function getDeviceLocation(options = {}) {
+  const settings = {
+    enableHighAccuracy: options.enableHighAccuracy ?? true,
+    maximumAge: options.maximumAge ?? 60000,
+    timeout: options.timeout ?? 10000,
+  };
+  const finish = (location, status = "", error = "") => {
+    state.navigationLocationStatus = status;
+    state.navigationLocationError = error;
+    if (location) {
+      state.deviceLocation = location;
+      state.deviceLocationCheckedAt = Date.now();
+    }
+    return location;
+  };
+  const nativeGeo = nativeGeolocation();
+  navigationDebug("geolocation request start", {
+    source: nativeGeo ? "capacitor" : navigator.geolocation ? "browser" : "none",
+    timeout: settings.timeout,
+    highAccuracy: settings.enableHighAccuracy,
+  });
+  if (nativeGeo?.getCurrentPosition) {
+    try {
+      if (nativeGeo.checkPermissions) {
+        const current = await nativeGeo.checkPermissions();
+        navigationDebug("Capacitor Geolocation permission check", current);
+        if (current.location !== "granted" && current.coarseLocation !== "granted") {
+          const requested = nativeGeo.requestPermissions ? await nativeGeo.requestPermissions({ permissions: ["location"] }) : current;
+          navigationDebug("Capacitor Geolocation permission request", requested);
+        }
+      }
+      const position = await nativeGeo.getCurrentPosition(settings);
+      const location = normalizeLocation({
+        lat: position?.coords?.latitude,
+        lng: position?.coords?.longitude,
+      });
+      navigationDebug("Capacitor Geolocation coordinate returned", {
+        ok: Boolean(location),
+        accuracy: position?.coords?.accuracy,
+        lat: location?.lat,
+        lng: location?.lng,
+      });
+      if (location) return finish(location, "granted", "");
+    } catch (error) {
+      const denied = /denied|permission/i.test(error?.message || "");
+      const timeout = /timeout/i.test(error?.message || "") || error?.code === 3;
+      navigationDebug("Capacitor Geolocation rejected", { message: error?.message, code: error?.code, denied, timeout });
+      if (denied) {
+        if (!options.silent) notify("Location permission denied", "Enable location permission, pick the pin manually, or open Google Maps without live origin.", "warning");
+        return finish(null, "permission_denied", error?.message || "Location permission denied");
+      }
+      if (isNativeApp()) return finish(null, timeout ? "timeout" : "signal_unavailable", error?.message || "Native geolocation failed");
+    }
+  }
   if (!navigator.geolocation) {
+    navigationDebug("navigator.geolocation unavailable");
     if (!options.silent) notify("Location unsupported", "This device or browser does not expose GPS location.", "warning");
-    return Promise.resolve(null);
+    return finish(null, "unavailable", "Geolocation is unavailable");
   }
   return new Promise((resolve) => {
+    navigationDebug("navigator.geolocation.getCurrentPosition start", settings);
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const location = normalizeLocation({
           lat: position.coords.latitude,
           lng: position.coords.longitude,
         });
-        if (location) {
-          state.deviceLocation = location;
-          state.deviceLocationCheckedAt = Date.now();
-        }
-        resolve(location);
+        navigationDebug("navigator.geolocation coordinate returned", {
+          ok: Boolean(location),
+          accuracy: position.coords.accuracy,
+          lat: location?.lat,
+          lng: location?.lng,
+        });
+        resolve(finish(location, location ? "granted" : "signal_unavailable", location ? "" : "Invalid coordinates"));
       },
       (error) => {
+        const denied = error?.code === error?.PERMISSION_DENIED || error?.code === 1;
+        const timeout = error?.code === error?.TIMEOUT || error?.code === 3;
+        const status = denied ? "permission_denied" : timeout ? "timeout" : "signal_unavailable";
+        navigationDebug("navigator.geolocation rejected", { code: error?.code, message: error?.message, denied, timeout });
         if (!options.silent) {
-          const denied = error?.code === error?.PERMISSION_DENIED || error?.code === 1;
           notify(denied ? "Location permission denied" : "Location unavailable", denied ? "Enable location permission, pick the pin manually, or open Google Maps without live origin." : "KAILA could not get a fresh GPS fix. You can pick the pin manually or try again.", "warning");
         }
-        resolve(null);
+        resolve(finish(null, status, error?.message || "Location unavailable"));
       },
-      {
-        enableHighAccuracy: true,
-        maximumAge: options.maximumAge ?? 60000,
-        timeout: options.timeout ?? 10000,
-      }
+      settings
     );
   });
 }

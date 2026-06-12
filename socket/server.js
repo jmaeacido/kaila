@@ -3813,6 +3813,12 @@ socketServer.on("connection", (socket) => {
   });
 
   socket.on("kaila.navigation.start", async (payload = {}, acknowledge = () => {}) => {
+    console.info("[KAILA navigation] kaila.navigation.start received", {
+      socketId: socket.id,
+      userId: socket.data.userId,
+      requestId: payload.requestId,
+      hasLocation: Boolean(payload.location),
+    });
     try {
       const user = await getUser(socket.data.userId);
       if (!user) throw new Error("Sign in before starting navigation");
@@ -3821,16 +3827,36 @@ socketServer.on("connection", (socket) => {
       if (request.accepted_provider_id !== user.id) throw new Error("Only the assigned provider can start travel");
       if (!canUseNavigationStatus(request)) throw new Error("Travel tracking is only available for active accepted jobs");
       const stateRow = await saveNavigationStart(request, user.id, payload.location || null);
+      console.info("[KAILA navigation] kaila.navigation.start DB persistence succeeded", {
+        requestId: request.id,
+        providerId: user.id,
+        status: stateRow?.status,
+        arrivalState: stateRow?.arrival_state,
+        hasProviderLocation: Boolean(stateRow?.provider_lat && stateRow?.provider_lng),
+      });
       acknowledge({ ok: true, navigationState: mapNavigationState(stateRow) });
+      console.info("[KAILA navigation] kaila.navigation.start acknowledgement sent", { requestId: request.id, providerId: user.id });
       emitNavigationState(request, stateRow, "kaila.navigation.start").catch((error) => {
         console.warn("Navigation start broadcast failed:", error.message);
       });
     } catch (error) {
+      console.warn("[KAILA navigation] kaila.navigation.start failed", {
+        socketId: socket.id,
+        userId: socket.data.userId,
+        requestId: payload.requestId,
+        message: error.message,
+      });
       acknowledge({ ok: false, error: error.message || "Navigation start failed" });
     }
   });
 
   socket.on("kaila.navigation.location", async (payload = {}, acknowledge = () => {}) => {
+    console.info("[KAILA navigation] kaila.navigation.location received", {
+      socketId: socket.id,
+      userId: socket.data.userId,
+      requestId: payload.requestId,
+      hasLocation: Boolean(payload.location),
+    });
     try {
       const user = await getUser(socket.data.userId);
       if (!user) throw new Error("Sign in before sharing location");
@@ -3839,7 +3865,18 @@ socketServer.on("connection", (socket) => {
       if (request.accepted_provider_id !== user.id) throw new Error("Only the assigned provider can share travel location");
       if (!canUseNavigationStatus(request)) throw new Error("Travel tracking is only available for active accepted jobs");
       const result = await saveNavigationLocation(request, user.id, payload.location || {});
-      if (result.throttled) return acknowledge({ ok: true, throttled: true, navigationState: mapNavigationState(result.state) });
+      console.info("[KAILA navigation] kaila.navigation.location DB persistence succeeded", {
+        requestId: request.id,
+        providerId: user.id,
+        throttled: Boolean(result.throttled),
+        status: result.state?.status,
+        arrivalState: result.state?.arrival_state,
+      });
+      if (result.throttled) {
+        acknowledge({ ok: true, throttled: true, navigationState: mapNavigationState(result.state) });
+        console.info("[KAILA navigation] kaila.navigation.location acknowledgement sent", { requestId: request.id, providerId: user.id, throttled: true });
+        return;
+      }
       await emitNavigationState(request, result.state, "kaila.navigation.location");
       if (result.arrivalChanged && ["nearby", "arrived"].includes(result.state?.arrival_state)) {
         await emitNavigationState(request, result.state, "kaila.navigation.arrival_state");
@@ -3851,7 +3888,14 @@ socketServer.on("connection", (socket) => {
         }).catch((error) => console.warn("Navigation arrival push failed:", error.message));
       }
       acknowledge({ ok: true, navigationState: mapNavigationState(result.state) });
+      console.info("[KAILA navigation] kaila.navigation.location acknowledgement sent", { requestId: request.id, providerId: user.id });
     } catch (error) {
+      console.warn("[KAILA navigation] kaila.navigation.location failed", {
+        socketId: socket.id,
+        userId: socket.data.userId,
+        requestId: payload.requestId,
+        message: error.message,
+      });
       acknowledge({ ok: false, error: error.message || "Navigation location failed" });
     }
   });
