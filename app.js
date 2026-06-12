@@ -55,6 +55,7 @@ const NAVIGATION_SEND_INTERVAL_MS = 8000;
 const NAVIGATION_MIN_MOVE_METERS = 12;
 const NAVIGATION_STALE_MS = 45000;
 const NAVIGATION_SPEED_KMH = 22;
+const NAVIGATION_START_TIMEOUT_MS = 20000;
 const MOBILE_UPDATE_PROMPT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FALLBACK_GEOGRAPHY = {
   region: "Region X (Northern Mindanao)",
@@ -1714,6 +1715,9 @@ function navigationStatusText(nav = {}) {
   if (status === "on_the_way") return "On the way";
   if (status === "paused") return "Tracking paused";
   if (status === "stopped") return "Tracking stopped";
+  if (status === "requesting_permission") return "Checking GPS permission";
+  if (status === "starting") return "Starting travel";
+  if (status === "failed") return "Travel needs attention";
   return "Waiting to start travel";
 }
 
@@ -1723,7 +1727,46 @@ function navigationStatusClass(nav = {}) {
   if (status === "nearby") return "nearby";
   if (status === "on_the_way") return "on-way";
   if (status === "stopped" || status === "paused") return "paused";
+  if (status === "requesting_permission" || status === "starting") return "starting";
+  if (status === "failed") return "failed";
   return "waiting";
+}
+
+function isNavigationActive(nav = {}) {
+  const status = nav.arrivalState || nav.status || "";
+  return ["on_the_way", "nearby", "arrived"].includes(status) || Boolean(nav.startedAt && status !== "stopped" && status !== "paused");
+}
+
+function navigationPhase(session = {}) {
+  if (session.localNavigationPhase) return session.localNavigationPhase;
+  const nav = session.navigationState || {};
+  if (isNavigationActive(nav)) return "active";
+  if (nav.status === "stopped" || nav.arrivalState === "stopped") return "stopped";
+  if (nav.status === "paused" || nav.arrivalState === "paused") return "paused";
+  return "idle";
+}
+
+function navigationDisplayState(session = {}) {
+  const nav = session.navigationState || {};
+  const phase = navigationPhase(session);
+  if (phase === "requesting_permission") return { ...nav, status: "requesting_permission", arrivalState: "requesting_permission" };
+  if (phase === "starting" || phase === "waiting_to_start") return { ...nav, status: "starting", arrivalState: "starting" };
+  if (phase === "failed") return { ...nav, status: "failed", arrivalState: "failed" };
+  return nav;
+}
+
+function navigationUpdatedText(session = {}, route = null) {
+  const nav = session.navigationState || {};
+  const timestamp = nav.lastLocationAt || nav.updatedAt || nav.startedAt || "";
+  if (timestamp && isNavigationActive(nav)) {
+    const stale = nav.lastLocationAt && Date.now() - new Date(nav.lastLocationAt).getTime() > NAVIGATION_STALE_MS;
+    return `${stale ? "Stale update" : "Last updated"} ${formatRelativeTime(timestamp)}`;
+  }
+  if (navigationPhase(session) === "requesting_permission") return "Requesting GPS permission";
+  if (navigationPhase(session) === "starting" || navigationPhase(session) === "waiting_to_start") return "Confirming travel start";
+  if (route) return "Route ready - waiting for live GPS";
+  if (session.providerLocation || nav.providerLocation) return "Route ready - waiting for live GPS";
+  return "No live update yet";
 }
 
 function formatNavigationDistance(nav = {}) {
@@ -1907,6 +1950,7 @@ function ensureNavigationSession({ request = {}, target = {}, origin = null } = 
     state.navigationSession.navigationState = request.navigationState || null;
     state.navigationSession.mode = target.mode || "viewer";
     state.navigationSession.providerLocation = normalizeLocation(request.navigationState?.providerLocation) || currentOrigin;
+    if (isNavigationActive(request.navigationState || {})) state.navigationSession.localNavigationPhase = "";
     return state.navigationSession;
   }
   stopNavigationWatch({ clearSession: true });
@@ -1927,6 +1971,7 @@ function ensureNavigationSession({ request = {}, target = {}, origin = null } = 
     modalRender: null,
     pipRender: null,
     lastRoute: null,
+    localNavigationPhase: "",
   };
   return state.navigationSession;
 }
@@ -6688,6 +6733,7 @@ function handleNavigationStateUpdate({ requestId, navigationState } = {}) {
     state.navigationSession.request = request || state.navigationSession.request;
     state.navigationSession.navigationState = navigationState;
     state.navigationSession.providerLocation = normalizeLocation(navigationState.providerLocation);
+    if (isNavigationActive(navigationState)) state.navigationSession.localNavigationPhase = "";
     state.navigationSession.lastRoute = null;
     state.navigationSession.modalRender?.();
     state.navigationSession.pipRender?.();
@@ -8063,23 +8109,14 @@ async function openNavigationModal({ request = {}, target = {}, origin = null } 
         </div>
         <div class="navigation-panel">
           <div class="navigation-status-row">
-            <span class="navigation-status-chip ${escapeAttribute(navigationStatusClass(session.navigationState || {}))}" data-navigation-status>${escapeHtml(navigationStatusText(session.navigationState || {}))}</span>
-            <small data-navigation-updated>${session.navigationState?.lastLocationAt ? `Updated ${escapeHtml(formatRelativeTime(session.navigationState.lastLocationAt))}` : "No live update yet"}</small>
+            <span class="navigation-status-chip ${escapeAttribute(navigationStatusClass(navigationDisplayState(session)))}" data-navigation-status>${escapeHtml(navigationStatusText(navigationDisplayState(session)))}</span>
+            <small data-navigation-updated>${escapeHtml(navigationUpdatedText(session))}</small>
           </div>
           <div class="navigation-stats" data-navigation-stats>
             <span><i class="fa-solid fa-location-dot"></i> Destination pinned</span>
             <span>${session.providerLocation ? "Building route..." : session.mode === "provider" ? "Start travel to share live ETA." : "Waiting for provider travel."}</span>
           </div>
-          <div class="navigation-actions">
-            ${session.mode === "provider" ? `
-              <button class="btn btn-sm btn-primary" type="button" data-navigation-start><i class="fa-solid fa-location-arrow"></i> Start Travel</button>
-              <button class="btn btn-sm btn-outline-primary" type="button" data-navigation-current><i class="fa-solid fa-location-crosshairs"></i> Use My Location</button>
-              <button class="btn btn-sm btn-outline-primary" type="button" data-navigation-track><i class="fa-solid fa-route"></i> Follow Me</button>
-            ` : `
-              <button class="btn btn-sm btn-outline-primary" type="button" data-navigation-reload><i class="fa-solid fa-rotate"></i> Refresh</button>
-            `}
-            <button class="btn btn-sm btn-outline-secondary" type="button" data-navigation-stop><i class="fa-solid ${session.mode === "provider" ? "fa-pause" : "fa-xmark"}"></i> ${session.mode === "provider" ? "Stop" : "Close"}</button>
-          </div>
+          <div class="navigation-actions" data-navigation-actions></div>
           <div class="navigation-steps" data-navigation-steps></div>
         </div>
       </div>
@@ -8107,6 +8144,7 @@ function bindNavigationMap(session) {
   const steps = $("[data-navigation-steps]", popup);
   const statusChip = $("[data-navigation-status]", popup);
   const updated = $("[data-navigation-updated]", popup);
+  const actions = $("[data-navigation-actions]", popup);
   const destinationLocation = normalizeLocation(session?.destination);
   session.modalOpen = true;
   let map = null;
@@ -8123,15 +8161,53 @@ function bindNavigationMap(session) {
         : `<span><i class="fa-solid fa-location-dot"></i> Destination pinned</span><span>${session.providerLocation ? "Route estimate unavailable" : session.mode === "provider" ? "Start travel to share live ETA" : "Waiting for provider location"}</span>`;
   };
   const setStatus = () => {
-    const nav = session.navigationState || {};
+    const nav = navigationDisplayState(session);
     if (statusChip) {
       statusChip.className = `navigation-status-chip ${navigationStatusClass(nav)}`;
       statusChip.textContent = navigationStatusText(nav);
     }
-    if (updated) {
-      const stale = nav.lastLocationAt && Date.now() - new Date(nav.lastLocationAt).getTime() > NAVIGATION_STALE_MS;
-      updated.textContent = nav.lastLocationAt ? `${stale ? "Stale update" : "Updated"} ${formatRelativeTime(nav.lastLocationAt)}` : "No live update yet";
+    if (updated) updated.textContent = navigationUpdatedText(session, session.lastRoute);
+  };
+  const bindActionButtons = () => {
+    $("[data-navigation-current]", actions)?.addEventListener("click", async () => {
+      session.localNavigationPhase = "requesting_permission";
+      setStatus();
+      const location = await getDeviceLocation({ maximumAge: 15000, timeout: 12000 });
+      session.localNavigationPhase = "";
+      if (!location) {
+        setStatus();
+        return;
+      }
+      session.currentOrigin = location;
+      session.providerLocation = location;
+      renderRoute();
+      session.pipRender?.();
+    });
+    $("[data-navigation-start]", actions)?.addEventListener("click", () => startProviderTravel(session));
+    $("[data-navigation-track]", actions)?.addEventListener("click", () => startNavigationWatch(session));
+    $("[data-navigation-reload]", actions)?.addEventListener("click", () => refreshNavigationState(session.request.id));
+    $("[data-navigation-close]", actions)?.addEventListener("click", () => window.Swal.close());
+    $("[data-navigation-stop]", actions)?.addEventListener("click", () => stopProviderTravel(session));
+  };
+  const renderActions = () => {
+    if (!actions) return;
+    const phase = navigationPhase(session);
+    const active = isNavigationActive(session.navigationState || {});
+    if (session.mode === "provider") {
+      const starting = ["waiting_to_start", "requesting_permission", "starting"].includes(phase);
+      actions.innerHTML = `
+        ${active ? "" : `<button class="btn btn-sm btn-primary" type="button" data-navigation-start ${starting ? "disabled" : ""}><i class="fa-solid ${starting ? "fa-spinner fa-spin" : "fa-location-arrow"}"></i> ${starting ? "Starting..." : "Start Travel"}</button>`}
+        <button class="btn btn-sm btn-outline-primary" type="button" data-navigation-current ${starting ? "disabled" : ""}><i class="fa-solid fa-location-crosshairs"></i> Use My Location</button>
+        ${active ? `<button class="btn btn-sm btn-outline-primary" type="button" data-navigation-track><i class="fa-solid fa-route"></i> Follow Me</button>` : ""}
+        ${active ? `<button class="btn btn-sm btn-outline-secondary" type="button" data-navigation-stop><i class="fa-solid fa-pause"></i> Stop</button>` : ""}
+      `;
+    } else {
+      actions.innerHTML = `
+        <button class="btn btn-sm btn-outline-primary" type="button" data-navigation-reload><i class="fa-solid fa-rotate"></i> Refresh</button>
+        <button class="btn btn-sm btn-outline-secondary" type="button" data-navigation-close><i class="fa-solid fa-xmark"></i> Close</button>
+      `;
     }
+    bindActionButtons();
   };
   const setSteps = (route = null) => {
     if (!steps) return;
@@ -8184,6 +8260,7 @@ function bindNavigationMap(session) {
     const activeMap = ensureMap();
     if (!activeMap || !destinationLocation) return;
     setStatus();
+    renderActions();
     if (providerMarker) providerMarker.remove();
     if (routeLine) routeLine.remove();
     const providerLocation = normalizeLocation(session.mode === "provider" ? session.currentOrigin : session.navigationState?.providerLocation) || normalizeLocation(session.providerLocation);
@@ -8207,6 +8284,7 @@ function bindNavigationMap(session) {
         activeMap.fitBounds(routeLine.getBounds(), { padding: [28, 28] });
         setStats(route);
         setSteps(route);
+        if (updated) updated.textContent = navigationUpdatedText(session, route);
         return;
       }
     }
@@ -8214,6 +8292,7 @@ function bindNavigationMap(session) {
     else activeMap.setView([destinationLocation.lat, destinationLocation.lng], Math.max(activeMap.getZoom(), 15));
     setStats(null);
     setSteps(null);
+    setStatus();
   };
 
   session.modalRender = renderRoute;
@@ -8227,20 +8306,7 @@ function bindNavigationMap(session) {
     session.modalShouldMinimize = true;
     window.Swal.close();
   });
-  $("[data-navigation-current]", popup)?.addEventListener("click", async () => {
-    const location = await getDeviceLocation({ maximumAge: 15000, timeout: 12000 });
-    if (!location) return;
-    session.currentOrigin = location;
-    session.providerLocation = location;
-    renderRoute();
-    session.pipRender?.();
-  });
-  $("[data-navigation-start]", popup)?.addEventListener("click", () => startProviderTravel(session));
-  $("[data-navigation-track]", popup)?.addEventListener("click", () => startNavigationWatch(session));
-  $("[data-navigation-reload]", popup)?.addEventListener("click", () => refreshNavigationState(session.request.id));
-  $("[data-navigation-stop]", popup)?.addEventListener("click", () => {
-    stopProviderTravel(session);
-  });
+  renderActions();
 }
 
 function startNavigationWatch(session = state.navigationSession) {
@@ -8288,21 +8354,66 @@ function stopNavigationWatch({ clearSession = false } = {}) {
 
 async function startProviderTravel(session = state.navigationSession) {
   if (!session?.request?.id || session.mode !== "provider") return;
-  const location = state.deviceLocation || await getDeviceLocation({ maximumAge: 12000, timeout: 12000 });
-  if (!location) return;
+  if (["waiting_to_start", "requesting_permission", "starting"].includes(navigationPhase(session))) return;
+  session.localNavigationPhase = "requesting_permission";
+  session.modalRender?.();
+  let location = state.deviceLocation || null;
+  if (!location) {
+    location = await getDeviceLocation({ maximumAge: 12000, timeout: 18000, silent: true });
+  }
+  if (!location) {
+    notify("GPS still warming up", "KAILA will start travel now and keep waiting for a live GPS fix.", "info");
+  }
+  session.localNavigationPhase = "starting";
+  session.modalRender?.();
   try {
-    const response = await emitNavigationEvent("kaila.navigation.start", {
-      requestId: session.request.id,
-      location: navigationLocationPayload(location),
-    });
+    const response = await confirmProviderTravelStart(session, location);
     handleNavigationStateUpdate({ requestId: session.request.id, navigationState: response.navigationState });
-    session.currentOrigin = location;
-    session.providerLocation = location;
+    if (location) {
+      session.currentOrigin = location;
+      session.providerLocation = location;
+    }
+    session.localNavigationPhase = "";
     startNavigationWatch(session);
     notify("Travel started", "Your live location and ETA are now visible to the client for this active job.", "success");
   } catch (error) {
-    notify("Travel failed", error.message, "error");
+    session.localNavigationPhase = session.providerLocation || session.currentOrigin ? "" : "failed";
+    session.modalRender?.();
+    notify("Travel not confirmed", error.message || "KAILA could not confirm live travel yet. You can try again or open Maps.", "warning");
   }
+}
+
+async function confirmProviderTravelStart(session, location) {
+  const payload = {
+    requestId: session.request.id,
+    location: navigationLocationPayload(location),
+  };
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await emitNavigationEvent("kaila.navigation.start", payload, NAVIGATION_START_TIMEOUT_MS);
+    } catch (error) {
+      lastError = error;
+      const confirmed = await confirmPersistedNavigationStart(session.request.id);
+      if (confirmed) return { ok: true, navigationState: confirmed };
+    }
+  }
+  const confirmed = await confirmPersistedNavigationStart(session.request.id);
+  if (confirmed) return { ok: true, navigationState: confirmed };
+  throw lastError || new Error("Navigation start could not be confirmed");
+}
+
+async function confirmPersistedNavigationStart(requestId) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await apiFetch(`/api/navigation/${encodeURIComponent(requestId)}`, { method: "GET" });
+      if (isNavigationActive(response.navigationState || {})) return response.navigationState;
+    } catch (error) {
+      console.warn("Navigation start confirmation failed:", error);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 700 + attempt * 600));
+  }
+  return null;
 }
 
 function navigationLocationPayload(location = {}, coords = {}) {

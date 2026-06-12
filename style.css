@@ -2104,6 +2104,7 @@ select[multiple].form-select {
 .swal2-popup.navigation-popup {
   padding: 0;
   overflow: hidden;
+  max-width: calc(100vw - 1rem);
 }
 
 .navigation-shell {
@@ -2210,6 +2211,16 @@ select[multiple].form-select {
   color: #6c757d;
 }
 
+.navigation-status-chip.starting {
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+}
+
+.navigation-status-chip.failed {
+  background: rgba(220, 53, 69, 0.12);
+  color: #b02a37;
+}
+
 .navigation-stats,
 .navigation-actions {
   display: flex;
@@ -2260,6 +2271,13 @@ select[multiple].form-select {
 .navigation-map .leaflet-popup-content {
   margin: 0.55rem 0.7rem;
   line-height: 1.35;
+  max-width: min(14rem, calc(100vw - 5rem));
+  white-space: normal;
+  word-break: break-word;
+}
+
+.navigation-map .leaflet-popup-content-wrapper {
+  max-width: min(16rem, calc(100vw - 3rem));
 }
 
 .navigation-pip {

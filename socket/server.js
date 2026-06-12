@@ -1696,6 +1696,30 @@ async function emitNavigationState(request, stateRow, event = "kaila.navigation.
   });
 }
 
+async function emitCurrentNavigationStates(socket, user) {
+  if (!socket || !user) return;
+  const [rows] = await pool.query(
+    `SELECT n.*, r.id AS request_id, r.client_id, r.accepted_provider_id, r.status AS request_status
+       FROM job_navigation_states n
+       JOIN requests r ON r.id = n.request_id
+      WHERE n.status IN ('on_the_way', 'nearby', 'arrived')
+        AND r.status IN ('Accepted', 'In Progress', 'Revision Requested')
+        AND (? = 'admin' OR r.client_id = ? OR r.accepted_provider_id = ?)`,
+    [user.role, user.id, user.id]
+  );
+  rows.forEach((row) => {
+    const request = {
+      id: row.request_id,
+      client_id: row.client_id,
+      accepted_provider_id: row.accepted_provider_id,
+      status: row.request_status,
+    };
+    if (canReceiveNavigation(request, user)) {
+      socket.emit("kaila.navigation.state", { requestId: row.request_id, navigationState: mapNavigationState(row) });
+    }
+  });
+}
+
 async function loadNavigationRequest(requestId) {
   const [rows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
   return rows[0] || null;
@@ -3764,6 +3788,9 @@ socketServer.on("connection", (socket) => {
       socket.join(`user:${user.id}`);
       socket.emit("kaila.socket.identified", { userId: user.id });
       acknowledge({ ok: true, userId: user.id });
+      emitCurrentNavigationStates(socket, user).catch((error) => {
+        console.warn("Navigation restore failed:", error.message);
+      });
       for (const [callId, call] of activeCalls) {
         if (call.targetUserId !== user.id || call.answeredByUserId) continue;
         const caller = await getUser(call.callerId);
@@ -3794,8 +3821,10 @@ socketServer.on("connection", (socket) => {
       if (request.accepted_provider_id !== user.id) throw new Error("Only the assigned provider can start travel");
       if (!canUseNavigationStatus(request)) throw new Error("Travel tracking is only available for active accepted jobs");
       const stateRow = await saveNavigationStart(request, user.id, payload.location || null);
-      await emitNavigationState(request, stateRow, "kaila.navigation.start");
       acknowledge({ ok: true, navigationState: mapNavigationState(stateRow) });
+      emitNavigationState(request, stateRow, "kaila.navigation.start").catch((error) => {
+        console.warn("Navigation start broadcast failed:", error.message);
+      });
     } catch (error) {
       acknowledge({ ok: false, error: error.message || "Navigation start failed" });
     }
