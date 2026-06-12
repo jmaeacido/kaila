@@ -1569,13 +1569,14 @@ function adminRequestMetricPanel() {
 
 function renderRequestCard(request) {
   return `
-    <article class="k-card" data-request-card="${escapeAttribute(request.id)}">
-      <div class="d-flex justify-content-between gap-2">
-        <div>
+    <article class="k-card request-card" data-request-card="${escapeAttribute(request.id)}">
+      <div class="request-card-head">
+        <div class="request-title-block">
+          <span class="request-kicker">${escapeHtml(request.urgency || "Request")}</span>
           <h3>${escapeHtml(request.category)}</h3>
           <p>${escapeHtml(request.details)}</p>
         </div>
-        <span class="badge text-bg-${statusColor(request.status)} align-self-start">${escapeHtml(request.status)}</span>
+        <span class="badge text-bg-${statusColor(request.status)} status-pill align-self-start">${escapeHtml(request.status)}</span>
       </div>
       ${renderIdentity(request.clientName, request.clientPhotoUrl, "Client reputation", request.clientReputation)}
       <div class="meta">
@@ -1607,12 +1608,12 @@ function renderRequestCard(request) {
       ${renderAttachments("Dispute media", request.disputeAttachments, request.id)}
       <div class="card-actions">
         ${canEditRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-edit-request="${request.id}"><i class="fa-solid fa-pen"></i> Edit</button>` : ""}
-        ${canAcceptClientPrice(request) ? `<button class="btn btn-sm btn-outline-success" data-accept-client-price="${request.id}">Accept Client Price</button>` : ""}
+        ${canAcceptClientPrice(request) ? `<button class="btn btn-sm btn-outline-success" data-accept-client-price="${request.id}"><i class="fa-solid fa-circle-check"></i> Accept Price</button>` : ""}
         ${canUpdateRequestDistance(request) ? `<button class="btn btn-sm btn-outline-secondary" data-update-request-distance="${request.id}"><i class="fa-solid fa-location-crosshairs"></i> Distance</button>` : ""}
         ${navigationTargetForRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-navigate-request="${request.id}"><i class="fa-solid fa-diamond-turn-right"></i> Navigate</button>` : ""}
-        ${canOffer(request) ? `<button class="btn btn-sm btn-outline-primary" data-offer="${request.id}">Offer</button>` : ""}
-        ${canPass(request) ? `<button class="btn btn-sm btn-outline-secondary" data-pass="${request.id}">Decline/Pass</button>` : ""}
-        ${canViewConversation(request) ? `<button class="btn btn-sm btn-outline-primary" data-conversation="${request.id}">Messages</button>` : ""}
+        ${canOffer(request) ? `<button class="btn btn-sm btn-outline-primary" data-offer="${request.id}"><i class="fa-solid fa-hand-holding-dollar"></i> Offer</button>` : ""}
+        ${canPass(request) ? `<button class="btn btn-sm btn-outline-secondary" data-pass="${request.id}"><i class="fa-solid fa-forward-step"></i> Pass</button>` : ""}
+        ${canViewConversation(request) ? `<button class="btn btn-sm btn-outline-primary" data-conversation="${request.id}"><i class="fa-solid fa-message"></i> Messages</button>` : ""}
         ${jobActionButtons(request)}
         ${canReportJob(request) ? `<button class="btn btn-sm btn-outline-warning" data-report-job="${request.id}"><i class="fa-solid fa-flag"></i> Report Job</button>` : ""}
       </div>
@@ -8422,8 +8423,22 @@ function jobActionButtons(request) {
   const isClient = request.clientId === state.session.id;
   const isProvider = request.acceptedProviderId === state.session.id;
   const isSupport = state.session.role === SUPPORT_ROLE;
+  const icons = {
+    start: "fa-play",
+    provider_complete: "fa-circle-check",
+    client_complete: "fa-shield-halved",
+    request_revision: "fa-rotate-left",
+    rate: "fa-star",
+    cancel: "fa-ban",
+    dispute: "fa-triangle-exclamation",
+    support_resume_job: "fa-play",
+    support_request_revision: "fa-rotate-left",
+    support_release_payment: "fa-peso-sign",
+    support_cancel_request: "fa-ban",
+    resolve_dispute: "fa-handshake",
+  };
   const add = (action, label, style = "outline-secondary") => {
-    buttons.push(`<button class="btn btn-sm btn-${style}" data-request-id="${request.id}" data-job-action="${action}">${label}</button>`);
+    buttons.push(`<button class="btn btn-sm btn-${style}" data-request-id="${request.id}" data-job-action="${action}"><i class="fa-solid ${icons[action] || "fa-circle-dot"}"></i> ${label}</button>`);
   };
 
   if (isSupport && request.status === "Disputed") {
@@ -8446,7 +8461,7 @@ function jobActionButtons(request) {
 }
 
 function emptyCard(title, detail) {
-  return `<article class="k-card"><h3>${escapeHtml(title)}</h3><p>${escapeHtml(detail)}</p></article>`;
+  return `<article class="k-card empty-state"><i class="fa-solid fa-inbox"></i><h3>${escapeHtml(title)}</h3><p>${escapeHtml(detail)}</p></article>`;
 }
 
 function statusColor(status) {
