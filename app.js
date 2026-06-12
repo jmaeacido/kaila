@@ -55,8 +55,6 @@ const NAVIGATION_SEND_INTERVAL_MS = 8000;
 const NAVIGATION_MIN_MOVE_METERS = 12;
 const NAVIGATION_STALE_MS = 45000;
 const NAVIGATION_SPEED_KMH = 22;
-const NAVIGATION_START_TIMEOUT_MS = 20000;
-const NAVIGATION_GPS_START_TIMEOUT_MS = 9000;
 const MOBILE_UPDATE_PROMPT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FALLBACK_GEOGRAPHY = {
   region: "Region X (Northern Mindanao)",
@@ -381,11 +379,6 @@ function nativeKailaBridge() {
 function nativePushNotifications() {
   if (!isNativeApp() && !isCapacitorPluginAvailable("PushNotifications")) return null;
   return window.Capacitor?.Plugins?.PushNotifications || null;
-}
-
-function nativeGeolocation() {
-  if (!isNativeApp() && !isCapacitorPluginAvailable("Geolocation")) return null;
-  return window.Capacitor?.Plugins?.Geolocation || null;
 }
 
 function isCapacitorPluginAvailable(name) {
@@ -6684,24 +6677,6 @@ function ensureSocketConnected(timeout = 12000) {
   });
 }
 
-async function emitNavigationEvent(event, payload = {}, timeout = 10000) {
-  navigationDebug(`${event} emit requested`, { requestId: payload.requestId, hasLocation: Boolean(payload.location), timeout });
-  const connected = await ensureSocketConnected(timeout);
-  if (!connected || !state.socket?.connected) throw new Error("Live navigation is offline. Check your connection and try again.");
-  return new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-    state.socket.timeout(timeout).emit(event, payload, (error, response = {}) => {
-      if (error) {
-        navigationDebug(`${event} acknowledgement timeout`, { requestId: payload.requestId, elapsedMs: Date.now() - startedAt, message: error?.message });
-        return reject(new Error("Navigation update timed out"));
-      }
-      navigationDebug(`${event} acknowledgement received`, { requestId: payload.requestId, elapsedMs: Date.now() - startedAt, ok: response.ok, error: response.error });
-      if (!response.ok) return reject(new Error(response.error || "Navigation update failed"));
-      resolve(response);
-    });
-  });
-}
-
 async function ensureCallSocketReady(timeout = CALL_SIGNAL_TIMEOUT_MS) {
   if (!await ensureSocketConnected(timeout)) return false;
   if (state.socketIdentityUserId === state.session?.id) return true;
@@ -8395,26 +8370,6 @@ async function startNavigationWatch(session = state.navigationSession) {
     navigationDebug("navigation watch failed", { source: state.navigationWatchSource || "unknown", code: error?.code, message: error?.message, denied });
     notify(denied ? "GPS permission denied" : "Tracking paused", denied ? "Use Open Maps for turn-by-turn navigation, or enable location permission in your device settings." : "KAILA could not refresh your location. You can still open Google Maps.", "warning");
   };
-  const nativeGeo = nativeGeolocation();
-  if (nativeGeo?.watchPosition) {
-    try {
-      navigationDebug("Capacitor Geolocation watchPosition start", { highAccuracy: true, timeout: 20000, maximumAge: 8000 });
-      state.navigationWatchSource = "capacitor";
-      state.navigationWatchId = await nativeGeo.watchPosition(
-        { enableHighAccuracy: true, maximumAge: 8000, timeout: 20000 },
-        (position, error) => {
-          if (error) return handleError(error);
-          handlePosition(position);
-        }
-      );
-      notify("Tracking started", "KAILA will update the route until you stop navigation.", "success");
-      return;
-    } catch (error) {
-      state.navigationWatchId = null;
-      state.navigationWatchSource = "";
-      navigationDebug("Capacitor Geolocation watchPosition rejected", { code: error?.code, message: error?.message });
-    }
-  }
   if (!navigator.geolocation) {
     navigationDebug("navigation watch unavailable");
     notify("Tracking unavailable", "This device or browser does not expose GPS location.", "warning");
@@ -8431,11 +8386,7 @@ async function startNavigationWatch(session = state.navigationSession) {
 }
 
 function stopNavigationWatch({ clearSession = false } = {}) {
-  if (state.navigationWatchId && state.navigationWatchSource === "capacitor" && nativeGeolocation()?.clearWatch) {
-    nativeGeolocation().clearWatch({ id: state.navigationWatchId }).catch((error) => navigationDebug("Capacitor Geolocation clearWatch failed", { message: error?.message }));
-  } else if (state.navigationWatchId && navigator.geolocation) {
-    navigator.geolocation.clearWatch(state.navigationWatchId);
-  }
+  if (state.navigationWatchId && navigator.geolocation) navigator.geolocation.clearWatch(state.navigationWatchId);
   state.navigationWatchId = null;
   state.navigationWatchSource = "";
   state.navigationLastSentAt = 0;
@@ -8448,90 +8399,57 @@ function stopNavigationWatch({ clearSession = false } = {}) {
 
 async function startProviderTravel(session = state.navigationSession) {
   if (!session?.request?.id || session.mode !== "provider") return;
-  if (["waiting_to_start", "requesting_permission", "waiting_gps_permission", "waiting_gps_signal", "starting"].includes(navigationPhase(session))) return;
-  navigationDebug("Start Travel activation path entered", { requestId: session.request.id });
-  session.localNavigationPhase = "requesting_permission";
+  if (isNavigationActive(session.navigationState || {})) return;
+  const location = normalizeLocation(state.deviceLocation) || normalizeLocation(session.currentOrigin) || normalizeLocation(session.providerLocation);
+  navigationDebug("Start Travel activation path entered", { requestId: session.request.id, hasLocation: Boolean(location) });
+  activateProviderTravelLocally(session, location);
   session.modalRender?.();
-  let location = state.deviceLocation || null;
-  if (!location) {
-    location = await getDeviceLocation({ maximumAge: 12000, timeout: NAVIGATION_GPS_START_TIMEOUT_MS, silent: true });
-  }
-  if (!location) {
-    const permissionProblem = state.navigationLocationStatus === "permission_denied";
-    session.localNavigationPhase = permissionProblem ? "waiting_gps_permission" : "waiting_gps_signal";
-    session.modalRender?.();
-    navigationDebug("Start Travel continuing without GPS fix", {
-      requestId: session.request.id,
-      status: state.navigationLocationStatus,
-      error: state.navigationLocationError,
-    });
-    notify(permissionProblem ? "Waiting for GPS permission" : "Waiting for GPS signal", "KAILA will confirm travel start and keep waiting for live GPS.", "info");
-  }
-  session.localNavigationPhase = "starting";
-  session.modalRender?.();
-  try {
-    const response = await confirmProviderTravelStart(session, location);
-    handleNavigationStateUpdate({ requestId: session.request.id, navigationState: response.navigationState });
-    if (location) {
-      session.currentOrigin = location;
-      session.providerLocation = location;
-    }
-    session.localNavigationPhase = "";
-    startNavigationWatch(session);
-    notify("Travel started", "Your live location and ETA are now visible to the client for this active job.", "success");
-  } catch (error) {
-    navigationDebug("navigation start timeout handler", {
-      requestId: session.request.id,
-      message: error?.message,
-      hasRoute: Boolean(session.lastRoute || session.providerLocation || session.currentOrigin),
-      gpsStatus: state.navigationLocationStatus,
-      gpsError: state.navigationLocationError,
-    });
-    const permissionProblem = state.navigationLocationStatus === "permission_denied";
-    const waitingForGps = permissionProblem || ["timeout", "signal_unavailable", "unavailable"].includes(state.navigationLocationStatus);
-    session.localNavigationPhase = waitingForGps ? (permissionProblem ? "waiting_gps_permission" : "waiting_gps_signal") : session.providerLocation || session.currentOrigin || session.lastRoute ? "" : "failed";
-    session.modalRender?.();
-    notify(
-      waitingForGps ? (permissionProblem ? "Waiting for GPS permission" : "Waiting for GPS signal") : "Travel confirmation pending",
-      waitingForGps ? "The route is ready. KAILA is still waiting for live GPS before sending location updates." : (error.message || "KAILA could not confirm live travel yet. You can try again or open Maps."),
-      "warning"
-    );
-  }
+  session.pipRender?.();
+  persistProviderTravelStart(session, location);
+  startNavigationWatch(session);
+  notify("Travel started", "Status is On the way. KAILA will share live location when GPS is available.", "success");
 }
 
-async function confirmProviderTravelStart(session, location) {
-  const payload = {
+function activateProviderTravelLocally(session, location = null) {
+  const now = new Date().toISOString();
+  const providerLocation = normalizeLocation(location);
+  const navigationState = {
+    ...(session.navigationState || {}),
+    status: "on_the_way",
+    arrivalState: (session.navigationState?.arrivalState === "nearby" || session.navigationState?.arrivalState === "arrived") ? session.navigationState.arrivalState : "on_the_way",
+    startedAt: session.navigationState?.startedAt || now,
+    updatedAt: now,
+    ...(providerLocation ? { providerLocation, lastLocationAt: now } : {}),
+  };
+  session.localNavigationPhase = "";
+  if (providerLocation) {
+    session.currentOrigin = providerLocation;
+    session.providerLocation = providerLocation;
+  }
+  handleNavigationStateUpdate({ requestId: session.request.id, navigationState });
+}
+
+function persistProviderTravelStart(session, location = null) {
+  emitNavigationBestEffort("kaila.navigation.start", {
     requestId: session.request.id,
     location: navigationLocationPayload(location),
-  };
-  let lastError = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      navigationDebug("kaila.navigation.start emit", { requestId: payload.requestId, attempt: attempt + 1, hasLocation: Boolean(payload.location) });
-      return await emitNavigationEvent("kaila.navigation.start", payload, NAVIGATION_START_TIMEOUT_MS);
-    } catch (error) {
-      lastError = error;
-      navigationDebug("kaila.navigation.start emit failed", { requestId: payload.requestId, attempt: attempt + 1, message: error?.message });
-      const confirmed = await confirmPersistedNavigationStart(session.request.id);
-      if (confirmed) return { ok: true, navigationState: confirmed };
-    }
-  }
-  const confirmed = await confirmPersistedNavigationStart(session.request.id);
-  if (confirmed) return { ok: true, navigationState: confirmed };
-  throw lastError || new Error("Navigation start could not be confirmed");
+  }, session);
 }
 
-async function confirmPersistedNavigationStart(requestId) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const response = await apiFetch(`/api/navigation/${encodeURIComponent(requestId)}`, { method: "GET" });
-      if (isNavigationActive(response.navigationState || {})) return response.navigationState;
-    } catch (error) {
-      console.warn("Navigation start confirmation failed:", error);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 700 + attempt * 600));
+function emitNavigationBestEffort(event, payload = {}, session = state.navigationSession) {
+  if (!state.socket?.connected) {
+    connectSocket();
+    navigationDebug(`${event} deferred; socket offline`, { requestId: payload.requestId });
+    return;
   }
-  return null;
+  navigationDebug(`${event} emit best-effort`, { requestId: payload.requestId, hasLocation: Boolean(payload.location) });
+  state.socket.emit(event, payload, (response = {}) => {
+    if (response?.ok && response.navigationState) {
+      handleNavigationStateUpdate({ requestId: payload.requestId || session?.request?.id, navigationState: response.navigationState });
+      return;
+    }
+    if (response?.error) navigationDebug(`${event} persistence failed`, { requestId: payload.requestId, message: response.error });
+  });
 }
 
 function navigationLocationPayload(location = {}, coords = {}) {
@@ -8557,15 +8475,10 @@ async function sendProviderNavigationLocation(session = state.navigationSession,
   if (!session?.request?.id || session.mode !== "provider" || !shouldSendNavigationLocation(session.currentOrigin)) return;
   state.navigationLastSentAt = Date.now();
   state.navigationLastSentLocation = normalizeLocation(session.currentOrigin);
-  try {
-    const response = await emitNavigationEvent("kaila.navigation.location", {
-      requestId: session.request.id,
-      location: navigationLocationPayload(session.currentOrigin, coords),
-    }, 9000);
-    if (response.navigationState) handleNavigationStateUpdate({ requestId: session.request.id, navigationState: response.navigationState });
-  } catch (error) {
-    notify("Tracking paused", error.message, "warning");
-  }
+  emitNavigationBestEffort("kaila.navigation.location", {
+    requestId: session.request.id,
+    location: navigationLocationPayload(session.currentOrigin, coords),
+  }, session);
 }
 
 async function stopProviderTravel(session = state.navigationSession) {
@@ -8576,13 +8489,17 @@ async function stopProviderTravel(session = state.navigationSession) {
     return;
   }
   stopNavigationWatch();
-  try {
-    const response = await emitNavigationEvent("kaila.navigation.stop", { requestId: session.request.id });
-    if (response.navigationState) handleNavigationStateUpdate({ requestId: session.request.id, navigationState: response.navigationState });
-    notify("Tracking stopped", "Live provider location sharing has stopped.", "info");
-  } catch (error) {
-    notify("Stop failed", error.message, "warning");
-  }
+  handleNavigationStateUpdate({
+    requestId: session.request.id,
+    navigationState: {
+      ...(session.navigationState || {}),
+      status: "stopped",
+      arrivalState: "stopped",
+      updatedAt: new Date().toISOString(),
+    },
+  });
+  emitNavigationBestEffort("kaila.navigation.stop", { requestId: session.request.id }, session);
+  notify("Tracking stopped", "Live provider location sharing has stopped.", "info");
 }
 
 async function refreshNavigationState(requestId) {
@@ -9689,45 +9606,11 @@ async function getDeviceLocation(options = {}) {
     }
     return location;
   };
-  const nativeGeo = nativeGeolocation();
   navigationDebug("geolocation request start", {
-    source: nativeGeo ? "capacitor" : navigator.geolocation ? "browser" : "none",
+    source: navigator.geolocation ? "browser" : "none",
     timeout: settings.timeout,
     highAccuracy: settings.enableHighAccuracy,
   });
-  if (nativeGeo?.getCurrentPosition) {
-    try {
-      if (nativeGeo.checkPermissions) {
-        const current = await nativeGeo.checkPermissions();
-        navigationDebug("Capacitor Geolocation permission check", current);
-        if (current.location !== "granted" && current.coarseLocation !== "granted") {
-          const requested = nativeGeo.requestPermissions ? await nativeGeo.requestPermissions({ permissions: ["location"] }) : current;
-          navigationDebug("Capacitor Geolocation permission request", requested);
-        }
-      }
-      const position = await nativeGeo.getCurrentPosition(settings);
-      const location = normalizeLocation({
-        lat: position?.coords?.latitude,
-        lng: position?.coords?.longitude,
-      });
-      navigationDebug("Capacitor Geolocation coordinate returned", {
-        ok: Boolean(location),
-        accuracy: position?.coords?.accuracy,
-        lat: location?.lat,
-        lng: location?.lng,
-      });
-      if (location) return finish(location, "granted", "");
-    } catch (error) {
-      const denied = /denied|permission/i.test(error?.message || "");
-      const timeout = /timeout/i.test(error?.message || "") || error?.code === 3;
-      navigationDebug("Capacitor Geolocation rejected", { message: error?.message, code: error?.code, denied, timeout });
-      if (denied) {
-        if (!options.silent) notify("Location permission denied", "Enable location permission, pick the pin manually, or open Google Maps without live origin.", "warning");
-        return finish(null, "permission_denied", error?.message || "Location permission denied");
-      }
-      if (isNativeApp()) return finish(null, timeout ? "timeout" : "signal_unavailable", error?.message || "Native geolocation failed");
-    }
-  }
   if (!navigator.geolocation) {
     navigationDebug("navigator.geolocation unavailable");
     if (!options.silent) notify("Location unsupported", "This device or browser does not expose GPS location.", "warning");

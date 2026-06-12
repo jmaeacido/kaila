@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v169-level3-navigation-stable";
+const CACHE_NAME = "kaila-pwa-v170-navigation-activation-restore";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"
