@@ -2093,6 +2093,14 @@ select[multiple].form-select {
   color: #0f2e35;
 }
 
+:root[data-theme="dark"] .navigation-status-chip.on-way {
+  color: #8fe7ef;
+}
+
+:root[data-theme="dark"] .navigation-status-chip.nearby {
+  color: #f5b57f;
+}
+
 .swal2-popup.navigation-popup {
   padding: 0;
   overflow: hidden;
@@ -2157,6 +2165,51 @@ select[multiple].form-select {
   padding: 0.85rem;
 }
 
+.navigation-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.navigation-status-row small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.navigation-status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.9rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.navigation-status-chip.on-way {
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+}
+
+.navigation-status-chip.nearby {
+  background: rgba(239, 123, 69, 0.14);
+  color: #b45309;
+}
+
+.navigation-status-chip.arrived {
+  background: rgba(25, 135, 84, 0.14);
+  color: #198754;
+}
+
+.navigation-status-chip.paused {
+  background: rgba(108, 117, 125, 0.14);
+  color: #6c757d;
+}
+
 .navigation-stats,
 .navigation-actions {
   display: flex;
@@ -2198,6 +2251,15 @@ select[multiple].form-select {
   align-items: start;
   padding: 0.45rem 0;
   border-top: 1px solid var(--line);
+}
+
+.navigation-actions .btn {
+  min-height: 2.25rem;
+}
+
+.navigation-map .leaflet-popup-content {
+  margin: 0.55rem 0.7rem;
+  line-height: 1.35;
 }
 
 .navigation-pip {

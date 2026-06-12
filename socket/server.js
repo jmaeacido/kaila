@@ -83,7 +83,14 @@ const conversationPresence = new Map();
 const directConversationPresence = new Map();
 const activeCalls = new Map();
 const routeDistanceCache = new Map();
+const navigationUpdateRate = new Map();
 let firebaseMessaging = null;
+
+const NAVIGATION_MIN_UPDATE_MS = 5000;
+const NAVIGATION_MIN_MOVE_METERS = 10;
+const NAVIGATION_NEARBY_METERS = 100;
+const NAVIGATION_ARRIVED_METERS = 30;
+const NAVIGATION_SPEED_KMH = 22;
 
 app.use(cors());
 app.use(express.json({ limit: "35mb" }));
@@ -388,6 +395,40 @@ function locationPayload(value = {}) {
   return { lat, lng };
 }
 
+function distanceMeters(from, to) {
+  const start = locationPayload(from);
+  const end = locationPayload(to);
+  if (start.lat === null || end.lat === null) return null;
+  const radiusMeters = 6371000;
+  const latDelta = ((end.lat - start.lat) * Math.PI) / 180;
+  const lngDelta = ((end.lng - start.lng) * Math.PI) / 180;
+  const startLat = (start.lat * Math.PI) / 180;
+  const endLat = (end.lat * Math.PI) / 180;
+  const a = Math.sin(latDelta / 2) ** 2 + Math.cos(startLat) * Math.cos(endLat) * Math.sin(lngDelta / 2) ** 2;
+  return radiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function navigationMetrics(location, destination) {
+  const meters = distanceMeters(location, destination);
+  if (!Number.isFinite(meters)) return { distanceMeters: null, distanceKm: null, etaMinutes: null };
+  const distanceKm = Math.round((meters / 1000) * 10) / 10;
+  const etaMinutes = Math.max(1, Math.ceil((meters / 1000 / NAVIGATION_SPEED_KMH) * 60));
+  return { distanceMeters: Math.round(meters), distanceKm, etaMinutes, source: "estimate" };
+}
+
+function navigationArrivalState(distanceMetersValue) {
+  if (!Number.isFinite(distanceMetersValue)) return "on_the_way";
+  if (distanceMetersValue <= NAVIGATION_ARRIVED_METERS) return "arrived";
+  if (distanceMetersValue <= NAVIGATION_NEARBY_METERS) return "nearby";
+  return "on_the_way";
+}
+
+function nextNavigationArrivalState(previousState = "", measuredState = "on_the_way") {
+  if (previousState === "arrived") return "arrived";
+  if (previousState === "nearby" && measuredState === "on_the_way") return "nearby";
+  return measuredState;
+}
+
 function routeCacheKey(from, to) {
   return [from, to].map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join("|");
 }
@@ -459,10 +500,29 @@ function mysqlDateTime(date) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
+function mysqlDateTimeFromInput(value) {
+  if (!value) return nowMysql();
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return mysqlDateTime(date);
+}
+
 function publicUser(user) {
   if (!user) return null;
   const { password_hash, password, email, ...safe } = user;
   return maskStaffUser(safe);
+}
+
+function publicUserForViewer(user, viewer) {
+  const safe = publicUser(user);
+  if (!safe || viewer?.role !== "customer_service" || safe.id === viewer.id || isStaffRole(safe.role)) return safe;
+  return {
+    ...safe,
+    contactNumber: "",
+    messengerLink: "",
+    preferredContactChannel: "",
+    bestContactTime: "",
+  };
 }
 
 function isStaffRole(role) {
@@ -886,6 +946,67 @@ async function initializeDatabase() {
       CONSTRAINT missed_calls_recipient_fk FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_navigation_states (
+      request_id VARCHAR(64) PRIMARY KEY,
+      provider_id VARCHAR(64) NOT NULL,
+      status ENUM('waiting','on_the_way','nearby','arrived','paused','stopped') NOT NULL DEFAULT 'waiting',
+      arrival_state ENUM('waiting','on_the_way','nearby','arrived','paused','stopped') NOT NULL DEFAULT 'waiting',
+      provider_lat DECIMAL(10, 7) NULL,
+      provider_lng DECIMAL(10, 7) NULL,
+      accuracy_meters DECIMAL(8, 2) NULL,
+      heading DECIMAL(8, 2) NULL,
+      speed_mps DECIMAL(8, 2) NULL,
+      distance_meters INT NULL,
+      eta_minutes INT NULL,
+      started_at DATETIME NULL,
+      nearby_at DATETIME NULL,
+      arrived_at DATETIME NULL,
+      stopped_at DATETIME NULL,
+      last_location_at DATETIME NULL,
+      updated_at DATETIME NOT NULL,
+      INDEX job_navigation_provider_idx (provider_id, status),
+      CONSTRAINT job_navigation_request_fk FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
+      CONSTRAINT job_navigation_provider_fk FOREIGN KEY (provider_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS message_read_states (
+      user_id VARCHAR(64) NOT NULL,
+      scope ENUM('job','direct') NOT NULL,
+      thread_id VARCHAR(160) NOT NULL,
+      read_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      PRIMARY KEY (user_id, scope, thread_id),
+      INDEX message_read_states_thread_idx (scope, thread_id),
+      CONSTRAINT message_read_states_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notification_read_states (
+      user_id VARCHAR(64) NOT NULL,
+      type VARCHAR(40) NOT NULL,
+      read_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      PRIMARY KEY (user_id, type),
+      CONSTRAINT notification_read_states_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS conversation_access_audit (
+      id VARCHAR(64) PRIMARY KEY,
+      viewer_id VARCHAR(64) NOT NULL,
+      viewer_role VARCHAR(40) NOT NULL,
+      scope ENUM('job','direct') NOT NULL,
+      request_id VARCHAR(64) NULL,
+      thread_id VARCHAR(160) NOT NULL,
+      reason VARCHAR(160) NULL,
+      created_at DATETIME NOT NULL,
+      INDEX conversation_access_audit_viewer_idx (viewer_id, created_at),
+      INDEX conversation_access_audit_thread_idx (scope, thread_id, created_at),
+      CONSTRAINT conversation_access_audit_viewer_fk FOREIGN KEY (viewer_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
 }
 
 async function ensureColumn(table, column, definition) {
@@ -1149,6 +1270,31 @@ function mapJobMessageAttachment(row) {
   };
 }
 
+function mapNavigationState(row) {
+  if (!row) return null;
+  return {
+    requestId: row.request_id,
+    providerId: row.provider_id,
+    status: row.status || "waiting",
+    arrivalState: row.arrival_state || row.status || "waiting",
+    providerLocation: row.provider_lat !== null && row.provider_lng !== null ? {
+      lat: Number(row.provider_lat),
+      lng: Number(row.provider_lng),
+      accuracyMeters: row.accuracy_meters !== null ? Number(row.accuracy_meters) : null,
+      heading: row.heading !== null ? Number(row.heading) : null,
+      speedMps: row.speed_mps !== null ? Number(row.speed_mps) : null,
+    } : null,
+    distanceMeters: row.distance_meters !== null ? Number(row.distance_meters) : null,
+    etaMinutes: row.eta_minutes !== null ? Number(row.eta_minutes) : null,
+    startedAt: row.started_at || "",
+    nearbyAt: row.nearby_at || "",
+    arrivedAt: row.arrived_at || "",
+    stoppedAt: row.stopped_at || "",
+    lastLocationAt: row.last_location_at || "",
+    updatedAt: row.updated_at || "",
+  };
+}
+
 async function sanitizeStoredAttachmentNames() {
   const [rows] = await pool.query("SELECT id, original_name, mime_type FROM request_attachments");
   for (const row of rows) {
@@ -1250,7 +1396,7 @@ async function clearUploads() {
   }
 }
 
-function mapRequest(row, offers = [], passedProviderIds = [], attachments = [], reputations = new Map(), profiles = new Map()) {
+function mapRequest(row, offers = [], passedProviderIds = [], attachments = [], reputations = new Map(), profiles = new Map(), navigationStates = new Map()) {
   return {
     id: row.id,
     clientId: row.client_id,
@@ -1314,6 +1460,7 @@ function mapRequest(row, offers = [], passedProviderIds = [], attachments = [], 
     requestAttachments: attachments.filter((attachment) => attachment.stage === "request"),
     completionAttachments: attachments.filter((attachment) => attachment.stage === "completion"),
     disputeAttachments: attachments.filter((attachment) => attachment.stage === "dispute"),
+    navigationState: navigationStates.get(row.id) || null,
     ratingsVisible: Boolean(row.client_rated_at && row.provider_rated_at) || (row.rating_deadline_at && new Date(row.rating_deadline_at).getTime() <= Date.now()),
   };
 }
@@ -1468,6 +1615,209 @@ function directConversationKey(leftUserId, rightUserId) {
   return [leftUserId, rightUserId].sort().join(":");
 }
 
+function directThreadId(leftUserId, rightUserId, requestId = "") {
+  return `${directConversationKey(leftUserId, rightUserId)}:${requestId || ""}`;
+}
+
+async function markMessageThreadRead(userId, scope, threadId, readAt = nowMysql()) {
+  if (!userId || !["job", "direct"].includes(scope) || !threadId || !readAt) return;
+  await pool.query(
+    `INSERT INTO message_read_states (user_id, scope, thread_id, read_at, updated_at)
+     VALUES (?, ?, ?, ?, NOW())
+     ON DUPLICATE KEY UPDATE read_at = GREATEST(read_at, VALUES(read_at)), updated_at = VALUES(updated_at)`,
+    [userId, scope, threadId, readAt]
+  );
+}
+
+async function markNotificationRead(userId, type, readAt = nowMysql()) {
+  const cleanType = String(type || "").trim().slice(0, 40);
+  if (!userId || !cleanType || !readAt) return;
+  await pool.query(
+    `INSERT INTO notification_read_states (user_id, type, read_at, updated_at)
+     VALUES (?, ?, ?, NOW())
+     ON DUPLICATE KEY UPDATE read_at = GREATEST(read_at, VALUES(read_at)), updated_at = VALUES(updated_at)`,
+    [userId, cleanType, readAt]
+  );
+}
+
+async function supportCanViewRequestConversation(request, user) {
+  if (!request?.id || user?.role !== "customer_service") return false;
+  if (!request.accepted_provider_id) return false;
+  if (request.status === "Disputed") return true;
+  const [rows] = await pool.query(
+    "SELECT id FROM moderation_reports WHERE request_id = ? AND status <> 'Closed' LIMIT 1",
+    [request.id]
+  );
+  return Boolean(rows.length);
+}
+
+async function canReadConversation(request, user) {
+  if (!user || !request?.accepted_provider_id) return false;
+  if (request.client_id === user.id || request.accepted_provider_id === user.id) return true;
+  if (user.role === "admin") return true;
+  if (user.role === "customer_service") return supportCanViewRequestConversation(request, user);
+  return false;
+}
+
+function canWriteConversation(request, user) {
+  if (!user || user.role === "admin" || user.role === "customer_service") return false;
+  if (!request?.accepted_provider_id || (request.client_id !== user.id && request.accepted_provider_id !== user.id)) return false;
+  if (request.status === "Disputed") return false;
+  return ["Accepted", "In Progress", "Provider Marked Done", "Revision Requested"].includes(request.status);
+}
+
+function canUseNavigationStatus(request) {
+  return Boolean(request?.accepted_provider_id && ["Accepted", "In Progress", "Revision Requested"].includes(request.status));
+}
+
+function canReceiveNavigation(request, user) {
+  if (!user || !request?.id || !canUseNavigationStatus(request)) return false;
+  if (request.client_id === user.id || request.accepted_provider_id === user.id) return true;
+  if (user.role === "admin") return true;
+  return false;
+}
+
+async function navigationRecipientIds(request) {
+  const ids = new Set([request.client_id, request.accepted_provider_id].filter(Boolean));
+  const [adminRows] = await pool.query("SELECT id FROM users WHERE role = 'admin' AND deleted_at IS NULL");
+  adminRows.forEach((row) => ids.add(row.id));
+  if (await supportCanViewRequestConversation(request, { role: "customer_service" })) {
+    const [supportRows] = await pool.query("SELECT id FROM users WHERE role = 'customer_service' AND deleted_at IS NULL");
+    supportRows.forEach((row) => ids.add(row.id));
+  }
+  return Array.from(ids);
+}
+
+async function emitNavigationState(request, stateRow, event = "kaila.navigation.state") {
+  const payload = { requestId: request.id, navigationState: mapNavigationState(stateRow) };
+  const recipients = await navigationRecipientIds(request);
+  socketServers.forEach((socketServer) => {
+    recipients.forEach((userId) => socketServer.to(`user:${userId}`).emit(event, payload));
+  });
+}
+
+async function loadNavigationRequest(requestId) {
+  const [rows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [requestId]);
+  return rows[0] || null;
+}
+
+async function loadNavigationState(requestId) {
+  const [rows] = await pool.query("SELECT * FROM job_navigation_states WHERE request_id = ? LIMIT 1", [requestId]);
+  return rows[0] || null;
+}
+
+async function saveNavigationStart(request, providerId, location = null) {
+  const cleanLocation = locationPayload(location || {});
+  const destination = locationPayload({ lat: request.job_lat, lng: request.job_lng });
+  const hasLocation = cleanLocation.lat !== null;
+  const metrics = hasLocation ? navigationMetrics(cleanLocation, destination) : {};
+  const previous = await loadNavigationState(request.id);
+  const measuredArrivalState = hasLocation ? navigationArrivalState(metrics.distanceMeters) : "on_the_way";
+  const arrivalState = nextNavigationArrivalState(previous?.arrival_state, measuredArrivalState);
+  const timestamp = nowMysql();
+  await pool.query(
+    `INSERT INTO job_navigation_states (
+      request_id, provider_id, status, arrival_state, provider_lat, provider_lng, accuracy_meters, heading, speed_mps,
+      distance_meters, eta_minutes, started_at, nearby_at, arrived_at, stopped_at, last_location_at, updated_at
+    ) VALUES (?, ?, 'on_the_way', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+    ON DUPLICATE KEY UPDATE provider_id = VALUES(provider_id), status = 'on_the_way', arrival_state = VALUES(arrival_state),
+      provider_lat = VALUES(provider_lat), provider_lng = VALUES(provider_lng), accuracy_meters = VALUES(accuracy_meters),
+      heading = VALUES(heading), speed_mps = VALUES(speed_mps), distance_meters = VALUES(distance_meters), eta_minutes = VALUES(eta_minutes),
+      started_at = COALESCE(started_at, VALUES(started_at)), nearby_at = COALESCE(nearby_at, VALUES(nearby_at)),
+      arrived_at = COALESCE(arrived_at, VALUES(arrived_at)), stopped_at = NULL, last_location_at = VALUES(last_location_at), updated_at = VALUES(updated_at)`,
+    [
+      request.id, providerId, arrivalState,
+      hasLocation ? cleanLocation.lat : null, hasLocation ? cleanLocation.lng : null,
+      Number.isFinite(Number(location?.accuracyMeters ?? location?.accuracy)) ? Number(location.accuracyMeters ?? location.accuracy) : null,
+      Number.isFinite(Number(location?.heading)) ? Number(location.heading) : null,
+      Number.isFinite(Number(location?.speedMps ?? location?.speed)) ? Number(location.speedMps ?? location.speed) : null,
+      metrics.distanceMeters ?? null, metrics.etaMinutes ?? null, timestamp,
+      arrivalState === "nearby" || arrivalState === "arrived" ? timestamp : null,
+      arrivalState === "arrived" ? timestamp : null,
+      hasLocation ? timestamp : null, timestamp,
+    ]
+  );
+  return loadNavigationState(request.id);
+}
+
+async function saveNavigationLocation(request, providerId, location = {}) {
+  const cleanLocation = locationPayload(location);
+  if (cleanLocation.lat === null) {
+    const error = new Error("Valid provider location is required");
+    error.status = 400;
+    throw error;
+  }
+  const key = `${request.id}:${providerId}`;
+  const currentRate = navigationUpdateRate.get(key);
+  const now = Date.now();
+  const moved = currentRate?.location ? distanceMeters(currentRate.location, cleanLocation) : Infinity;
+  if (currentRate && now - currentRate.at < NAVIGATION_MIN_UPDATE_MS && moved < NAVIGATION_MIN_MOVE_METERS) {
+    return { state: await loadNavigationState(request.id), throttled: true, arrivalChanged: false };
+  }
+  navigationUpdateRate.set(key, { at: now, location: cleanLocation });
+  const previous = await loadNavigationState(request.id);
+  const destination = locationPayload({ lat: request.job_lat, lng: request.job_lng });
+  const metrics = navigationMetrics(cleanLocation, destination);
+  const measuredArrivalState = navigationArrivalState(metrics.distanceMeters);
+  const arrivalState = nextNavigationArrivalState(previous?.arrival_state, measuredArrivalState);
+  const timestamp = nowMysql();
+  await pool.query(
+    `INSERT INTO job_navigation_states (
+      request_id, provider_id, status, arrival_state, provider_lat, provider_lng, accuracy_meters, heading, speed_mps,
+      distance_meters, eta_minutes, started_at, nearby_at, arrived_at, stopped_at, last_location_at, updated_at
+    ) VALUES (?, ?, 'on_the_way', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+    ON DUPLICATE KEY UPDATE provider_id = VALUES(provider_id), status = IF(arrival_state = 'arrived' AND VALUES(arrival_state) = 'arrived', 'arrived', 'on_the_way'),
+      arrival_state = VALUES(arrival_state), provider_lat = VALUES(provider_lat), provider_lng = VALUES(provider_lng),
+      accuracy_meters = VALUES(accuracy_meters), heading = VALUES(heading), speed_mps = VALUES(speed_mps),
+      distance_meters = VALUES(distance_meters), eta_minutes = VALUES(eta_minutes), started_at = COALESCE(started_at, VALUES(started_at)),
+      nearby_at = IF(nearby_at IS NULL AND VALUES(nearby_at) IS NOT NULL, VALUES(nearby_at), nearby_at),
+      arrived_at = IF(arrived_at IS NULL AND VALUES(arrived_at) IS NOT NULL, VALUES(arrived_at), arrived_at),
+      stopped_at = NULL, last_location_at = VALUES(last_location_at), updated_at = VALUES(updated_at)`,
+    [
+      request.id, providerId, arrivalState, cleanLocation.lat, cleanLocation.lng,
+      Number.isFinite(Number(location.accuracyMeters ?? location.accuracy)) ? Number(location.accuracyMeters ?? location.accuracy) : null,
+      Number.isFinite(Number(location.heading)) ? Number(location.heading) : null,
+      Number.isFinite(Number(location.speedMps ?? location.speed)) ? Number(location.speedMps ?? location.speed) : null,
+      metrics.distanceMeters, metrics.etaMinutes, timestamp,
+      arrivalState === "nearby" || arrivalState === "arrived" ? timestamp : null,
+      arrivalState === "arrived" ? timestamp : null,
+      timestamp, timestamp,
+    ]
+  );
+  const next = await loadNavigationState(request.id);
+  return { state: next, throttled: false, arrivalChanged: previous?.arrival_state !== next?.arrival_state };
+}
+
+async function saveNavigationStop(request, providerId) {
+  const timestamp = nowMysql();
+  await pool.query(
+    `INSERT INTO job_navigation_states (request_id, provider_id, status, arrival_state, stopped_at, updated_at)
+     VALUES (?, ?, 'stopped', 'stopped', ?, ?)
+     ON DUPLICATE KEY UPDATE status = 'stopped', arrival_state = 'stopped', provider_lat = NULL, provider_lng = NULL,
+       accuracy_meters = NULL, heading = NULL, speed_mps = NULL, distance_meters = NULL, eta_minutes = NULL,
+       stopped_at = VALUES(stopped_at), updated_at = VALUES(updated_at)`,
+    [request.id, providerId, timestamp, timestamp]
+  );
+  navigationUpdateRate.delete(`${request.id}:${providerId}`);
+  return loadNavigationState(request.id);
+}
+
+function staffConversationReason(request, user, fallback = "") {
+  if (request?.status === "Disputed") return "dispute";
+  if (fallback) return fallback;
+  if (user?.role === "admin") return "admin_review";
+  if (user?.role === "customer_service") return "support_review";
+  return "";
+}
+
+async function auditConversationAccess({ viewer, scope, requestId = "", threadId = "", reason = "" } = {}) {
+  if (!viewer || !["admin", "customer_service"].includes(viewer.role) || !scope || !threadId) return;
+  await pool.query(
+    "INSERT INTO conversation_access_audit (id, viewer_id, viewer_role, scope, request_id, thread_id, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    [createId(), viewer.id, viewer.role, scope, requestId || null, threadId, String(reason || "").slice(0, 160) || null, nowMysql()]
+  );
+}
+
 function canInitiateDirectInteraction(user, target) {
   if (!user || !target || user.id === target.id) return false;
   if (user.role === "admin") return ["admin", "ops", "customer_service", "provider", "client"].includes(target.role);
@@ -1510,17 +1860,6 @@ function canInitiateDirectCall(user, target) {
   if (target.role === "customer_service") return ["client", "provider"].includes(user.role);
   if (user.role === "ops") return target.role === "admin";
   return user.role === "admin" && ["admin", "ops", "customer_service"].includes(target.role);
-}
-
-function canReadConversation(request, user) {
-  if (user?.role === "customer_service") return Boolean(request.accepted_provider_id);
-  return Boolean(request.accepted_provider_id) && (request.client_id === user.id || request.accepted_provider_id === user.id);
-}
-
-function canWriteConversation(request, user) {
-  if (user.role === "admin" || !canReadConversation(request, user)) return false;
-  if (request.status === "Disputed") return false;
-  return ["Accepted", "In Progress", "Provider Marked Done", "Revision Requested"].includes(request.status);
 }
 
 function supportDisputeNote(request, outcome, note) {
@@ -1655,6 +1994,7 @@ async function getState(viewer = null) {
   const [offerRows] = await pool.query("SELECT * FROM offers ORDER BY created_at ASC");
   const [attachmentRows] = await pool.query("SELECT * FROM request_attachments ORDER BY created_at ASC");
   const [passRows] = await pool.query("SELECT * FROM request_passes ORDER BY created_at ASC");
+  const [navigationRows] = await pool.query("SELECT * FROM job_navigation_states ORDER BY updated_at DESC");
   const [activityRows] = await pool.query("SELECT * FROM activities ORDER BY created_at DESC LIMIT 80");
   const [validationRows] = ["admin", "ops"].includes(viewer?.role)
     ? await pool.query("SELECT entry.*, operator.role AS operator_role FROM validation_entries AS entry LEFT JOIN users AS operator ON operator.id = entry.operator_id ORDER BY entry.created_at DESC LIMIT 200")
@@ -1690,9 +2030,13 @@ async function getState(viewer = null) {
       : [[]];
   const reputations = buildReputations(requestRows);
   const profiles = new Map(userRows.map((row) => [row.id, mapUser(row, reputations.get(row.id) || emptyReputation())]));
+  const supportVisibleRequestIds = new Set(reportRows.map((row) => row.request_id).filter(Boolean));
+  requestRows
+    .filter((row) => row.status === "Disputed")
+    .forEach((row) => supportVisibleRequestIds.add(row.id));
   if (viewer?.role === "ops") {
     return {
-      users: Array.from(profiles.values()).filter((user) => user.id === viewer.id || user.role === "admin").map(publicUser),
+      users: Array.from(profiles.values()).filter((user) => user.id === viewer.id || user.role === "admin").map((user) => publicUserForViewer(user, viewer)),
       providers: [],
       requests: [],
       activities: [],
@@ -1708,6 +2052,7 @@ async function getState(viewer = null) {
   const passedOfferKeys = new Set(passRows.map((row) => `${row.request_id}:${row.provider_id}`));
   for (const row of offerRows) {
     if (passedOfferKeys.has(`${row.request_id}:${row.provider_id}`)) continue;
+    if (viewer?.role === "customer_service" && !supportVisibleRequestIds.has(row.request_id)) continue;
     if (viewer && !["admin", "customer_service"].includes(viewer.role) && clientByRequest.get(row.request_id) !== viewer.id && row.provider_id !== viewer.id) continue;
     const acceptedProviderId = acceptedProviderByRequest.get(row.request_id);
     if (acceptedProviderId && row.provider_id !== acceptedProviderId) continue;
@@ -1725,9 +2070,11 @@ async function getState(viewer = null) {
     if (!attachmentsByRequest.has(row.request_id)) attachmentsByRequest.set(row.request_id, []);
     attachmentsByRequest.get(row.request_id).push(mapAttachment(row));
   }
+  const rawNavigationByRequest = new Map(navigationRows.map((row) => [row.request_id, row]));
   const viewerProvider = canUseMarketplaceRole(viewer) ? providerRows.find((row) => row.user_id === viewer?.id && row.status === "Active") : null;
   const visibleRequestRows = requestRows.filter((row) => {
-    if (!viewer || ["admin", "customer_service"].includes(viewer.role)) return true;
+    if (!viewer || viewer.role === "admin") return true;
+    if (viewer.role === "customer_service") return supportVisibleRequestIds.has(row.id);
     if (row.client_id === viewer.id || row.accepted_provider_id === viewer.id) return true;
     if (!viewerProvider) return false;
     if (row.accepted_provider_id) return false;
@@ -1735,11 +2082,21 @@ async function getState(viewer = null) {
     if (passedOfferKeys.has(`${row.id}:${viewer.id}`)) return false;
     return hasCategory(viewerProvider.category, row.category);
   });
+  const visibleRequestIds = new Set(visibleRequestRows.map((row) => row.id));
+  const navigationByRequest = new Map();
+  for (const [requestId, navRow] of rawNavigationByRequest) {
+    if (!visibleRequestIds.has(requestId)) continue;
+    const request = requestRows.find((row) => row.id === requestId);
+    if (!request) continue;
+    const canSeeExact = viewer && (viewer.role === "admin" || request.client_id === viewer.id || request.accepted_provider_id === viewer.id || (viewer.role === "customer_service" && supportVisibleRequestIds.has(request.id)));
+    if (!canSeeExact) continue;
+    navigationByRequest.set(requestId, mapNavigationState(navRow));
+  }
 
   return {
-    users: Array.from(profiles.values()).map(publicUser),
+    users: Array.from(profiles.values()).map((user) => publicUserForViewer(user, viewer)),
     providers: providerRows.map((row) => mapProvider(row, reputations.get(row.user_id) || emptyReputation(), profiles.get(row.user_id)?.photoUrl || "")),
-    requests: visibleRequestRows.map((row) => mapRequest(row, offersByRequest.get(row.id) || [], passesByRequest.get(row.id) || [], attachmentsByRequest.get(row.id) || [], reputations, profiles)),
+    requests: visibleRequestRows.map((row) => mapRequest(row, offersByRequest.get(row.id) || [], passesByRequest.get(row.id) || [], attachmentsByRequest.get(row.id) || [], reputations, profiles, navigationByRequest)),
     activities: activityRows.map(mapActivity),
     blocks: blockRows,
     reports: reportRows.map(mapReport),
@@ -1759,6 +2116,10 @@ async function messageSummaryFor(user) {
       FROM job_messages AS message
       JOIN users AS sender ON sender.id = message.sender_id
       JOIN requests AS request ON request.id = message.request_id
+      LEFT JOIN message_read_states AS read_state
+        ON read_state.user_id = ?
+       AND read_state.scope = 'job'
+       AND read_state.thread_id = message.request_id
       JOIN (
         SELECT request_id, MAX(created_at) AS latest_at
         FROM job_messages
@@ -1768,16 +2129,21 @@ async function messageSummaryFor(user) {
       WHERE message.sender_id <> ?
         AND request.accepted_provider_id IS NOT NULL
         AND (request.client_id = ? OR request.accepted_provider_id = ?)
+        AND (read_state.read_at IS NULL OR message.created_at > read_state.read_at)
       ORDER BY message.created_at DESC
       LIMIT 50
     `,
-    [user.id, user.id, user.id, user.id]
+    [user.id, user.id, user.id, user.id, user.id]
   );
   const [directRows] = await pool.query(
     `
       SELECT message.*, sender.role AS sender_role
       FROM direct_messages AS message
       JOIN users AS sender ON sender.id = message.sender_id
+      LEFT JOIN message_read_states AS read_state
+        ON read_state.user_id = ?
+       AND read_state.scope = 'direct'
+       AND read_state.thread_id = CONCAT(LEAST(message.sender_id, message.recipient_id), ':', GREATEST(message.sender_id, message.recipient_id), ':', COALESCE(message.request_id, ''))
       JOIN (
         SELECT sender_id, COALESCE(request_id, '') AS request_key, MAX(created_at) AS latest_at
         FROM direct_messages
@@ -1785,10 +2151,11 @@ async function messageSummaryFor(user) {
         GROUP BY sender_id, COALESCE(request_id, '')
       ) AS latest ON latest.sender_id = message.sender_id AND latest.request_key = COALESCE(message.request_id, '') AND latest.latest_at = message.created_at
       WHERE message.recipient_id = ?
+        AND (read_state.read_at IS NULL OR message.created_at > read_state.read_at)
       ORDER BY message.created_at DESC
       LIMIT 50
     `,
-    [user.id, user.id]
+    [user.id, user.id, user.id]
   );
   return {
     jobMessages: jobRows.map((row) => ({ requestId: row.request_id, title: row.category, message: mapMessage(row) })),
@@ -1801,10 +2168,26 @@ async function messageSummaryFor(user) {
 
 async function notificationSummaryFor(user) {
   if (!user || user.role === "ops") return { activities: [], missedCalls: [] };
-  const [activityRows] = user.role === "admin" ? await pool.query("SELECT * FROM activities ORDER BY created_at DESC LIMIT 80") : [[]];
+  const [activityRows] = user.role === "admin" ? await pool.query(`
+    SELECT activity.*
+    FROM activities AS activity
+    LEFT JOIN notification_read_states AS read_state
+      ON read_state.user_id = ? AND read_state.type = 'activity'
+    WHERE read_state.read_at IS NULL OR activity.created_at > read_state.read_at
+    ORDER BY activity.created_at DESC
+    LIMIT 80
+  `, [user.id]) : [[]];
   const [missedCallRows] = await pool.query(
-    "SELECT call_log.*, caller.role AS caller_role FROM missed_calls AS call_log JOIN users AS caller ON caller.id = call_log.caller_id WHERE call_log.recipient_id = ? ORDER BY call_log.created_at DESC LIMIT 30",
-    [user.id]
+    `SELECT call_log.*, caller.role AS caller_role
+     FROM missed_calls AS call_log
+     JOIN users AS caller ON caller.id = call_log.caller_id
+     LEFT JOIN notification_read_states AS read_state
+       ON read_state.user_id = ? AND read_state.type = 'missedCall'
+     WHERE call_log.recipient_id = ?
+       AND (read_state.read_at IS NULL OR call_log.created_at > read_state.read_at)
+     ORDER BY call_log.created_at DESC
+     LIMIT 30`,
+    [user.id, user.id]
   );
   return {
     activities: activityRows.map(mapActivity),
@@ -2269,6 +2652,24 @@ app.get("/api/notification-summary", requireUser, async (req, res) => {
   res.json(await notificationSummaryFor(req.user));
 });
 
+app.post("/api/message-read", requireUser, async (req, res) => {
+  const scope = String(req.body?.scope || "").trim();
+  const threadId = String(req.body?.threadId || "").trim();
+  const readAt = mysqlDateTimeFromInput(String(req.body?.readAt || "").trim());
+  if (!["job", "direct"].includes(scope) || !threadId) return res.status(400).json({ error: "Message scope and thread are required" });
+  if (!readAt) return res.status(400).json({ error: "Valid read timestamp is required" });
+  await markMessageThreadRead(req.user.id, scope, threadId, readAt);
+  res.json({ ok: true });
+});
+
+app.post("/api/notification-read", requireUser, async (req, res) => {
+  const types = Array.isArray(req.body?.types) ? req.body.types : [req.body?.type];
+  const readAt = mysqlDateTimeFromInput(String(req.body?.readAt || "").trim());
+  if (!readAt) return res.status(400).json({ error: "Valid read timestamp is required" });
+  await Promise.all(types.map((type) => markNotificationRead(req.user.id, type, readAt)));
+  res.json({ ok: true });
+});
+
 app.get("/api/mobile-update", (req, res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
@@ -2286,6 +2687,13 @@ app.get("/api/route-distance", requireUser, async (req, res) => {
     console.warn("Route distance lookup failed:", error.message);
     res.status(502).json({ error: "Route distance unavailable" });
   }
+});
+
+app.get("/api/navigation/:requestId", requireUser, async (req, res) => {
+  const request = await loadNavigationRequest(req.params.requestId);
+  if (!request) return res.status(404).json({ error: "Request not found" });
+  if (!canReceiveNavigation(request, req.user)) return res.status(403).json({ error: "Navigation is only available to this active job" });
+  res.json({ requestId: request.id, navigationState: mapNavigationState(await loadNavigationState(request.id)) });
 });
 
 app.post("/api/push-token", requireUser, async (req, res) => {
@@ -2899,6 +3307,11 @@ app.post("/api/requests/:id/action", requireUser, async (req, res) => {
   );
   await addActivity(activityTitle, activityDetail);
   broadcast("kaila.request.action", { requestId: req.params.id, action, status: nextStatus, actorId: req.user.id });
+  if (!["Accepted", "In Progress", "Revision Requested"].includes(nextStatus) && request.accepted_provider_id) {
+    saveNavigationStop({ ...request, id: req.params.id }, request.accepted_provider_id)
+      .then((navigationState) => emitNavigationState({ ...request, id: req.params.id }, navigationState, "kaila.navigation.stop"))
+      .catch((error) => console.warn("Navigation auto-stop failed:", error.message));
+  }
   if (["Cancelled", "Accepted", "In Progress", "Provider Marked Done", "Payment Released", "Rated / Closed", "Resolved"].includes(nextStatus)) {
     clearJobRequestNotification(await requestAlertUserIds(request), req.params.id).catch((error) => console.warn("Action clear push failed:", error.message));
   }
@@ -2909,7 +3322,7 @@ app.get("/api/requests/:id/messages", requireUser, async (req, res) => {
   const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
   if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
   const request = requestRows[0];
-  if (!canReadConversation(request, req.user)) return res.status(403).json({ error: "Conversation is only available to the confirmed job parties" });
+  if (!await canReadConversation(request, req.user)) return res.status(403).json({ error: "Conversation is only available to confirmed job parties or authorized support review" });
   const [messageRows] = await pool.query(
     "SELECT message.*, sender.role AS sender_role FROM job_messages AS message JOIN users AS sender ON sender.id = message.sender_id WHERE message.request_id = ? ORDER BY message.created_at ASC",
     [req.params.id]
@@ -2931,6 +3344,18 @@ app.get("/api/requests/:id/messages", requireUser, async (req, res) => {
   for (const row of reactionRows) {
     if (!reactionsByMessage.has(row.message_id)) reactionsByMessage.set(row.message_id, []);
     reactionsByMessage.get(row.message_id).push({ userId: row.user_id, reaction: row.reaction });
+  }
+  const incomingMessageRows = messageRows.filter((row) => row.sender_id !== req.user.id);
+  const latestIncoming = incomingMessageRows.length ? incomingMessageRows[incomingMessageRows.length - 1].created_at : "";
+  if (latestIncoming) await markMessageThreadRead(req.user.id, "job", req.params.id, latestIncoming);
+  if (["admin", "customer_service"].includes(req.user.role) && request.client_id !== req.user.id && request.accepted_provider_id !== req.user.id) {
+    await auditConversationAccess({
+      viewer: req.user,
+      scope: "job",
+      requestId: req.params.id,
+      threadId: req.params.id,
+      reason: staffConversationReason(request, req.user, String(req.query?.reason || "")),
+    });
   }
   res.json({
     messages: messageRows.map((row) => ({ ...mapMessage(row, reactionsByMessage.get(row.id) || []), attachments: attachmentsByMessage.get(row.id) || [] })),
@@ -2998,7 +3423,7 @@ app.post("/api/requests/:id/typing", requireUser, async (req, res) => {
 app.post("/api/requests/:id/presence", requireUser, async (req, res) => {
   const [requestRows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
   if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
-  if (!canReadConversation(requestRows[0], req.user)) return res.status(403).json({ error: "Conversation is only available to the confirmed job parties" });
+  if (!await canReadConversation(requestRows[0], req.user)) return res.status(403).json({ error: "Conversation is only available to confirmed job parties or authorized support review" });
   const room = conversationPresence.get(req.params.id) || new Map();
   if (req.body?.active) room.set(req.user.id, Date.now());
   else room.delete(req.user.id);
@@ -3049,8 +3474,21 @@ app.get("/api/direct-conversations/:userId/messages", requireUser, async (req, r
     if (!attachmentsByMessage.has(row.message_id)) attachmentsByMessage.set(row.message_id, []);
     attachmentsByMessage.get(row.message_id).push(mapDirectAttachment(row));
   }
+  const threadId = directThreadId(req.user.id, target.id, requestId);
+  const incomingRows = messageRows.filter((row) => row.recipient_id === req.user.id);
+  const latestIncoming = incomingRows.length ? incomingRows[incomingRows.length - 1].created_at : "";
+  if (latestIncoming) await markMessageThreadRead(req.user.id, "direct", threadId, latestIncoming);
+  if (["admin", "customer_service"].includes(req.user.role)) {
+    await auditConversationAccess({
+      viewer: req.user,
+      scope: "direct",
+      requestId,
+      threadId,
+      reason: requestId ? "support_context" : String(req.query?.reason || "") || "direct_support",
+    });
+  }
   res.json({
-    target: publicUser(target),
+    target: publicUserForViewer(target, req.user),
     messages: messageRows.map((row) => ({ ...mapDirectMessage(row), attachments: attachmentsByMessage.get(row.id) || [] })),
     writable: await canWriteDirectConversation(req.user, target, requestId),
     callable: canInitiateDirectCall(req.user, target),
@@ -3283,6 +3721,9 @@ app.post("/api/admin/truncate", requireUser, async (req, res) => {
   if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
   await pool.query("SET FOREIGN_KEY_CHECKS = 0");
   await pool.query("TRUNCATE TABLE activities");
+  await pool.query("TRUNCATE TABLE conversation_access_audit");
+  await pool.query("TRUNCATE TABLE notification_read_states");
+  await pool.query("TRUNCATE TABLE message_read_states");
   await pool.query("TRUNCATE TABLE job_message_reactions");
   await pool.query("TRUNCATE TABLE missed_calls");
   await pool.query("TRUNCATE TABLE direct_message_attachments");
@@ -3341,6 +3782,65 @@ socketServer.on("connection", (socket) => {
     } catch (error) {
       console.error("Socket identity failed:", error);
       acknowledge({ ok: false, error: error.message || "Socket identity failed" });
+    }
+  });
+
+  socket.on("kaila.navigation.start", async (payload = {}, acknowledge = () => {}) => {
+    try {
+      const user = await getUser(socket.data.userId);
+      if (!user) throw new Error("Sign in before starting navigation");
+      const request = await loadNavigationRequest(String(payload.requestId || ""));
+      if (!request) throw new Error("Request not found");
+      if (request.accepted_provider_id !== user.id) throw new Error("Only the assigned provider can start travel");
+      if (!canUseNavigationStatus(request)) throw new Error("Travel tracking is only available for active accepted jobs");
+      const stateRow = await saveNavigationStart(request, user.id, payload.location || null);
+      await emitNavigationState(request, stateRow, "kaila.navigation.start");
+      acknowledge({ ok: true, navigationState: mapNavigationState(stateRow) });
+    } catch (error) {
+      acknowledge({ ok: false, error: error.message || "Navigation start failed" });
+    }
+  });
+
+  socket.on("kaila.navigation.location", async (payload = {}, acknowledge = () => {}) => {
+    try {
+      const user = await getUser(socket.data.userId);
+      if (!user) throw new Error("Sign in before sharing location");
+      const request = await loadNavigationRequest(String(payload.requestId || ""));
+      if (!request) throw new Error("Request not found");
+      if (request.accepted_provider_id !== user.id) throw new Error("Only the assigned provider can share travel location");
+      if (!canUseNavigationStatus(request)) throw new Error("Travel tracking is only available for active accepted jobs");
+      const result = await saveNavigationLocation(request, user.id, payload.location || {});
+      if (result.throttled) return acknowledge({ ok: true, throttled: true, navigationState: mapNavigationState(result.state) });
+      await emitNavigationState(request, result.state, "kaila.navigation.location");
+      if (result.arrivalChanged && ["nearby", "arrived"].includes(result.state?.arrival_state)) {
+        await emitNavigationState(request, result.state, "kaila.navigation.arrival_state");
+        pushNotification([request.client_id, request.accepted_provider_id].filter(Boolean), {
+          type: "navigation",
+          title: result.state.arrival_state === "arrived" ? "Provider arrived" : "Provider nearby",
+          body: result.state.arrival_state === "arrived" ? "The provider has arrived at the job site." : "The provider is near the job site.",
+          data: { action: "job", requestId: request.id, arrivalState: result.state.arrival_state, createdAt: nowMysql() },
+        }).catch((error) => console.warn("Navigation arrival push failed:", error.message));
+      }
+      acknowledge({ ok: true, navigationState: mapNavigationState(result.state) });
+    } catch (error) {
+      acknowledge({ ok: false, error: error.message || "Navigation location failed" });
+    }
+  });
+
+  socket.on("kaila.navigation.stop", async (payload = {}, acknowledge = () => {}) => {
+    try {
+      const user = await getUser(socket.data.userId);
+      if (!user) throw new Error("Sign in before stopping navigation");
+      const request = await loadNavigationRequest(String(payload.requestId || ""));
+      if (!request) throw new Error("Request not found");
+      if (request.accepted_provider_id !== user.id && user.role !== "admin") throw new Error("Only the assigned provider can stop live travel sharing");
+      const providerId = request.accepted_provider_id;
+      if (!providerId) throw new Error("No assigned provider for this job");
+      const stateRow = await saveNavigationStop(request, providerId);
+      await emitNavigationState(request, stateRow, "kaila.navigation.stop");
+      acknowledge({ ok: true, navigationState: mapNavigationState(stateRow) });
+    } catch (error) {
+      acknowledge({ ok: false, error: error.message || "Navigation stop failed" });
     }
   });
 

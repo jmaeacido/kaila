@@ -51,6 +51,10 @@ const GEOGRAPHY_SOURCE = "assets/Gingoog City PSGC.xlsx";
 const DEFAULT_MAP_CENTER = { lat: 8.826, lng: 125.117 };
 const ROUTE_DISTANCE_CACHE_MS = 6 * 60 * 60 * 1000;
 const ROUTE_DISTANCE_DIRECT_URL = "https://router.project-osrm.org/route/v1/driving";
+const NAVIGATION_SEND_INTERVAL_MS = 8000;
+const NAVIGATION_MIN_MOVE_METERS = 12;
+const NAVIGATION_STALE_MS = 45000;
+const NAVIGATION_SPEED_KMH = 22;
 const MOBILE_UPDATE_PROMPT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FALLBACK_GEOGRAPHY = {
   region: "Region X (Northern Mindanao)",
@@ -105,6 +109,8 @@ const state = {
   deviceLocationCheckedAt: 0,
   navigationWatchId: null,
   navigationSession: null,
+  navigationLastSentAt: 0,
+  navigationLastSentLocation: null,
   routeDistanceCache: new Map(),
   validationSyncing: false,
   typingTimer: null,
@@ -1659,25 +1665,30 @@ function canUpdateRequestDistance(request = {}) {
 function navigationTargetForRequest(request = {}) {
   if (!state.session || !request?.id) return null;
   if (!canNavigateRequest(request)) return null;
+  const destination = normalizeLocation(request.jobLocation);
+  if (!destination) return null;
   if (request.acceptedProviderId === state.session.id) {
-    const destination = normalizeLocation(request.jobLocation);
-    if (!destination) return null;
     return {
       destination,
       label: "Job site",
       detail: request.exactLocationNotes || request.area || "",
+      mode: "provider",
     };
   }
   if (request.clientId === state.session.id) {
-    const offer = acceptedOffer(request);
-    const destination = normalizeLocation(offer?.providerLocation);
-    if (!destination) return null;
     return {
       destination,
-      label: offer.providerName || "Selected provider",
-      detail: "Provider location from accepted offer",
+      label: userProfile(request.acceptedProviderId).name || "Provider",
+      detail: request.exactLocationNotes || request.area || "",
+      mode: "customer",
     };
   }
+  if (["admin", SUPPORT_ROLE].includes(state.session.role) && request.navigationState) return {
+    destination,
+    label: "Live job tracking",
+    detail: request.area || "",
+    mode: "viewer",
+  };
   return null;
 }
 
@@ -1696,13 +1707,56 @@ function syncNavigationSessionAvailability() {
   stopNavigationWatch({ clearSession: true });
 }
 
+function navigationStatusText(nav = {}) {
+  const status = nav.arrivalState || nav.status || "waiting";
+  if (status === "arrived") return "Provider arrived";
+  if (status === "nearby") return "Provider nearby";
+  if (status === "on_the_way") return "On the way";
+  if (status === "paused") return "Tracking paused";
+  if (status === "stopped") return "Tracking stopped";
+  return "Waiting to start travel";
+}
+
+function navigationStatusClass(nav = {}) {
+  const status = nav.arrivalState || nav.status || "waiting";
+  if (status === "arrived") return "arrived";
+  if (status === "nearby") return "nearby";
+  if (status === "on_the_way") return "on-way";
+  if (status === "stopped" || status === "paused") return "paused";
+  return "waiting";
+}
+
+function formatNavigationDistance(nav = {}) {
+  const meters = Number(nav.distanceMeters);
+  if (!Number.isFinite(meters)) return "";
+  return formatDistanceKm(meters / 1000);
+}
+
+function formatRelativeTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+  if (seconds < 10) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  return formatDateTime(value);
+}
+
 function renderNavigationCard(request = {}) {
   const target = navigationTargetForRequest(request);
   if (!target) return "";
+  const nav = request.navigationState || {};
+  const status = navigationStatusText(nav);
+  const providerLine = nav.providerLocation
+    ? `${formatNavigationDistance(nav)}${nav.etaMinutes ? ` · ${nav.etaMinutes} min ETA` : ""}`
+    : target.mode === "provider" ? "Ready to share live travel." : "Waiting for provider to start travel.";
   return `
     <div class="offer navigation-card">
-      <strong><i class="fa-solid fa-route"></i> Navigation ready</strong>
-      <div>${escapeHtml(target.label)}${target.detail ? ` - ${escapeHtml(target.detail)}` : ""}</div>
+      <strong><i class="fa-solid fa-route"></i> ${escapeHtml(status)}</strong>
+      <div>${escapeHtml(providerLine)}</div>
+      ${nav.lastLocationAt ? `<small>Last updated ${escapeHtml(formatRelativeTime(nav.lastLocationAt))}</small>` : ""}
     </div>
   `;
 }
@@ -1827,7 +1881,9 @@ async function openRequestNavigation(requestId) {
     notify("Navigation unavailable", "This request does not have a saved destination yet.", "warning");
     return;
   }
-  const origin = state.deviceLocation || await getDeviceLocation({ maximumAge: 30000, timeout: 8000, silent: true });
+  const origin = request.acceptedProviderId === state.session?.id
+    ? (state.deviceLocation || await getDeviceLocation({ maximumAge: 30000, timeout: 8000, silent: true }))
+    : normalizeLocation(request.navigationState?.providerLocation);
   await openNavigationModal({ request, target, origin });
 }
 
@@ -1848,6 +1904,9 @@ function ensureNavigationSession({ request = {}, target = {}, origin = null } = 
     state.navigationSession.label = target.label || "Destination";
     state.navigationSession.detail = target.detail || "";
     state.navigationSession.currentOrigin = currentOrigin;
+    state.navigationSession.navigationState = request.navigationState || null;
+    state.navigationSession.mode = target.mode || "viewer";
+    state.navigationSession.providerLocation = normalizeLocation(request.navigationState?.providerLocation) || currentOrigin;
     return state.navigationSession;
   }
   stopNavigationWatch({ clearSession: true });
@@ -1858,6 +1917,9 @@ function ensureNavigationSession({ request = {}, target = {}, origin = null } = 
     destination,
     label: target.label || "Destination",
     detail: target.detail || "",
+    mode: target.mode || "viewer",
+    navigationState: request.navigationState || null,
+    providerLocation: normalizeLocation(request.navigationState?.providerLocation) || currentOrigin,
     currentOrigin,
     minimized: false,
     modalOpen: false,
@@ -6489,6 +6551,11 @@ function connectSocket(force = false) {
     state.socket.on("kaila.message.reaction", ({ requestId }) => refreshConversation(requestId));
     state.socket.on("kaila.presence.changed", ({ requestId }) => updateConversationPresence(requestId));
     state.socket.on("kaila.direct-presence.changed", ({ userIds }) => updateDirectConversationPresence(userIds));
+    state.socket.on("kaila.navigation.start", handleNavigationStateUpdate);
+    state.socket.on("kaila.navigation.location", handleNavigationStateUpdate);
+    state.socket.on("kaila.navigation.arrival_state", handleNavigationStateUpdate);
+    state.socket.on("kaila.navigation.stop", handleNavigationStateUpdate);
+    state.socket.on("kaila.navigation.state", handleNavigationStateUpdate);
     state.socket.on("kaila.socket.identified", ({ userId } = {}) => {
       state.socketIdentityUserId = userId || "";
     });
@@ -6531,6 +6598,18 @@ function ensureSocketConnected(timeout = 12000) {
       clearInterval(timer);
       resolve(result);
     }
+  });
+}
+
+async function emitNavigationEvent(event, payload = {}, timeout = 10000) {
+  const connected = await ensureSocketConnected(timeout);
+  if (!connected || !state.socket?.connected) throw new Error("Live navigation is offline. Check your connection and try again.");
+  return new Promise((resolve, reject) => {
+    state.socket.timeout(timeout).emit(event, payload, (error, response = {}) => {
+      if (error) return reject(new Error("Navigation update timed out"));
+      if (!response.ok) return reject(new Error(response.error || "Navigation update failed"));
+      resolve(response);
+    });
   });
 }
 
@@ -6599,6 +6678,25 @@ function upsertRequest(request = {}) {
   if (index >= 0) state.requests[index] = { ...state.requests[index], ...request };
   else state.requests = [request, ...state.requests];
   render();
+}
+
+function handleNavigationStateUpdate({ requestId, navigationState } = {}) {
+  if (!requestId || !navigationState) return;
+  const request = state.requests.find((item) => item.id === requestId);
+  if (request) request.navigationState = navigationState;
+  if (state.navigationSession?.request?.id === requestId) {
+    state.navigationSession.request = request || state.navigationSession.request;
+    state.navigationSession.navigationState = navigationState;
+    state.navigationSession.providerLocation = normalizeLocation(navigationState.providerLocation);
+    state.navigationSession.lastRoute = null;
+    state.navigationSession.modalRender?.();
+    state.navigationSession.pipRender?.();
+  }
+  renderRequests();
+  renderInbox();
+  if (["nearby", "arrived"].includes(navigationState.arrivalState)) {
+    notify(navigationState.arrivalState === "arrived" ? "Provider arrived" : "Provider nearby", navigationState.arrivalState === "arrived" ? "Arrival is recorded, but the job still needs normal completion." : "The provider is close to the job site.", "info");
+  }
 }
 
 function hasProviderCapability() {
@@ -7161,16 +7259,26 @@ async function syncUnreadNotificationSummaries() {
   try {
     const summary = await apiFetch("/api/notification-summary", { method: "GET", silentError: true });
     state.missedCalls = Array.isArray(summary.missedCalls) ? summary.missedCalls : [];
+    const serverNotificationKeys = new Set();
     if (shouldBadgeActivityNotifications()) {
       (summary.activities || []).forEach((activity) => {
         if (!isUnreadNotification("activity", activity.createdAt)) return;
+        serverNotificationKeys.add(`activity:${activity.id}`);
         addUnreadNotification(notificationItemFromActivity(activity));
       });
     }
     state.missedCalls.forEach((missedCall) => {
       if (!isUnreadNotification("missedCall", missedCall.createdAt)) return;
+      serverNotificationKeys.add(`missedCall:${missedCall.id}`);
       addUnreadNotification(notificationItemFromMissedCall(missedCall));
     });
+    const beforeCount = state.unreadNotificationItems.length;
+    state.unreadNotificationItems = state.unreadNotificationItems.filter((item) => serverNotificationKeys.has(item.key));
+    state.unreadNotifications = state.unreadNotificationItems.length;
+    if (beforeCount !== state.unreadNotificationItems.length) {
+      persistAttentionBadges();
+      renderAttentionBadges();
+    }
     renderActivity();
   } catch (error) {
     if (error.status === 404) return;
@@ -7231,6 +7339,11 @@ function markNotificationTypeReadAt(type, readAt) {
   userReads[type] = readAt;
   reads[state.session.id] = userReads;
   localStorage.setItem(STORAGE.notificationReads, JSON.stringify(reads));
+  apiFetch("/api/notification-read", {
+    method: "POST",
+    body: JSON.stringify({ type, readAt }),
+    silentError: true,
+  }).catch(() => {});
 }
 
 function notificationReadAt(type) {
@@ -7243,9 +7356,11 @@ async function syncUnreadMessageSummaries() {
   state.messageSummarySyncing = true;
   try {
     const summary = await apiFetch("/api/message-summary", { method: "GET", silentError: true });
+    const serverUnreadKeys = new Set();
     (summary.jobMessages || []).forEach((item) => {
       const message = item.message || {};
       if (!message.id || message.senderId === state.session.id || !isUnreadConversationMessage("job", item.requestId, message)) return;
+      serverUnreadKeys.add(`job:${item.requestId}`);
       addUnreadMessage({
         type: "job",
         id: item.requestId,
@@ -7259,6 +7374,7 @@ async function syncUnreadMessageSummaries() {
       const message = item.message || {};
       const key = directConversationMessageKey(item.userId, item.requestId || "");
       if (!message.id || message.senderId === state.session.id || !isUnreadConversationMessage("direct", key, message)) return;
+      serverUnreadKeys.add(`direct:${key}`);
       addUnreadMessage({
         type: "direct",
         id: key,
@@ -7270,6 +7386,13 @@ async function syncUnreadMessageSummaries() {
         createdAt: message.createdAt,
       });
     });
+    const beforeCount = state.unreadMessages.length;
+    state.unreadMessages = state.unreadMessages.filter((message) => serverUnreadKeys.has(`${message.type}:${message.id}`));
+    if (beforeCount !== state.unreadMessages.length) {
+      persistAttentionBadges();
+      renderAttentionBadges();
+      renderInbox();
+    }
   } catch (error) {
     if (error.status === 404) return;
     if (!error.offline) console.warn("KAILA message summary sync failed:", error);
@@ -7299,6 +7422,11 @@ function markConversationReadAt(type, id, readAt) {
   userReads[`${type}:${id}`] = readAt;
   reads[state.session.id] = userReads;
   localStorage.setItem(STORAGE.messageReads, JSON.stringify(reads));
+  apiFetch("/api/message-read", {
+    method: "POST",
+    body: JSON.stringify({ scope: type, threadId: id, readAt }),
+    silentError: true,
+  }).catch(() => {});
 }
 
 function conversationReadAt(type, id) {
@@ -7871,6 +7999,25 @@ async function fetchRouteGeometry(from, to) {
   }
 }
 
+async function navigationRoute(from, to, nav = {}) {
+  const start = normalizeLocation(from);
+  const end = normalizeLocation(to);
+  if (!start || !end) return null;
+  const route = await fetchRouteGeometry(start, end);
+  if (route?.coordinates?.length) return route;
+  const fallbackDistanceKm = Number.isFinite(Number(nav.distanceMeters))
+    ? Number(nav.distanceMeters) / 1000
+    : distanceKm(start, end);
+  if (!Number.isFinite(fallbackDistanceKm)) return null;
+  return {
+    distanceKm: Math.round(fallbackDistanceKm * 10) / 10,
+    durationMinutes: Number.isFinite(Number(nav.etaMinutes)) ? Number(nav.etaMinutes) : Math.max(1, Math.ceil((fallbackDistanceKm / NAVIGATION_SPEED_KMH) * 60)),
+    coordinates: [start, end],
+    steps: [{ instruction: "Approximate direct route to job site", distanceKm: Math.round(fallbackDistanceKm * 10) / 10 }],
+    source: "estimate",
+  };
+}
+
 function routeStepInstruction(step = {}) {
   const modifier = String(step.maneuver?.modifier || "").replace(/_/g, " ");
   const type = String(step.maneuver?.type || "").replace(/_/g, " ");
@@ -7903,7 +8050,7 @@ async function openNavigationModal({ request = {}, target = {}, origin = null } 
           </div>
           <div class="navigation-head-actions">
             <button class="btn btn-sm btn-outline-secondary" type="button" data-navigation-minimize><i class="fa-solid fa-down-left-and-up-right-to-center"></i> Minimize</button>
-            <button class="btn btn-sm btn-outline-secondary" type="button" data-navigation-external><i class="fa-solid fa-up-right-from-square"></i> Open Maps</button>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-navigation-external><i class="fa-solid fa-up-right-from-square"></i> Maps</button>
           </div>
         </div>
         <div class="navigation-map-wrap">
@@ -7911,16 +8058,27 @@ async function openNavigationModal({ request = {}, target = {}, origin = null } 
           <div class="k-map-zoom navigation-zoom" aria-label="Map zoom controls">
             <button type="button" data-navigation-zoom-in aria-label="Zoom in"><i class="fa-solid fa-plus"></i></button>
             <button type="button" data-navigation-zoom-out aria-label="Zoom out"><i class="fa-solid fa-minus"></i></button>
+            <button type="button" data-navigation-recenter aria-label="Recenter map"><i class="fa-solid fa-crosshairs"></i></button>
           </div>
         </div>
         <div class="navigation-panel">
+          <div class="navigation-status-row">
+            <span class="navigation-status-chip ${escapeAttribute(navigationStatusClass(session.navigationState || {}))}" data-navigation-status>${escapeHtml(navigationStatusText(session.navigationState || {}))}</span>
+            <small data-navigation-updated>${session.navigationState?.lastLocationAt ? `Updated ${escapeHtml(formatRelativeTime(session.navigationState.lastLocationAt))}` : "No live update yet"}</small>
+          </div>
           <div class="navigation-stats" data-navigation-stats>
             <span><i class="fa-solid fa-location-dot"></i> Destination pinned</span>
-            <span>${session.currentOrigin ? "Building route..." : "Allow location to build a route."}</span>
+            <span>${session.providerLocation ? "Building route..." : session.mode === "provider" ? "Start travel to share live ETA." : "Waiting for provider travel."}</span>
           </div>
           <div class="navigation-actions">
-            <button class="btn btn-sm btn-outline-primary" type="button" data-navigation-current><i class="fa-solid fa-location-crosshairs"></i> Use My Location</button>
-            <button class="btn btn-sm btn-primary" type="button" data-navigation-track><i class="fa-solid fa-location-arrow"></i> Track</button>
+            ${session.mode === "provider" ? `
+              <button class="btn btn-sm btn-primary" type="button" data-navigation-start><i class="fa-solid fa-location-arrow"></i> Start Travel</button>
+              <button class="btn btn-sm btn-outline-primary" type="button" data-navigation-current><i class="fa-solid fa-location-crosshairs"></i> Use My Location</button>
+              <button class="btn btn-sm btn-outline-primary" type="button" data-navigation-track><i class="fa-solid fa-route"></i> Follow Me</button>
+            ` : `
+              <button class="btn btn-sm btn-outline-primary" type="button" data-navigation-reload><i class="fa-solid fa-rotate"></i> Refresh</button>
+            `}
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-navigation-stop><i class="fa-solid ${session.mode === "provider" ? "fa-pause" : "fa-xmark"}"></i> ${session.mode === "provider" ? "Stop" : "Close"}</button>
           </div>
           <div class="navigation-steps" data-navigation-steps></div>
         </div>
@@ -7947,17 +8105,33 @@ function bindNavigationMap(session) {
   const mapEl = $("[data-navigation-map]", popup);
   const stats = $("[data-navigation-stats]", popup);
   const steps = $("[data-navigation-steps]", popup);
+  const statusChip = $("[data-navigation-status]", popup);
+  const updated = $("[data-navigation-updated]", popup);
   const destinationLocation = normalizeLocation(session?.destination);
   session.modalOpen = true;
   let map = null;
-  let originMarker = null;
+  let providerMarker = null;
   let routeLine = null;
 
   const setStats = (route = null) => {
     if (!stats) return;
+    const nav = session.navigationState || {};
     stats.innerHTML = route
       ? `<span><i class="fa-solid fa-route"></i> ${escapeHtml(formatDistanceKm(route.distanceKm))}</span><span><i class="fa-solid fa-clock"></i> About ${escapeHtml(route.durationMinutes)} min</span>`
-      : `<span><i class="fa-solid fa-location-dot"></i> Destination pinned</span><span>${session.currentOrigin ? "Route unavailable" : "Waiting for your location"}</span>`;
+      : nav.distanceMeters
+        ? `<span><i class="fa-solid fa-route"></i> ${escapeHtml(formatNavigationDistance(nav))}</span><span><i class="fa-solid fa-clock"></i> ${escapeHtml(nav.etaMinutes || "?")} min ETA</span>`
+        : `<span><i class="fa-solid fa-location-dot"></i> Destination pinned</span><span>${session.providerLocation ? "Route estimate unavailable" : session.mode === "provider" ? "Start travel to share live ETA" : "Waiting for provider location"}</span>`;
+  };
+  const setStatus = () => {
+    const nav = session.navigationState || {};
+    if (statusChip) {
+      statusChip.className = `navigation-status-chip ${navigationStatusClass(nav)}`;
+      statusChip.textContent = navigationStatusText(nav);
+    }
+    if (updated) {
+      const stale = nav.lastLocationAt && Date.now() - new Date(nav.lastLocationAt).getTime() > NAVIGATION_STALE_MS;
+      updated.textContent = nav.lastLocationAt ? `${stale ? "Stale update" : "Updated"} ${formatRelativeTime(nav.lastLocationAt)}` : "No live update yet";
+    }
   };
   const setSteps = (route = null) => {
     if (!steps) return;
@@ -7980,24 +8154,49 @@ function bindNavigationMap(session) {
       maxZoom: 20,
       attribution: "&copy; OpenStreetMap",
     }).addTo(map);
-    window.L.marker([destinationLocation.lat, destinationLocation.lng]).addTo(map).bindPopup(session.label);
+    const destinationMarker = window.L.marker([destinationLocation.lat, destinationLocation.lng], {
+      title: session.label,
+      alt: session.label,
+    }).addTo(map).bindPopup(`<strong>${escapeHtml(session.label)}</strong>${session.detail ? `<br>${escapeHtml(session.detail)}` : ""}`);
+    window.L.circle([destinationLocation.lat, destinationLocation.lng], {
+      radius: 35,
+      color: "#ef7b45",
+      fillColor: "#ef7b45",
+      fillOpacity: 0.12,
+      weight: 2,
+    }).addTo(map);
+    destinationMarker.openPopup();
     setTimeout(() => map?.invalidateSize(), 80);
     return map;
+  };
+  const recenterMap = () => {
+    const activeMap = ensureMap();
+    if (!activeMap || !destinationLocation) return;
+    const providerLocation = normalizeLocation(session.providerLocation);
+    if (routeLine) activeMap.fitBounds(routeLine.getBounds(), { padding: [28, 28] });
+    else if (providerLocation) activeMap.fitBounds(window.L.latLngBounds([
+      [providerLocation.lat, providerLocation.lng],
+      [destinationLocation.lat, destinationLocation.lng],
+    ]), { padding: [28, 28] });
+    else activeMap.setView([destinationLocation.lat, destinationLocation.lng], 16);
   };
   const renderRoute = async () => {
     const activeMap = ensureMap();
     if (!activeMap || !destinationLocation) return;
-    if (originMarker) originMarker.remove();
+    setStatus();
+    if (providerMarker) providerMarker.remove();
     if (routeLine) routeLine.remove();
-    if (session.currentOrigin) {
-      originMarker = window.L.circleMarker([session.currentOrigin.lat, session.currentOrigin.lng], {
-        radius: 8,
+    const providerLocation = normalizeLocation(session.mode === "provider" ? session.currentOrigin : session.navigationState?.providerLocation) || normalizeLocation(session.providerLocation);
+    session.providerLocation = providerLocation;
+    if (providerLocation) {
+      providerMarker = window.L.circleMarker([providerLocation.lat, providerLocation.lng], {
+        radius: session.mode === "provider" ? 8 : 9,
         color: "#0b4552",
-        fillColor: "#0f6b70",
-        fillOpacity: 0.9,
+        fillColor: session.mode === "provider" ? "#0f6b70" : "#2563eb",
+        fillOpacity: 0.92,
         weight: 3,
-      }).addTo(activeMap).bindPopup("You");
-      const route = await fetchRouteGeometry(session.currentOrigin, destinationLocation);
+      }).addTo(activeMap).bindPopup(session.mode === "provider" ? "You" : "Provider");
+      const route = await navigationRoute(providerLocation, destinationLocation, session.navigationState);
       session.lastRoute = route;
       if (route?.coordinates?.length) {
         routeLine = window.L.polyline(route.coordinates.map((point) => [point.lat, point.lng]), {
@@ -8011,7 +8210,8 @@ function bindNavigationMap(session) {
         return;
       }
     }
-    activeMap.setView([destinationLocation.lat, destinationLocation.lng], Math.max(activeMap.getZoom(), 15));
+    if (providerLocation) recenterMap();
+    else activeMap.setView([destinationLocation.lat, destinationLocation.lng], Math.max(activeMap.getZoom(), 15));
     setStats(null);
     setSteps(null);
   };
@@ -8021,6 +8221,7 @@ function bindNavigationMap(session) {
   renderRoute();
   $("[data-navigation-zoom-in]", popup)?.addEventListener("click", () => map?.zoomIn());
   $("[data-navigation-zoom-out]", popup)?.addEventListener("click", () => map?.zoomOut());
+  $("[data-navigation-recenter]", popup)?.addEventListener("click", recenterMap);
   $("[data-navigation-external]", popup)?.addEventListener("click", () => launchExternalNavigation(destinationLocation, { origin: session.currentOrigin, label: session.label }));
   $("[data-navigation-minimize]", popup)?.addEventListener("click", () => {
     session.modalShouldMinimize = true;
@@ -8030,10 +8231,16 @@ function bindNavigationMap(session) {
     const location = await getDeviceLocation({ maximumAge: 15000, timeout: 12000 });
     if (!location) return;
     session.currentOrigin = location;
+    session.providerLocation = location;
     renderRoute();
     session.pipRender?.();
   });
+  $("[data-navigation-start]", popup)?.addEventListener("click", () => startProviderTravel(session));
   $("[data-navigation-track]", popup)?.addEventListener("click", () => startNavigationWatch(session));
+  $("[data-navigation-reload]", popup)?.addEventListener("click", () => refreshNavigationState(session.request.id));
+  $("[data-navigation-stop]", popup)?.addEventListener("click", () => {
+    stopProviderTravel(session);
+  });
 }
 
 function startNavigationWatch(session = state.navigationSession) {
@@ -8053,11 +8260,16 @@ function startNavigationWatch(session = state.navigationSession) {
         state.deviceLocation = location;
         state.deviceLocationCheckedAt = Date.now();
         session.currentOrigin = location;
+        session.providerLocation = location;
+        if (session.mode === "provider") sendProviderNavigationLocation(session, position.coords);
         session.modalRender?.();
         session.pipRender?.();
       }
     },
-    () => notify("Tracking paused", "Allow location access to keep the KAILA route live.", "warning"),
+    (error) => {
+      const denied = error?.code === error?.PERMISSION_DENIED || error?.code === 1;
+      notify(denied ? "GPS permission denied" : "Tracking paused", denied ? "Use Open Maps for turn-by-turn navigation, or enable location permission in your device settings." : "KAILA could not refresh your location. You can still open Google Maps.", "warning");
+    },
     { enableHighAccuracy: true, maximumAge: 8000, timeout: 15000 }
   );
   notify("Tracking started", "KAILA will update the route until you stop navigation.", "success");
@@ -8066,9 +8278,91 @@ function startNavigationWatch(session = state.navigationSession) {
 function stopNavigationWatch({ clearSession = false } = {}) {
   if (state.navigationWatchId && navigator.geolocation) navigator.geolocation.clearWatch(state.navigationWatchId);
   state.navigationWatchId = null;
+  state.navigationLastSentAt = 0;
+  state.navigationLastSentLocation = null;
   if (clearSession) {
     removeNavigationPip();
     state.navigationSession = null;
+  }
+}
+
+async function startProviderTravel(session = state.navigationSession) {
+  if (!session?.request?.id || session.mode !== "provider") return;
+  const location = state.deviceLocation || await getDeviceLocation({ maximumAge: 12000, timeout: 12000 });
+  if (!location) return;
+  try {
+    const response = await emitNavigationEvent("kaila.navigation.start", {
+      requestId: session.request.id,
+      location: navigationLocationPayload(location),
+    });
+    handleNavigationStateUpdate({ requestId: session.request.id, navigationState: response.navigationState });
+    session.currentOrigin = location;
+    session.providerLocation = location;
+    startNavigationWatch(session);
+    notify("Travel started", "Your live location and ETA are now visible to the client for this active job.", "success");
+  } catch (error) {
+    notify("Travel failed", error.message, "error");
+  }
+}
+
+function navigationLocationPayload(location = {}, coords = {}) {
+  const clean = normalizeLocation(location);
+  if (!clean) return null;
+  return {
+    ...clean,
+    accuracyMeters: Number.isFinite(Number(coords.accuracy ?? location.accuracyMeters)) ? Number(coords.accuracy ?? location.accuracyMeters) : null,
+    heading: Number.isFinite(Number(coords.heading ?? location.heading)) ? Number(coords.heading ?? location.heading) : null,
+    speedMps: Number.isFinite(Number(coords.speed ?? location.speedMps)) ? Number(coords.speed ?? location.speedMps) : null,
+  };
+}
+
+function shouldSendNavigationLocation(location) {
+  const clean = normalizeLocation(location);
+  if (!clean) return false;
+  const elapsed = Date.now() - Number(state.navigationLastSentAt || 0);
+  const movedKm = state.navigationLastSentLocation ? distanceKm(state.navigationLastSentLocation, clean) : Infinity;
+  return elapsed >= NAVIGATION_SEND_INTERVAL_MS || !Number.isFinite(movedKm) || movedKm * 1000 >= NAVIGATION_MIN_MOVE_METERS;
+}
+
+async function sendProviderNavigationLocation(session = state.navigationSession, coords = {}) {
+  if (!session?.request?.id || session.mode !== "provider" || !shouldSendNavigationLocation(session.currentOrigin)) return;
+  state.navigationLastSentAt = Date.now();
+  state.navigationLastSentLocation = normalizeLocation(session.currentOrigin);
+  try {
+    const response = await emitNavigationEvent("kaila.navigation.location", {
+      requestId: session.request.id,
+      location: navigationLocationPayload(session.currentOrigin, coords),
+    }, 9000);
+    if (response.navigationState) handleNavigationStateUpdate({ requestId: session.request.id, navigationState: response.navigationState });
+  } catch (error) {
+    notify("Tracking paused", error.message, "warning");
+  }
+}
+
+async function stopProviderTravel(session = state.navigationSession) {
+  if (!session?.request?.id) return;
+  if (session.mode !== "provider" && state.session?.role !== "admin") {
+    stopNavigationWatch({ clearSession: true });
+    window.Swal.close();
+    return;
+  }
+  stopNavigationWatch();
+  try {
+    const response = await emitNavigationEvent("kaila.navigation.stop", { requestId: session.request.id });
+    if (response.navigationState) handleNavigationStateUpdate({ requestId: session.request.id, navigationState: response.navigationState });
+    notify("Tracking stopped", "Live provider location sharing has stopped.", "info");
+  } catch (error) {
+    notify("Stop failed", error.message, "warning");
+  }
+}
+
+async function refreshNavigationState(requestId) {
+  if (!requestId) return;
+  try {
+    const response = await apiFetch(`/api/navigation/${encodeURIComponent(requestId)}`, { method: "GET" });
+    handleNavigationStateUpdate(response);
+  } catch (error) {
+    notify("Tracking refresh failed", error.message, "warning");
   }
 }
 
@@ -8085,7 +8379,7 @@ function renderNavigationPip(session = state.navigationSession) {
     <div class="navigation-pip-body">
       <div>
         <strong>${escapeHtml(session.label)}</strong>
-        <span data-navigation-pip-status>${session.currentOrigin ? "Updating route" : "Waiting for GPS"}</span>
+        <span data-navigation-pip-status>${escapeHtml(navigationStatusText(session.navigationState || {}))}</span>
       </div>
       <div class="navigation-pip-actions">
         <button type="button" data-navigation-pip-restore aria-label="Restore navigation"><i class="fa-solid fa-up-right-and-down-left-from-center"></i></button>
@@ -8131,16 +8425,17 @@ function bindNavigationPip(session, pip) {
     if (!activeMap || !destinationLocation) return;
     if (originMarker) originMarker.remove();
     if (routeLine) routeLine.remove();
-    status.textContent = state.navigationWatchId ? "Tracking live" : "Navigation minimized";
-    if (session.currentOrigin) {
-      originMarker = window.L.circleMarker([session.currentOrigin.lat, session.currentOrigin.lng], {
+    status.textContent = state.navigationWatchId ? "Tracking live" : navigationStatusText(session.navigationState || {});
+    const providerLocation = normalizeLocation(session.mode === "provider" ? session.currentOrigin : session.navigationState?.providerLocation) || normalizeLocation(session.providerLocation);
+    if (providerLocation) {
+      originMarker = window.L.circleMarker([providerLocation.lat, providerLocation.lng], {
         radius: 6,
         color: "#0b4552",
         fillColor: "#8fe7ef",
         fillOpacity: 0.95,
         weight: 2,
       }).addTo(activeMap);
-      const route = session.lastRoute?.coordinates?.length ? session.lastRoute : await fetchRouteGeometry(session.currentOrigin, destinationLocation);
+      const route = session.lastRoute?.coordinates?.length ? session.lastRoute : await navigationRoute(providerLocation, destinationLocation, session.navigationState);
       session.lastRoute = route;
       if (route?.coordinates?.length) {
         routeLine = window.L.polyline(route.coordinates.map((point) => [point.lat, point.lng]), {
@@ -8162,7 +8457,10 @@ function bindNavigationPip(session, pip) {
     session.minimized = false;
     openNavigationModal({ request: session.request, target: session.target, origin: session.currentOrigin });
   }));
-  $("[data-navigation-pip-stop]", pip)?.addEventListener("click", () => stopNavigationWatch({ clearSession: true }));
+  $("[data-navigation-pip-stop]", pip)?.addEventListener("click", () => {
+    if (session.mode === "provider") stopProviderTravel(session);
+    else stopNavigationWatch({ clearSession: true });
+  });
 }
 
 function removeNavigationPip() {
@@ -8311,7 +8609,10 @@ function requestProviderLocationForRouteDistances(host = document) {
 
 function canViewConversation(request) {
   if (!state.session || !request.acceptedProviderId) return false;
-  if (state.session.role === SUPPORT_ROLE) return true;
+  if (state.session.role === "admin") return true;
+  if (state.session.role === SUPPORT_ROLE) {
+    return request.status === "Disputed" || (state.reports || []).some((report) => report.requestId === request.id && report.status !== "Closed");
+  }
   return request.clientId === state.session.id || request.acceptedProviderId === state.session.id;
 }
 
@@ -9162,8 +9463,11 @@ function getDeviceLocation(options = {}) {
         }
         resolve(location);
       },
-      () => {
-        if (!options.silent) notify("Location unavailable", "Allow location access, or pick the job site on the map.", "warning");
+      (error) => {
+        if (!options.silent) {
+          const denied = error?.code === error?.PERMISSION_DENIED || error?.code === 1;
+          notify(denied ? "Location permission denied" : "Location unavailable", denied ? "Enable location permission, pick the pin manually, or open Google Maps without live origin." : "KAILA could not get a fresh GPS fix. You can pick the pin manually or try again.", "warning");
+        }
         resolve(null);
       },
       {
