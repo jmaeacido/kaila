@@ -931,6 +931,102 @@ async function initializeDatabase() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS feed_posts (
+      id VARCHAR(64) PRIMARY KEY,
+      author_id VARCHAR(64) NOT NULL,
+      body TEXT NOT NULL,
+      visibility ENUM('public','private') NOT NULL DEFAULT 'public',
+      post_as_official TINYINT(1) NOT NULL DEFAULT 0,
+      share_count INT NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      INDEX feed_posts_visibility_idx (visibility, created_at),
+      INDEX feed_posts_author_idx (author_id, created_at),
+      CONSTRAINT feed_posts_author_fk FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await ensureColumn("feed_posts", "post_as_official", "TINYINT(1) NOT NULL DEFAULT 0");
+  await ensureColumn("feed_posts", "share_count", "INT NOT NULL DEFAULT 0");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS feed_post_media (
+      id VARCHAR(64) PRIMARY KEY,
+      post_id VARCHAR(64) NOT NULL,
+      file_name VARCHAR(255) NOT NULL,
+      original_name VARCHAR(255) NOT NULL,
+      mime_type VARCHAR(120) NOT NULL,
+      size_bytes INT NOT NULL,
+      created_at DATETIME NOT NULL,
+      CONSTRAINT feed_post_media_post_fk FOREIGN KEY (post_id) REFERENCES feed_posts(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS feed_post_reactions (
+      post_id VARCHAR(64) NOT NULL,
+      user_id VARCHAR(64) NOT NULL,
+      reaction ENUM('like','helpful','interested') NOT NULL,
+      created_at DATETIME NOT NULL,
+      PRIMARY KEY (post_id, user_id, reaction),
+      INDEX feed_post_reactions_user_idx (user_id, created_at),
+      CONSTRAINT feed_post_reactions_post_fk FOREIGN KEY (post_id) REFERENCES feed_posts(id) ON DELETE CASCADE,
+      CONSTRAINT feed_post_reactions_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS feed_post_comments (
+      id VARCHAR(64) PRIMARY KEY,
+      post_id VARCHAR(64) NOT NULL,
+      parent_comment_id VARCHAR(64) NULL,
+      author_id VARCHAR(64) NOT NULL,
+      body TEXT NOT NULL,
+      hidden_by VARCHAR(64) NULL,
+      hidden_at DATETIME NULL,
+      deleted_by VARCHAR(64) NULL,
+      deleted_at DATETIME NULL,
+      created_at DATETIME NOT NULL,
+      INDEX feed_post_comments_post_idx (post_id, created_at),
+      INDEX feed_post_comments_parent_idx (parent_comment_id, created_at),
+      CONSTRAINT feed_post_comments_post_fk FOREIGN KEY (post_id) REFERENCES feed_posts(id) ON DELETE CASCADE,
+      CONSTRAINT feed_post_comments_parent_fk FOREIGN KEY (parent_comment_id) REFERENCES feed_post_comments(id) ON DELETE SET NULL,
+      CONSTRAINT feed_post_comments_author_fk FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await ensureColumn("feed_post_comments", "parent_comment_id", "VARCHAR(64) NULL");
+  await ensureColumn("feed_post_comments", "hidden_by", "VARCHAR(64) NULL");
+  await ensureColumn("feed_post_comments", "hidden_at", "DATETIME NULL");
+  await ensureColumn("feed_post_comments", "deleted_by", "VARCHAR(64) NULL");
+  await ensureColumn("feed_post_comments", "deleted_at", "DATETIME NULL");
+  await ensureIndex("feed_post_comments", "feed_post_comments_parent_idx", "parent_comment_id");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS feed_comment_reactions (
+      comment_id VARCHAR(64) NOT NULL,
+      user_id VARCHAR(64) NOT NULL,
+      reaction ENUM('like','helpful','interested') NOT NULL,
+      created_at DATETIME NOT NULL,
+      PRIMARY KEY (comment_id, user_id, reaction),
+      INDEX feed_comment_reactions_user_idx (user_id, created_at),
+      CONSTRAINT feed_comment_reactions_comment_fk FOREIGN KEY (comment_id) REFERENCES feed_post_comments(id) ON DELETE CASCADE,
+      CONSTRAINT feed_comment_reactions_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS feed_notifications (
+      id VARCHAR(64) PRIMARY KEY,
+      recipient_id VARCHAR(64) NOT NULL,
+      actor_id VARCHAR(64) NOT NULL,
+      post_id VARCHAR(64) NOT NULL,
+      comment_id VARCHAR(64) NULL,
+      type VARCHAR(40) NOT NULL,
+      title VARCHAR(160) NOT NULL,
+      body TEXT NOT NULL,
+      created_at DATETIME NOT NULL,
+      INDEX feed_notifications_recipient_idx (recipient_id, created_at),
+      CONSTRAINT feed_notifications_recipient_fk FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT feed_notifications_actor_fk FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT feed_notifications_post_fk FOREIGN KEY (post_id) REFERENCES feed_posts(id) ON DELETE CASCADE,
+      CONSTRAINT feed_notifications_comment_fk FOREIGN KEY (comment_id) REFERENCES feed_post_comments(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS missed_calls (
       id VARCHAR(64) PRIMARY KEY,
       caller_id VARCHAR(64) NOT NULL,
@@ -1270,6 +1366,292 @@ function mapJobMessageAttachment(row) {
   };
 }
 
+function mapFeedMedia(row) {
+  return {
+    id: row.id,
+    originalName: row.original_name,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    url: `/feed-media/${encodeURIComponent(row.id)}`,
+    createdAt: row.created_at,
+  };
+}
+
+function canPostOfficial(user = {}) {
+  return ["admin", "ops", "customer_service"].includes(user.role);
+}
+
+function feedReactionSummary(reactions = [], viewerId = "") {
+  const counts = { like: 0, helpful: 0, interested: 0 };
+  const viewerReactions = [];
+  reactions.forEach((reaction) => {
+    if (counts[reaction.reaction] !== undefined) counts[reaction.reaction] += 1;
+    if (reaction.user_id === viewerId) viewerReactions.push(reaction.reaction);
+  });
+  return { counts, viewerReactions };
+}
+
+function canModerateFeedComment(row = {}, post = {}, viewer = null) {
+  if (!viewer?.id) return false;
+  return row.author_id === viewer.id || post.author_id === viewer.id;
+}
+
+function mapFeedComment(row, { post = {}, reactions = [], viewer = null, replies = [] } = {}) {
+  const official = Boolean(row.author_official);
+  const hidden = Boolean(row.hidden_at);
+  const deleted = Boolean(row.deleted_at);
+  const canModerate = canModerateFeedComment(row, post, viewer);
+  const visibleBody = deleted ? "Comment deleted" : hidden ? "Comment hidden" : (row.body || "");
+  const reactionSummary = feedReactionSummary(reactions, viewer?.id || "");
+  return {
+    id: row.id,
+    postId: row.post_id,
+    parentCommentId: row.parent_comment_id || "",
+    authorId: row.author_id,
+    authorName: official ? "KAILA" : (isStaffRole(row.author_role) ? staffDisplayName(row.author_role) : row.author_name),
+    authorRole: row.author_role || "",
+    authorPhotoUrl: official ? "assets/android-chrome-192x192.png" : (row.author_photo_file ? `/profile-media/${encodeURIComponent(row.author_id)}?v=${encodeURIComponent(row.author_photo_file)}` : ""),
+    official,
+    body: visibleBody,
+    hidden,
+    deleted,
+    canModerate,
+    reactions: reactionSummary.counts,
+    viewerReactions: reactionSummary.viewerReactions,
+    replies,
+    createdAt: row.created_at,
+  };
+}
+
+function mapFeedPost(row, { media = [], reactions = [], comments = [], viewerId = "" } = {}) {
+  const official = Boolean(row.post_as_official);
+  const reactionCounts = { like: 0, helpful: 0, interested: 0 };
+  const viewerReactions = [];
+  reactions.forEach((reaction) => {
+    if (reactionCounts[reaction.reaction] !== undefined) reactionCounts[reaction.reaction] += 1;
+    if (reaction.user_id === viewerId) viewerReactions.push(reaction.reaction);
+  });
+  return {
+    id: row.id,
+    authorId: row.author_id,
+    authorName: official ? "KAILA" : (isStaffRole(row.author_role) ? staffDisplayName(row.author_role) : row.author_name),
+    authorRole: row.author_role || "",
+    authorPhotoUrl: official ? "assets/android-chrome-192x192.png" : (row.author_photo_file ? `/profile-media/${encodeURIComponent(row.author_id)}?v=${encodeURIComponent(row.author_photo_file)}` : ""),
+    official,
+    visibility: row.visibility || "public",
+    body: row.body || "",
+    media,
+    reactions: reactionCounts,
+    viewerReactions,
+    comments,
+    commentCount: comments.reduce((total, comment) => total + 1 + (comment.replies?.length || 0), 0),
+    shareCount: Number(row.share_count || 0),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function saveFeedMedia(postId, attachments = []) {
+  if (!Array.isArray(attachments)) throw new Error("Attachments must be a list");
+  if (attachments.length > 1) throw new Error("Upload one photo or video per post");
+  const decodedAttachments = attachments.map((attachment) => ({ attachment, decoded: decodeAttachment(attachment) }));
+  const saved = [];
+  try {
+    for (const { attachment, decoded } of decodedAttachments) {
+      const id = createId();
+      const fileName = `${id}${decoded.extension}`;
+      await fs.promises.writeFile(path.join(UPLOAD_DIR, fileName), decoded.buffer, { flag: "wx" });
+      saved.push({ id, fileName });
+      await pool.query(
+        "INSERT INTO feed_post_media (id, post_id, file_name, original_name, mime_type, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [id, postId, fileName, sanitizedAttachmentName(attachment.name, decoded.extension, id), decoded.mimeType, decoded.buffer.length, nowMysql()]
+      );
+    }
+  } catch (error) {
+    for (const attachment of saved) {
+      await pool.query("DELETE FROM feed_post_media WHERE id = ?", [attachment.id]);
+      await fs.promises.unlink(path.join(UPLOAD_DIR, attachment.fileName)).catch(() => {});
+    }
+    throw error;
+  }
+}
+
+async function feedPostsFor(viewer = null, options = {}) {
+  const limit = Math.max(1, Math.min(Number(options.limit || 40), 80));
+  const postId = String(options.postId || "");
+  const where = [];
+  const params = [];
+  if (postId) {
+    where.push("post.id = ?");
+    params.push(postId);
+  } else if (!viewer) {
+    where.push("post.visibility = 'public'");
+  } else if (!["admin", "ops", "customer_service"].includes(viewer.role)) {
+    where.push("(post.visibility = 'public' OR post.author_id = ?)");
+    params.push(viewer.id);
+  }
+  const [postRows] = await pool.query(`
+    SELECT post.*, author.name AS author_name, author.role AS author_role, author.photo_file AS author_photo_file
+    FROM feed_posts AS post
+    JOIN users AS author ON author.id = post.author_id
+    ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY post.created_at DESC
+    LIMIT ${postId ? 1 : limit}
+  `, params);
+  if (!postRows.length) return [];
+  const postIds = postRows.map((row) => row.id);
+  const placeholders = postIds.map(() => "?").join(",");
+  const [mediaRows] = await pool.query(`SELECT * FROM feed_post_media WHERE post_id IN (${placeholders}) ORDER BY created_at ASC`, postIds);
+  const [reactionRows] = await pool.query(`SELECT post_id, user_id, reaction FROM feed_post_reactions WHERE post_id IN (${placeholders})`, postIds);
+  const [commentRows] = await pool.query(`
+    SELECT comment.*, author.name AS author_name, author.role AS author_role, author.photo_file AS author_photo_file,
+      IF(author.role IN ('admin','ops','customer_service'), 1, 0) AS author_official
+    FROM feed_post_comments AS comment
+    JOIN users AS author ON author.id = comment.author_id
+    WHERE comment.post_id IN (${placeholders})
+    ORDER BY comment.created_at ASC
+  `, postIds);
+  const commentIds = commentRows.map((row) => row.id);
+  const [commentReactionRows] = commentIds.length
+    ? await pool.query(`SELECT comment_id, user_id, reaction FROM feed_comment_reactions WHERE comment_id IN (${commentIds.map(() => "?").join(",")})`, commentIds)
+    : [[]];
+  const mediaByPost = new Map();
+  mediaRows.forEach((row) => {
+    if (!mediaByPost.has(row.post_id)) mediaByPost.set(row.post_id, []);
+    mediaByPost.get(row.post_id).push(mapFeedMedia(row));
+  });
+  const reactionsByPost = new Map();
+  reactionRows.forEach((row) => {
+    if (!reactionsByPost.has(row.post_id)) reactionsByPost.set(row.post_id, []);
+    reactionsByPost.get(row.post_id).push(row);
+  });
+  const commentReactionsByComment = new Map();
+  commentReactionRows.forEach((row) => {
+    if (!commentReactionsByComment.has(row.comment_id)) commentReactionsByComment.set(row.comment_id, []);
+    commentReactionsByComment.get(row.comment_id).push(row);
+  });
+  const postsById = new Map(postRows.map((row) => [row.id, row]));
+  const commentsByPost = new Map();
+  const topRowsByPost = new Map();
+  const replyRowsByParent = new Map();
+  commentRows.forEach((row) => {
+    const post = postsById.get(row.post_id) || {};
+    const canModerate = canModerateFeedComment(row, post, viewer);
+    if ((row.hidden_at || row.deleted_at) && !canModerate) return;
+    if (row.parent_comment_id) {
+      if (!replyRowsByParent.has(row.parent_comment_id)) replyRowsByParent.set(row.parent_comment_id, []);
+      replyRowsByParent.get(row.parent_comment_id).push(row);
+    } else {
+      if (!topRowsByPost.has(row.post_id)) topRowsByPost.set(row.post_id, []);
+      topRowsByPost.get(row.post_id).push(row);
+    }
+  });
+  for (const [postIdValue, topRows] of topRowsByPost) {
+    const post = postsById.get(postIdValue) || {};
+    commentsByPost.set(postIdValue, topRows.map((row) => {
+      const replies = (replyRowsByParent.get(row.id) || []).map((reply) => mapFeedComment(reply, {
+        post,
+        viewer,
+        reactions: commentReactionsByComment.get(reply.id) || [],
+      }));
+      return mapFeedComment(row, {
+        post,
+        viewer,
+        reactions: commentReactionsByComment.get(row.id) || [],
+        replies,
+      });
+    }));
+  }
+  return postRows.map((row) => mapFeedPost(row, {
+    media: mediaByPost.get(row.id) || [],
+    reactions: reactionsByPost.get(row.id) || [],
+    comments: commentsByPost.get(row.id) || [],
+    viewerId: viewer?.id || "",
+  }));
+}
+
+function isValidFeedReaction(reaction) {
+  return ["like", "helpful", "interested"].includes(String(reaction || "").trim().toLowerCase());
+}
+
+async function loadFeedPostForAction(postId) {
+  const [rows] = await pool.query("SELECT post.*, author.name AS author_name, author.role AS author_role FROM feed_posts AS post JOIN users AS author ON author.id = post.author_id WHERE post.id = ? LIMIT 1", [postId]);
+  return rows[0] || null;
+}
+
+async function loadFeedCommentForAction(commentId) {
+  const [rows] = await pool.query(`
+    SELECT comment.*, post.author_id AS post_author_id, post.visibility AS post_visibility, author.name AS author_name, author.role AS author_role
+    FROM feed_post_comments AS comment
+    JOIN feed_posts AS post ON post.id = comment.post_id
+    JOIN users AS author ON author.id = comment.author_id
+    WHERE comment.id = ?
+    LIMIT 1
+  `, [commentId]);
+  return rows[0] || null;
+}
+
+function canViewFeedPost(post = {}, user = {}) {
+  if (!post?.id || !user?.id) return false;
+  if (post.visibility === "private" && post.author_id !== user.id && !canPostOfficial(user)) return false;
+  return true;
+}
+
+function canModerateFeedCommentAction(comment = {}, user = {}) {
+  if (!comment?.id || !user?.id) return false;
+  return comment.author_id === user.id || comment.post_author_id === user.id;
+}
+
+async function createFeedNotification({ recipientId, actor, postId, commentId = null, type, title, body } = {}) {
+  if (!recipientId || !actor?.id || recipientId === actor.id || !postId || !type) return null;
+  const notification = {
+    id: createId(),
+    recipientId,
+    actorId: actor.id,
+    postId,
+    commentId,
+    type,
+    title: title || "KAILA Feed",
+    body: body || `${displayNameForUser(actor)} updated your feed.`,
+    createdAt: nowMysql(),
+  };
+  await pool.query(
+    "INSERT INTO feed_notifications (id, recipient_id, actor_id, post_id, comment_id, type, title, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [notification.id, notification.recipientId, notification.actorId, notification.postId, notification.commentId, notification.type, notification.title, notification.body, notification.createdAt]
+  );
+  socketServers.forEach((socketServer) => {
+    socketServer.to(`user:${recipientId}`).emit("kaila.feed.notification", notification);
+  });
+  pushNotification([recipientId], {
+    type: "feed",
+    title: notification.title,
+    body: notification.body,
+    data: {
+      action: "open-notifications",
+      id: notification.id,
+      postId,
+      commentId: commentId || "",
+      createdAt: notification.createdAt,
+    },
+  }).catch((error) => console.warn("Feed push failed:", error.message));
+  return notification;
+}
+
+function mapFeedNotification(row = {}) {
+  return {
+    id: row.id,
+    recipientId: row.recipient_id,
+    actorId: row.actor_id,
+    actorName: isStaffRole(row.actor_role) ? staffDisplayName(row.actor_role) : row.actor_name,
+    postId: row.post_id,
+    commentId: row.comment_id || "",
+    type: row.type,
+    title: row.title,
+    body: row.body,
+    createdAt: row.created_at,
+  };
+}
+
 function mapNavigationState(row) {
   if (!row) return null;
   return {
@@ -1384,7 +1766,8 @@ async function cleanupOrphanUploads() {
   const [requestRows] = await pool.query("SELECT file_name FROM request_attachments");
   const [jobMessageRows] = await pool.query("SELECT file_name FROM job_message_attachments");
   const [directMessageRows] = await pool.query("SELECT file_name FROM direct_message_attachments");
-  const referenced = new Set([...requestRows, ...jobMessageRows, ...directMessageRows].map((row) => row.file_name));
+  const [feedRows] = await pool.query("SELECT file_name FROM feed_post_media").catch(() => [[]]);
+  const referenced = new Set([...requestRows, ...jobMessageRows, ...directMessageRows, ...feedRows].map((row) => row.file_name));
   for (const fileName of await fs.promises.readdir(UPLOAD_DIR)) {
     if (!referenced.has(fileName)) await fs.promises.unlink(path.join(UPLOAD_DIR, fileName));
   }
@@ -2191,7 +2574,7 @@ async function messageSummaryFor(user) {
 }
 
 async function notificationSummaryFor(user) {
-  if (!user || user.role === "ops") return { activities: [], missedCalls: [] };
+  if (!user || user.role === "ops") return { activities: [], missedCalls: [], feedNotifications: [] };
   const [activityRows] = user.role === "admin" ? await pool.query(`
     SELECT activity.*
     FROM activities AS activity
@@ -2213,9 +2596,21 @@ async function notificationSummaryFor(user) {
      LIMIT 30`,
     [user.id, user.id]
   );
+  const [feedRows] = await pool.query(`
+    SELECT notification.*, actor.name AS actor_name, actor.role AS actor_role
+    FROM feed_notifications AS notification
+    JOIN users AS actor ON actor.id = notification.actor_id
+    LEFT JOIN notification_read_states AS read_state
+      ON read_state.user_id = ? AND read_state.type = 'feed'
+    WHERE notification.recipient_id = ?
+      AND (read_state.read_at IS NULL OR notification.created_at > read_state.read_at)
+    ORDER BY notification.created_at DESC
+    LIMIT 80
+  `, [user.id, user.id]);
   return {
     activities: activityRows.map(mapActivity),
     missedCalls: missedCallRows.map(mapMissedCall),
+    feedNotifications: feedRows.map(mapFeedNotification),
   };
 }
 
@@ -2662,10 +3057,208 @@ app.get("/profile-media/:id", async (req, res) => {
   res.sendFile(path.join(PROFILE_UPLOAD_DIR, rows[0].photo_file));
 });
 
+app.get("/feed-media/:id", async (req, res) => {
+  const [rows] = await pool.query("SELECT media.file_name, media.mime_type, post.visibility FROM feed_post_media AS media JOIN feed_posts AS post ON post.id = media.post_id WHERE media.id = ? LIMIT 1", [req.params.id]);
+  if (!rows.length) return res.status(404).end();
+  res.type(rows[0].mime_type);
+  res.set("Cache-Control", rows[0].visibility === "public" ? "public, max-age=86400" : "private, max-age=3600");
+  res.sendFile(path.join(UPLOAD_DIR, rows[0].file_name));
+});
+
 app.get("/api/state", async (req, res) => {
   const userId = req.get("X-KAILA-User-Id");
   const [rows] = userId ? await pool.query("SELECT * FROM users WHERE id = ? LIMIT 1", [userId]) : [[]];
   res.json(await getState(rows.length ? mapUser(rows[0]) : null));
+});
+
+app.get("/api/feed", requireUser, async (req, res) => {
+  res.json({ posts: await feedPostsFor(req.user) });
+});
+
+app.post("/api/feed", requireUser, async (req, res) => {
+  const body = String(req.body?.body || "").trim();
+  const visibility = String(req.body?.visibility || "public").toLowerCase() === "private" ? "private" : "public";
+  const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+  const postAsOfficial = Boolean(req.body?.postAsOfficial) && canPostOfficial(req.user);
+  if (!body && !attachments.length) return res.status(400).json({ error: "Write something or add a photo/video" });
+  if (body.length > 2000) return res.status(400).json({ error: "Post text must be 2,000 characters or less" });
+  const post = {
+    id: createId(),
+    authorId: req.user.id,
+    body,
+    visibility,
+    postAsOfficial,
+    createdAt: nowMysql(),
+  };
+  try {
+    await pool.query(
+      "INSERT INTO feed_posts (id, author_id, body, visibility, post_as_official, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [post.id, post.authorId, post.body, post.visibility, post.postAsOfficial ? 1 : 0, post.createdAt, post.createdAt]
+    );
+    await saveFeedMedia(post.id, attachments);
+  } catch (error) {
+    await pool.query("DELETE FROM feed_posts WHERE id = ?", [post.id]).catch(() => {});
+    return res.status(400).json({ error: error.message || "Post could not be saved" });
+  }
+  await addActivity("Feed post created", `${postAsOfficial ? "KAILA" : displayNameForUser(req.user)} posted to the ${visibility} feed`);
+  const posts = await feedPostsFor(req.user);
+  broadcast("kaila.feed.updated", { postId: post.id, action: "created" });
+  res.status(201).json({ post: posts.find((item) => item.id === post.id), posts });
+});
+
+app.get("/api/public-post/:id", async (req, res) => {
+  const posts = await feedPostsFor(null, { postId: req.params.id });
+  const post = posts.find((item) => item.visibility === "public");
+  if (!post) return res.status(404).json({ error: "Public post not found" });
+  res.json({ post });
+});
+
+app.post("/api/feed/:id/reactions", requireUser, async (req, res) => {
+  const reaction = String(req.body?.reaction || "").trim().toLowerCase();
+  if (!isValidFeedReaction(reaction)) return res.status(400).json({ error: "Invalid reaction" });
+  const post = await loadFeedPostForAction(req.params.id);
+  if (!post) return res.status(404).json({ error: "Post not found" });
+  if (!canViewFeedPost(post, req.user)) return res.status(403).json({ error: "Private post" });
+  const [existing] = await pool.query("SELECT reaction FROM feed_post_reactions WHERE post_id = ? AND user_id = ? AND reaction = ? LIMIT 1", [req.params.id, req.user.id, reaction]);
+  if (existing.length) {
+    await pool.query("DELETE FROM feed_post_reactions WHERE post_id = ? AND user_id = ? AND reaction = ?", [req.params.id, req.user.id, reaction]);
+  } else {
+    await pool.query("INSERT INTO feed_post_reactions (post_id, user_id, reaction, created_at) VALUES (?, ?, ?, ?)", [req.params.id, req.user.id, reaction, nowMysql()]);
+    await createFeedNotification({
+      recipientId: post.author_id,
+      actor: req.user,
+      postId: post.id,
+      type: "post_reaction",
+      title: "New feed reaction",
+      body: `${displayNameForUser(req.user)} reacted ${reaction} to your post.`,
+    });
+  }
+  const postsForUser = await feedPostsFor(req.user);
+  broadcast("kaila.feed.updated", { postId: req.params.id, action: "reaction" });
+  res.json({ post: postsForUser.find((item) => item.id === req.params.id), posts: postsForUser });
+});
+
+app.post("/api/feed/:id/comments", requireUser, async (req, res) => {
+  const body = String(req.body?.body || "").trim();
+  if (!body) return res.status(400).json({ error: "Comment is required" });
+  if (body.length > 800) return res.status(400).json({ error: "Comment must be 800 characters or less" });
+  const post = await loadFeedPostForAction(req.params.id);
+  if (!post) return res.status(404).json({ error: "Post not found" });
+  if (!canViewFeedPost(post, req.user)) return res.status(403).json({ error: "Private post" });
+  const id = createId();
+  await pool.query(
+    "INSERT INTO feed_post_comments (id, post_id, parent_comment_id, author_id, body, created_at) VALUES (?, ?, NULL, ?, ?, ?)",
+    [id, req.params.id, req.user.id, body, nowMysql()]
+  );
+  await createFeedNotification({
+    recipientId: post.author_id,
+    actor: req.user,
+    postId: post.id,
+    commentId: id,
+    type: "post_comment",
+    title: "New feed comment",
+    body: `${displayNameForUser(req.user)} commented on your post.`,
+  });
+  const postsForUser = await feedPostsFor(req.user);
+  broadcast("kaila.feed.updated", { postId: req.params.id, action: "comment" });
+  res.status(201).json({ post: postsForUser.find((item) => item.id === req.params.id), posts: postsForUser });
+});
+
+app.post("/api/feed/:id/comments/:commentId/replies", requireUser, async (req, res) => {
+  const body = String(req.body?.body || "").trim();
+  if (!body) return res.status(400).json({ error: "Reply is required" });
+  if (body.length > 800) return res.status(400).json({ error: "Reply must be 800 characters or less" });
+  const post = await loadFeedPostForAction(req.params.id);
+  if (!post) return res.status(404).json({ error: "Post not found" });
+  if (!canViewFeedPost(post, req.user)) return res.status(403).json({ error: "Private post" });
+  const parent = await loadFeedCommentForAction(req.params.commentId);
+  if (!parent || parent.post_id !== post.id) return res.status(404).json({ error: "Comment not found" });
+  if (parent.parent_comment_id) return res.status(400).json({ error: "Replies can only be added to top-level comments" });
+  if (parent.hidden_at || parent.deleted_at) return res.status(400).json({ error: "This comment is not open for replies" });
+  const id = createId();
+  await pool.query(
+    "INSERT INTO feed_post_comments (id, post_id, parent_comment_id, author_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [id, post.id, parent.id, req.user.id, body, nowMysql()]
+  );
+  await createFeedNotification({
+    recipientId: parent.author_id,
+    actor: req.user,
+    postId: post.id,
+    commentId: id,
+    type: "comment_reply",
+    title: "New feed reply",
+    body: `${displayNameForUser(req.user)} replied to your comment.`,
+  });
+  const postsForUser = await feedPostsFor(req.user);
+  broadcast("kaila.feed.updated", { postId: post.id, action: "reply" });
+  res.status(201).json({ post: postsForUser.find((item) => item.id === post.id), posts: postsForUser });
+});
+
+app.post("/api/feed/:id/comments/:commentId/reactions", requireUser, async (req, res) => {
+  const reaction = String(req.body?.reaction || "").trim().toLowerCase();
+  if (!isValidFeedReaction(reaction)) return res.status(400).json({ error: "Invalid reaction" });
+  const post = await loadFeedPostForAction(req.params.id);
+  if (!post) return res.status(404).json({ error: "Post not found" });
+  if (!canViewFeedPost(post, req.user)) return res.status(403).json({ error: "Private post" });
+  const comment = await loadFeedCommentForAction(req.params.commentId);
+  if (!comment || comment.post_id !== post.id) return res.status(404).json({ error: "Comment not found" });
+  if (comment.hidden_at || comment.deleted_at) return res.status(400).json({ error: "This comment cannot receive reactions" });
+  const [existing] = await pool.query("SELECT reaction FROM feed_comment_reactions WHERE comment_id = ? AND user_id = ? AND reaction = ? LIMIT 1", [comment.id, req.user.id, reaction]);
+  if (existing.length) {
+    await pool.query("DELETE FROM feed_comment_reactions WHERE comment_id = ? AND user_id = ? AND reaction = ?", [comment.id, req.user.id, reaction]);
+  } else {
+    await pool.query("INSERT INTO feed_comment_reactions (comment_id, user_id, reaction, created_at) VALUES (?, ?, ?, ?)", [comment.id, req.user.id, reaction, nowMysql()]);
+    await createFeedNotification({
+      recipientId: comment.author_id,
+      actor: req.user,
+      postId: post.id,
+      commentId: comment.id,
+      type: "comment_reaction",
+      title: "New comment reaction",
+      body: `${displayNameForUser(req.user)} reacted ${reaction} to your comment.`,
+    });
+  }
+  const postsForUser = await feedPostsFor(req.user);
+  broadcast("kaila.feed.updated", { postId: post.id, action: "comment_reaction" });
+  res.json({ post: postsForUser.find((item) => item.id === post.id), posts: postsForUser });
+});
+
+app.post("/api/feed/:id/comments/:commentId/moderation", requireUser, async (req, res) => {
+  const action = String(req.body?.action || "").trim().toLowerCase();
+  if (!["hide", "delete"].includes(action)) return res.status(400).json({ error: "Invalid moderation action" });
+  const post = await loadFeedPostForAction(req.params.id);
+  if (!post) return res.status(404).json({ error: "Post not found" });
+  const comment = await loadFeedCommentForAction(req.params.commentId);
+  if (!comment || comment.post_id !== post.id) return res.status(404).json({ error: "Comment not found" });
+  if (!canModerateFeedCommentAction(comment, req.user)) return res.status(403).json({ error: "Only the comment author or post owner can moderate this comment" });
+  if (action === "delete") {
+    await pool.query("UPDATE feed_post_comments SET deleted_by = ?, deleted_at = COALESCE(deleted_at, ?) WHERE id = ?", [req.user.id, nowMysql(), comment.id]);
+  } else {
+    await pool.query("UPDATE feed_post_comments SET hidden_by = ?, hidden_at = COALESCE(hidden_at, ?) WHERE id = ?", [req.user.id, nowMysql(), comment.id]);
+  }
+  const postsForUser = await feedPostsFor(req.user);
+  broadcast("kaila.feed.updated", { postId: post.id, action });
+  res.json({ post: postsForUser.find((item) => item.id === post.id), posts: postsForUser });
+});
+
+app.post("/api/feed/:id/share", async (req, res) => {
+  const post = await loadFeedPostForAction(req.params.id);
+  if (!post || post.visibility !== "public") return res.status(404).json({ error: "Public post not found" });
+  await pool.query("UPDATE feed_posts SET share_count = share_count + 1 WHERE id = ? AND visibility = 'public'", [req.params.id]);
+  const actorId = req.headers["x-kaila-user-id"];
+  const actor = actorId ? await getUser(actorId) : null;
+  if (actor) {
+    await createFeedNotification({
+      recipientId: post.author_id,
+      actor,
+      postId: post.id,
+      type: "post_share",
+      title: "Your post was shared",
+      body: `${displayNameForUser(actor)} shared your post.`,
+    });
+  }
+  broadcast("kaila.feed.updated", { postId: req.params.id, action: "share" });
+  res.json({ ok: true });
 });
 
 app.get("/api/message-summary", requireUser, async (req, res) => {
@@ -3749,6 +4342,12 @@ app.post("/api/admin/truncate", requireUser, async (req, res) => {
   await pool.query("TRUNCATE TABLE notification_read_states");
   await pool.query("TRUNCATE TABLE message_read_states");
   await pool.query("TRUNCATE TABLE job_message_reactions");
+  await pool.query("TRUNCATE TABLE feed_notifications");
+  await pool.query("TRUNCATE TABLE feed_comment_reactions");
+  await pool.query("TRUNCATE TABLE feed_post_comments");
+  await pool.query("TRUNCATE TABLE feed_post_reactions");
+  await pool.query("TRUNCATE TABLE feed_post_media");
+  await pool.query("TRUNCATE TABLE feed_posts");
   await pool.query("TRUNCATE TABLE missed_calls");
   await pool.query("TRUNCATE TABLE direct_message_attachments");
   await pool.query("TRUNCATE TABLE direct_messages");

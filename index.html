@@ -38,7 +38,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
-  <link rel="stylesheet" href="style.css?v=20260612-navigation-activation-restore">
+  <link rel="stylesheet" href="style.css?v=20260612-feed">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -381,6 +381,22 @@
       </div>
     </section>
 
+    <section class="view" data-view="public-post">
+      <div class="container-fluid px-3 py-3">
+        <div class="public-post-shell">
+          <div class="public-post-head">
+            <img src="assets/android-chrome-192x192.png" alt="">
+            <div>
+              <strong>KAILA Service Feed</strong>
+              <span>Shared public post</span>
+            </div>
+            <button class="btn btn-sm btn-primary" type="button" data-route="login">Login</button>
+          </div>
+          <div data-public-post></div>
+        </div>
+      </div>
+    </section>
+
     <section class="view app-view" data-view="app">
       <div class="adminlte-app">
         <header class="app-header">
@@ -429,7 +445,10 @@
           </div>
 
           <nav class="nav nav-pills nav-fill compact-tabs app-tabs" role="tablist">
-            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#requests-pane" type="button" data-requests-tab>
+            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#feed-pane" type="button" data-feed-tab>
+              <i class="fa-solid fa-house"></i><span>Feed</span>
+            </button>
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#requests-pane" type="button" data-requests-tab>
               <i class="fa-solid fa-clipboard-list"></i><span>Requests</span>
             </button>
             <button class="nav-link" data-bs-toggle="pill" data-bs-target="#providers-pane" type="button" data-providers-tab>
@@ -460,7 +479,40 @@
           </nav>
 
           <div class="tab-content app-tab-content">
-            <div class="tab-pane fade show active" id="requests-pane">
+            <div class="tab-pane fade show active" id="feed-pane">
+              <div class="feed-shell">
+                <form class="feed-composer" data-feed-form>
+                  <div class="feed-composer-row">
+                    <img src="assets/android-chrome-192x192.png" alt="" data-feed-composer-photo>
+                    <textarea class="form-control" name="body" rows="2" maxlength="2000" placeholder="Share a service tip, update, availability, or community note"></textarea>
+                  </div>
+                  <div class="upload-preview feed-upload-preview" data-feed-media-preview></div>
+                  <div class="feed-composer-actions">
+                    <label class="feed-file-button" title="Add photo or video">
+                      <i class="fa-solid fa-image"></i>
+                      <input class="visually-hidden" type="file" name="media" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" data-feed-media>
+                    </label>
+                    <div class="feed-audience" data-feed-audience>
+                      <input type="hidden" name="visibility" value="public" data-feed-visibility>
+                      <button class="feed-audience-button" type="button" data-feed-audience-button aria-haspopup="menu" aria-expanded="false">
+                        <span data-feed-audience-label><b aria-hidden="true">🌐</b> Public</span>
+                        <i class="fa-solid fa-chevron-down"></i>
+                      </button>
+                      <div class="feed-audience-menu" data-feed-audience-menu role="menu" hidden>
+                        <button type="button" role="menuitemradio" aria-checked="true" data-feed-audience-option="public"><b aria-hidden="true">🌐</b><span>Public</span></button>
+                        <button type="button" role="menuitemradio" aria-checked="false" data-feed-audience-option="private"><b aria-hidden="true">👥</b><span>Private</span></button>
+                      </div>
+                    </div>
+                    <label class="feed-official-toggle" data-feed-official-wrap hidden>
+                      <input type="checkbox" name="postAsOfficial" value="yes"> KAILA
+                    </label>
+                    <button class="btn btn-primary btn-sm" type="submit"><i class="fa-solid fa-paper-plane"></i> Post</button>
+                  </div>
+                </form>
+                <div class="stack" data-feed-list></div>
+              </div>
+            </div>
+            <div class="tab-pane fade" id="requests-pane">
               <div class="stack" data-request-list></div>
             </div>
             <div class="tab-pane fade" id="providers-pane">
@@ -513,6 +565,6 @@
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=20260612-navigation-activation-restore"></script>
+  <script src="app.js?v=20260612-feed"></script>
 </body>
 </html>

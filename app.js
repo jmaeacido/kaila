@@ -27,7 +27,7 @@ const AVAILABLE_DAY_OPTIONS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Fr
 const AVAILABLE_TIME_OPTIONS = ["Any time", "Morning", "Afternoon", "Evening", "Business hours", "After hours", "By appointment"];
 const YES_NO_MAYBE_OPTIONS = ["Yes", "No", "Maybe"];
 const DECISION_SIGNAL_OPTIONS = ["Strong positive", "Positive", "Neutral", "Concern", "Blocker"];
-const APP_ROUTES = ["landing", "register", "login", "privacy", "terms", "support", "app"];
+const APP_ROUTES = ["landing", "register", "login", "privacy", "terms", "support", "public-post", "app"];
 const SUPPORT_ROLE = "customer_service";
 const SUPPORT_LABEL = "Customer Service";
 const SUPPORT_AVATAR = "assets/kaila-customer-service-avatar.png";
@@ -69,6 +69,12 @@ const state = {
   providers: [],
   reports: [],
   blocks: [],
+  feedPosts: [],
+  feedLoaded: false,
+  feedSyncing: false,
+  publicPost: null,
+  publicPostLoading: false,
+  publicPostId: "",
   validationEntries: [],
   activity: [],
   missedCalls: [],
@@ -89,7 +95,7 @@ const state = {
   attentionLoop: null,
   notificationClicksBound: false,
   activeOfferPromptRequestId: null,
-  lastDashboardTabTarget: "#requests-pane",
+  lastDashboardTabTarget: "#feed-pane",
   activeConversationId: null,
   activeDirectConversationUserId: null,
   activeDirectConversationRequestId: "",
@@ -233,6 +239,7 @@ async function runPullRefresh(indicator) {
   updatePullRefreshIndicator(indicator);
   try {
     await loadState({ silent: true });
+    await loadFeed({ silent: true, force: true });
     await Promise.allSettled([
       syncUnreadNotificationSummaries(),
       syncUnreadMessageSummaries(),
@@ -787,6 +794,9 @@ function bindEvents() {
   $("[data-register-form]").addEventListener("submit", register);
   $("[data-register-form] [name='role']").addEventListener("change", toggleProviderCategory);
   $("[data-login-form]").addEventListener("submit", login);
+  $("[data-feed-form]")?.addEventListener("submit", createFeedPost);
+  bindAttachmentPreview("[data-feed-media]", "[data-feed-media-preview]", 1);
+  bindFeedAudienceSelector();
   $$("[data-password-toggle]").forEach((button) => button.addEventListener("click", togglePasswordVisibility));
   $("[data-forgot-password]")?.addEventListener("click", openForgotPasswordModal);
   $("[data-logout]").addEventListener("click", logout);
@@ -802,6 +812,9 @@ function bindEvents() {
   $$(".app-tabs .nav-link").forEach((tab) => {
     tab.addEventListener("shown.bs.tab", () => rememberDashboardTab(tab.dataset.bsTarget));
     tab.addEventListener("click", () => rememberDashboardTab(tab.dataset.bsTarget));
+  });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest("[data-feed-audience]")) closeFeedAudienceMenus();
   });
 }
 
@@ -880,7 +893,8 @@ function renderRegisterAddress() {
 }
 
 function apiBase() {
-  return $("[data-socket-url]").value.trim().replace(/\/$/, "");
+  const configured = $("[data-socket-url]")?.value.trim().replace(/\/$/, "");
+  return configured || defaultSocketUrl();
 }
 
 async function apiFetch(path, options = {}) {
@@ -976,16 +990,24 @@ function safeApplyState(payload = {}) {
 function route(name) {
   if (!APP_ROUTES.includes(name)) name = state.session ? "app" : "landing";
   if (name === "app" && !state.session) name = "login";
-  if (state.session && ["landing", "login", "register"].includes(name)) name = "app";
+  if (state.session && ["landing", "login", "register", "public-post"].includes(name)) name = "app";
   $$("[data-view]").forEach((view) => view.classList.toggle("active", view.dataset.view === name));
   document.body.classList.toggle("app-mode", name === "app");
   toggleProviderCategory();
   if (name === "login") hydrateSavedLoginCredentials();
+  if (name === "app" && state.session) loadFeed({ silent: true }).catch(() => {});
+  if (name === "public-post") loadPublicPost().catch(() => {});
   render();
 }
 
 function initialRoute() {
-  const requested = new URLSearchParams(window.location.search).get("route") || window.location.hash.replace(/^#\/?/, "");
+  const params = new URLSearchParams(window.location.search);
+  const requested = params.get("route") || window.location.hash.replace(/^#\/?/, "");
+  const postId = params.get("post") || params.get("feedPost") || "";
+  if (postId && !state.session) {
+    state.publicPostId = postId;
+    return "public-post";
+  }
   return APP_ROUTES.includes(requested) ? requested : (state.session ? "app" : "landing");
 }
 
@@ -1045,11 +1067,13 @@ async function register(event) {
 
   state.session = payload.user;
   state.activeRole = defaultActiveRole();
+  state.lastDashboardTabTarget = "#feed-pane";
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   localStorage.setItem(STORAGE.activeRole, state.activeRole);
   loadAttentionBadgesForSession();
   syncSocketIdentity();
   safeApplyState(payload.state);
+  activateTab("#feed-pane");
   form.reset();
   runPostAuthTasks(data.username, data.password, payload.user);
   await successRedirect("Account created", "Welcome to KAILA.");
@@ -1077,11 +1101,13 @@ async function login(event) {
 
   state.session = payload.user;
   state.activeRole = defaultActiveRole();
+  state.lastDashboardTabTarget = "#feed-pane";
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   localStorage.setItem(STORAGE.activeRole, state.activeRole);
   loadAttentionBadgesForSession();
   syncSocketIdentity();
   safeApplyState(payload.state);
+  activateTab("#feed-pane");
   persistSavedLoginChoice(data);
   form.reset();
   runPostAuthTasks(data.username, data.password, payload.user);
@@ -1229,6 +1255,9 @@ async function logout() {
   endAudioCall(false);
   localStorage.removeItem(STORAGE.session);
   state.session = null;
+  state.feedPosts = [];
+  state.feedLoaded = false;
+  state.lastDashboardTabTarget = "#feed-pane";
   loadAttentionBadgesForSession();
   syncSocketIdentity();
   await window.Swal.fire({
@@ -1247,6 +1276,8 @@ function render() {
   renderNav();
   renderTabs();
   renderActions();
+  renderFeed();
+  renderPublicPost();
   renderRequests();
   renderProviders();
   renderClients();
@@ -1306,6 +1337,7 @@ function renderConnectivity() {
 }
 
 function renderTabs() {
+  const feedTab = $("[data-feed-tab]");
   const requestsTab = $("[data-requests-tab]");
   const providersTab = $("[data-providers-tab]");
   const clientsTab = $("[data-clients-tab]");
@@ -1319,6 +1351,7 @@ function renderTabs() {
   const isSupport = state.session?.role === SUPPORT_ROLE;
   const canViewActivity = ["admin", SUPPORT_ROLE].includes(state.session?.role);
   const hideProviders = isOps;
+  if (feedTab) feedTab.hidden = false;
   if (requestsTab) requestsTab.hidden = isOps;
   providersTab.hidden = hideProviders;
   if (clientsTab) clientsTab.hidden = !["admin", SUPPORT_ROLE].includes(state.session?.role);
@@ -1328,16 +1361,15 @@ function renderTabs() {
   if (activityTab) activityTab.hidden = !canViewActivity;
   if (validationTab) validationTab.hidden = !["admin", "ops"].includes(state.session?.role);
   if (hideProviders && providersTab.querySelector(".nav-link")?.classList.contains("active")) {
-    activateTab("#requests-pane");
+    activateTab("#feed-pane");
   }
-  if (!["admin", SUPPORT_ROLE].includes(state.session?.role) && clientsTab?.classList.contains("active")) activateTab("#requests-pane");
-  if (!["admin", "client", "provider", SUPPORT_ROLE].includes(state.session?.role) && customerServiceTab?.classList.contains("active")) activateTab("#requests-pane");
+  if (!["admin", SUPPORT_ROLE].includes(state.session?.role) && clientsTab?.classList.contains("active")) activateTab("#feed-pane");
+  if (!["admin", "client", "provider", SUPPORT_ROLE].includes(state.session?.role) && customerServiceTab?.classList.contains("active")) activateTab("#feed-pane");
   if (state.session?.role === "ops" && inboxTab?.classList.contains("active")) activateTab("#validation-pane");
-  if (state.session?.role !== "admin" && opsTab?.classList.contains("active")) activateTab("#requests-pane");
-  if (!canViewActivity && activityTab?.classList.contains("active")) activateTab("#requests-pane");
-  if (!["admin", "ops"].includes(state.session?.role) && validationTab?.classList.contains("active")) activateTab("#requests-pane");
-  if (isOps && !validationTab?.classList.contains("active")) activateTab("#validation-pane");
-  if (isSupport && !["#requests-pane", "#clients-pane", "#providers-pane", "#customer-service-pane", "#inbox-pane", "#activity-pane", "#settings-pane"].includes(state.lastDashboardTabTarget)) activateTab("#customer-service-pane");
+  if (state.session?.role !== "admin" && opsTab?.classList.contains("active")) activateTab("#feed-pane");
+  if (!canViewActivity && activityTab?.classList.contains("active")) activateTab("#feed-pane");
+  if (!["admin", "ops"].includes(state.session?.role) && validationTab?.classList.contains("active")) activateTab("#feed-pane");
+  if (isSupport && !["#feed-pane", "#requests-pane", "#clients-pane", "#providers-pane", "#customer-service-pane", "#inbox-pane", "#activity-pane", "#settings-pane"].includes(state.lastDashboardTabTarget)) activateTab("#feed-pane");
 }
 
 function activateTab(target) {
@@ -1361,7 +1393,7 @@ function fallbackDashboardTab() {
   const lastTab = $(`.app-tabs .nav-link[data-bs-target="${escapeAttribute(state.lastDashboardTabTarget)}"]`);
   if (lastTab && !lastTab.hidden) return state.lastDashboardTabTarget;
   const tab = $$(".app-tabs .nav-link").find((item) => !item.hidden && !["#activity-pane", "#settings-pane"].includes(item.dataset.bsTarget));
-  return tab?.dataset.bsTarget || "#requests-pane";
+  return tab?.dataset.bsTarget || "#feed-pane";
 }
 
 function focusRequestCard(requestId, offerId = "") {
@@ -1516,6 +1548,484 @@ function openAdminMetric(metric) {
   requestAnimationFrame(() => {
     const target = providerMetric ? "[data-provider-list]" : "[data-request-list]";
     $(target)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
+async function loadFeed(options = {}) {
+  if (!state.session || state.feedSyncing || (state.feedLoaded && options.silent && !options.force)) return;
+  state.feedSyncing = true;
+  try {
+    const payload = await apiFetch("/api/feed", { method: "GET", silentError: Boolean(options.silent) });
+    state.feedPosts = payload.posts || [];
+    state.feedLoaded = true;
+    renderFeed();
+  } catch (error) {
+    if (!options.silent) notify("Feed unavailable", error.message || "Could not load the feed.", "error");
+  } finally {
+    state.feedSyncing = false;
+  }
+}
+
+async function loadPublicPost() {
+  const params = new URLSearchParams(window.location.search);
+  const postId = state.publicPostId || params.get("post") || params.get("feedPost") || "";
+  state.publicPostId = postId;
+  if (!postId || state.publicPostLoading) return;
+  state.publicPostLoading = true;
+  try {
+    const payload = await apiFetch(`/api/public-post/${encodeURIComponent(postId)}`, { method: "GET", silentError: true });
+    state.publicPost = payload.post || null;
+  } catch {
+    state.publicPost = null;
+  } finally {
+    state.publicPostLoading = false;
+    renderPublicPost();
+  }
+}
+
+function renderFeed() {
+  const list = $("[data-feed-list]");
+  const form = $("[data-feed-form]");
+  if (!list || !form) return;
+  const photo = $("[data-feed-composer-photo]");
+  if (photo) {
+    photo.src = resolveMediaUrl(state.session?.photoUrl);
+    photo.alt = state.session ? `${displayUserName(state.session)} photo` : "";
+  }
+  const officialWrap = $("[data-feed-official-wrap]");
+  if (officialWrap) officialWrap.hidden = !canPostOfficialFeed();
+  if (!state.session) {
+    list.innerHTML = "";
+    return;
+  }
+  if (state.feedSyncing && !state.feedLoaded) {
+    list.innerHTML = `<div class="empty-card"><strong>Loading feed...</strong><p>Fetching community posts.</p></div>`;
+    return;
+  }
+  list.innerHTML = state.feedPosts.length
+    ? state.feedPosts.map((post) => renderFeedPost(post)).join("")
+    : `<div class="empty-card"><strong>No posts yet</strong><p>Share the first service update or community note.</p></div>`;
+  bindFeedPostActions(list);
+}
+
+function bindFeedAudienceSelector(scope = document) {
+  $$("[data-feed-audience]", scope).forEach((audience) => {
+    const button = $("[data-feed-audience-button]", audience);
+    const menu = $("[data-feed-audience-menu]", audience);
+    const input = $("[data-feed-visibility]", audience);
+    if (!button || !menu || !input || audience.dataset.bound === "true") return;
+    audience.dataset.bound = "true";
+    setFeedAudienceValue(input.value || "public", audience);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const opening = menu.hidden;
+      closeFeedAudienceMenus();
+      menu.hidden = !opening;
+      button.setAttribute("aria-expanded", opening ? "true" : "false");
+    });
+    $$("[data-feed-audience-option]", audience).forEach((option) => {
+      option.addEventListener("click", () => {
+        setFeedAudienceValue(option.dataset.feedAudienceOption || "public", audience);
+        menu.hidden = true;
+        button.setAttribute("aria-expanded", "false");
+      });
+    });
+  });
+}
+
+function setFeedAudienceValue(value = "public", audience = $("[data-feed-audience]")) {
+  if (!audience) return;
+  const visibility = value === "private" ? "private" : "public";
+  const input = $("[data-feed-visibility]", audience);
+  const label = $("[data-feed-audience-label]", audience);
+  const menu = $("[data-feed-audience-menu]", audience);
+  if (input) input.value = visibility;
+  if (label) {
+    label.innerHTML = visibility === "private"
+      ? `<b aria-hidden="true">👥</b> Private`
+      : `<b aria-hidden="true">🌐</b> Public`;
+  }
+  $$("[data-feed-audience-option]", menu || audience).forEach((option) => {
+    option.setAttribute("aria-checked", option.dataset.feedAudienceOption === visibility ? "true" : "false");
+  });
+}
+
+function closeFeedAudienceMenus() {
+  $$("[data-feed-audience]").forEach((audience) => {
+    const menu = $("[data-feed-audience-menu]", audience);
+    const button = $("[data-feed-audience-button]", audience);
+    if (menu) menu.hidden = true;
+    button?.setAttribute("aria-expanded", "false");
+  });
+}
+
+function renderPublicPost() {
+  const host = $("[data-public-post]");
+  if (!host) return;
+  if (state.publicPostLoading) {
+    host.innerHTML = `<div class="empty-card"><strong>Loading post...</strong><p>Opening this public KAILA post.</p></div>`;
+    return;
+  }
+  host.innerHTML = state.publicPost
+    ? renderFeedPost(state.publicPost, { publicOnly: true })
+    : `<div class="empty-card"><strong>Post unavailable</strong><p>This shared post is private, deleted, or no longer available.</p><button class="btn btn-primary" type="button" data-route="login">Login</button></div>`;
+  bindFeedPostActions(host, { publicOnly: true });
+  $$("[data-route]", host).forEach((el) => el.addEventListener("click", () => route(el.dataset.route)));
+}
+
+function renderFeedPost(post = {}, options = {}) {
+  const publicOnly = Boolean(options.publicOnly);
+  const shareUrl = feedShareUrl(post);
+  const visibilityIcon = post.visibility === "private" ? "fa-lock" : "fa-globe";
+  return `
+    <article class="feed-card ${post.official ? "official" : ""}" data-feed-post="${escapeAttribute(post.id)}">
+      <div class="feed-card-head">
+        <img src="${escapeAttribute(resolveMediaUrl(post.authorPhotoUrl))}" alt="${escapeAttribute(post.authorName || "KAILA user")} photo">
+        <div>
+          <strong>${escapeHtml(post.authorName || "KAILA user")} ${post.official ? `<span class="verified-badge" title="Official KAILA"><i class="fa-solid fa-circle-check"></i></span>` : ""}</strong>
+          <span>${escapeHtml(formatDateTime(post.createdAt))} · <i class="fa-solid ${visibilityIcon}"></i> ${escapeHtml(capitalize(post.visibility || "public"))}</span>
+        </div>
+      </div>
+      ${post.body ? `<p class="feed-body">${escapeHtml(post.body)}</p>` : ""}
+      ${renderFeedMedia(post.media)}
+      <div class="feed-stats">
+        <span>${feedReactionTotal(post)} reaction${feedReactionTotal(post) === 1 ? "" : "s"}</span>
+        <span>${post.commentCount || 0} comment${post.commentCount === 1 ? "" : "s"}</span>
+        ${post.visibility === "public" ? `<span>${post.shareCount || 0} share${post.shareCount === 1 ? "" : "s"}</span>` : ""}
+      </div>
+      <div class="feed-actions">
+        ${["like", "helpful", "interested"].map((reaction) => `
+          <button class="${post.viewerReactions?.includes(reaction) ? "active" : ""}" type="button" data-feed-reaction="${reaction}" ${publicOnly ? "data-auth-required" : ""}>
+            <i class="fa-solid ${reaction === "like" ? "fa-thumbs-up" : reaction === "helpful" ? "fa-hand-holding-heart" : "fa-star"}"></i>
+            <span>${escapeHtml(capitalize(reaction))}</span>
+            <b>${Number(post.reactions?.[reaction] || 0)}</b>
+          </button>
+        `).join("")}
+        <button type="button" data-feed-comment-focus ${publicOnly ? "data-auth-required" : ""}><i class="fa-solid fa-comment"></i><span>Comment</span></button>
+        ${post.visibility === "public" ? `<button type="button" data-feed-share="${escapeAttribute(shareUrl)}"><i class="fa-solid fa-share-nodes"></i><span>Share</span></button>` : ""}
+        ${post.visibility === "public" ? `<a href="https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}" target="_blank" rel="noopener"><i class="fa-brands fa-facebook"></i><span>Facebook</span></a>` : ""}
+      </div>
+      <div class="feed-comments">
+        ${(post.comments || []).slice(-4).map((comment) => renderFeedComment(comment, post, { publicOnly })).join("")}
+        <form class="feed-comment-form" data-feed-comment-form ${publicOnly ? "data-auth-required" : ""}>
+          <input class="form-control form-control-sm" name="body" maxlength="800" placeholder="Write a comment">
+          <button class="btn btn-sm btn-primary" type="submit" aria-label="Send comment"><i class="fa-solid fa-paper-plane"></i></button>
+        </form>
+      </div>
+    </article>
+  `;
+}
+
+function renderFeedComment(comment = {}, post = {}, options = {}) {
+  const publicOnly = Boolean(options.publicOnly);
+  const isReply = Boolean(options.isReply);
+  const stateClass = comment.deleted ? "deleted" : comment.hidden ? "hidden" : "";
+  return `
+    <div class="feed-comment-wrap ${stateClass}" data-feed-comment-wrap data-feed-comment="${escapeAttribute(comment.id)}">
+      <div class="feed-comment">
+        <img src="${escapeAttribute(resolveMediaUrl(comment.authorPhotoUrl))}" alt="">
+        <div>
+          <strong>${escapeHtml(comment.authorName || "KAILA user")} ${comment.official ? `<span class="verified-badge"><i class="fa-solid fa-circle-check"></i></span>` : ""}</strong>
+          <p>${escapeHtml(comment.body)}</p>
+          <div class="feed-comment-actions">
+            ${renderFeedCommentReactionButtons(comment, publicOnly)}
+            ${isReply || comment.hidden || comment.deleted ? "" : `<button type="button" data-feed-reply-toggle ${publicOnly ? "data-auth-required" : ""}>Reply</button>`}
+            ${comment.canModerate && !comment.hidden && !comment.deleted ? `<button type="button" data-feed-comment-moderate="hide">Hide</button>` : ""}
+            ${comment.canModerate && !comment.deleted ? `<button type="button" data-feed-comment-moderate="delete">Delete</button>` : ""}
+          </div>
+        </div>
+      </div>
+      ${isReply ? "" : `<form class="feed-comment-form feed-reply-form" data-feed-reply-form hidden ${publicOnly ? "data-auth-required" : ""}>
+        <input class="form-control form-control-sm" name="body" maxlength="800" placeholder="Write a reply">
+        <button class="btn btn-sm btn-primary" type="submit" aria-label="Send reply"><i class="fa-solid fa-paper-plane"></i></button>
+      </form>`}
+      ${(comment.replies || []).length ? `<div class="feed-replies">${comment.replies.map((reply) => renderFeedComment(reply, post, { publicOnly, isReply: true })).join("")}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderFeedCommentReactionButtons(comment = {}, publicOnly = false) {
+  if (comment.hidden || comment.deleted) return "";
+  return ["like", "helpful", "interested"].map((reaction) => `
+    <button class="${comment.viewerReactions?.includes(reaction) ? "active" : ""}" type="button" data-feed-comment-reaction="${reaction}" ${publicOnly ? "data-auth-required" : ""}>
+      ${escapeHtml(reaction === "like" ? "Like" : reaction === "helpful" ? "Helpful" : "Interested")}
+      <b>${Number(comment.reactions?.[reaction] || 0)}</b>
+    </button>
+  `).join("");
+}
+
+function renderFeedMedia(media = []) {
+  if (!media.length) return "";
+  const item = media[0];
+  const url = resolveMediaUrl(item.url);
+  return item.mimeType?.startsWith("video/")
+    ? `<video class="feed-media" src="${escapeAttribute(url)}" controls playsinline preload="metadata"></video>`
+    : `<img class="feed-media" src="${escapeAttribute(url)}" alt="${escapeAttribute(item.originalName || "Feed media")}">`;
+}
+
+function bindFeedPostActions(scope, options = {}) {
+  $$("[data-auth-required]", scope).forEach((item) => {
+    item.addEventListener("click", (event) => {
+      event.preventDefault();
+      promptFeedAuth();
+    });
+  });
+  $$("[data-feed-reaction]", scope).forEach((button) => {
+    if (options.publicOnly) return;
+    button.addEventListener("click", () => toggleFeedReaction(button.closest("[data-feed-post]")?.dataset.feedPost, button.dataset.feedReaction));
+  });
+  $$("[data-feed-comment-form]", scope).forEach((form) => {
+    if (options.publicOnly) return;
+    form.addEventListener("submit", submitFeedComment);
+  });
+  $$("[data-feed-reply-form]", scope).forEach((form) => {
+    if (options.publicOnly) return;
+    form.addEventListener("submit", submitFeedReply);
+  });
+  $$("[data-feed-comment-focus]", scope).forEach((button) => {
+    if (options.publicOnly) return;
+    button.addEventListener("click", () => button.closest("[data-feed-post]")?.querySelector("[data-feed-comment-form] input")?.focus());
+  });
+  $$("[data-feed-reply-toggle]", scope).forEach((button) => {
+    if (options.publicOnly) return;
+    button.addEventListener("click", () => {
+      const form = button.closest("[data-feed-comment-wrap]")?.querySelector("[data-feed-reply-form]");
+      if (!form) return;
+      form.hidden = !form.hidden;
+      if (!form.hidden) form.elements.body?.focus();
+    });
+  });
+  $$("[data-feed-comment-reaction]", scope).forEach((button) => {
+    if (options.publicOnly) return;
+    button.addEventListener("click", () => toggleFeedCommentReaction(
+      button.closest("[data-feed-post]")?.dataset.feedPost,
+      button.closest("[data-feed-comment-wrap]")?.dataset.feedComment,
+      button.dataset.feedCommentReaction
+    ));
+  });
+  $$("[data-feed-comment-moderate]", scope).forEach((button) => {
+    if (options.publicOnly) return;
+    button.addEventListener("click", () => moderateFeedComment(
+      button.closest("[data-feed-post]")?.dataset.feedPost,
+      button.closest("[data-feed-comment-wrap]")?.dataset.feedComment,
+      button.dataset.feedCommentModerate
+    ));
+  });
+  $$("[data-feed-share]", scope).forEach((button) => {
+    button.addEventListener("click", () => shareFeedPost(button.closest("[data-feed-post]")?.dataset.feedPost, button.dataset.feedShare));
+  });
+}
+
+async function createFeedPost(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (form.dataset.posting === "true") return;
+  setFeedComposerPosting(form, true);
+  const body = form.elements.body?.value.trim() || "";
+  let attachments;
+  try {
+    attachments = await readMediaAttachments("[data-feed-media]", form);
+  } catch (error) {
+    setFeedComposerPosting(form, false);
+    notify("Media failed", error.message || "Could not read the selected file.", "error");
+    return;
+  }
+  if (!attachments) {
+    setFeedComposerPosting(form, false);
+    return;
+  }
+  if (!body && !attachments.length) {
+    setFeedComposerPosting(form, false);
+    notify("Post is empty", "Write something or add a photo/video.", "warning");
+    return;
+  }
+  const payload = {
+    body,
+    visibility: form.elements.visibility?.value || "public",
+    postAsOfficial: Boolean(form.elements.postAsOfficial?.checked),
+    attachments,
+  };
+  try {
+    const result = await apiFetch("/api/feed", { method: "POST", body: JSON.stringify(payload) });
+    state.feedPosts = result.posts || state.feedPosts;
+    state.feedLoaded = true;
+    resetFeedComposer(form);
+    renderFeed();
+    notify("Posted", payload.visibility === "public" ? "Your post is live in the feed." : "Your private post is saved.", "success");
+  } catch (error) {
+    const message = error.status === 404
+      ? "Feed API route not found on the running backend. Restart the KAILA socket service so it loads /api/feed."
+      : (error.message || "Could not create post.");
+    notify("Post failed", message, "error");
+    if (error.status === 404) console.error("KAILA feed create route missing on active API server", { apiBase: apiBase(), path: "/api/feed" });
+  } finally {
+    setFeedComposerPosting(form, false);
+  }
+}
+
+function setFeedComposerPosting(form = $("[data-feed-form]"), posting = false) {
+  if (!form) return;
+  const submitButton = form.querySelector("button[type='submit']");
+  form.dataset.posting = posting ? "true" : "false";
+  if (!submitButton) return;
+  if (posting) {
+    submitButton.disabled = true;
+    submitButton.dataset.originalHtml = submitButton.dataset.originalHtml || submitButton.innerHTML;
+    submitButton.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Posting`;
+    return;
+  }
+  submitButton.disabled = false;
+  submitButton.innerHTML = submitButton.dataset.originalHtml || `<i class="fa-solid fa-paper-plane"></i> Post`;
+  delete submitButton.dataset.originalHtml;
+}
+
+function resetFeedComposer(form = $("[data-feed-form]")) {
+  if (!form) return;
+  const body = form.elements.body;
+  const media = $("[data-feed-media]", form);
+  const preview = $("[data-feed-media-preview]", form);
+  if (body) body.value = "";
+  if (media) media.value = "";
+  if (preview) preview.innerHTML = "";
+  if (form.elements.postAsOfficial) form.elements.postAsOfficial.checked = false;
+  setFeedAudienceValue("public", $("[data-feed-audience]", form));
+  closeFeedAudienceMenus();
+}
+
+async function toggleFeedReaction(postId, reaction) {
+  if (!postId || !state.session) return promptFeedAuth();
+  try {
+    const result = await apiFetch(`/api/feed/${encodeURIComponent(postId)}/reactions`, {
+      method: "POST",
+      body: JSON.stringify({ reaction }),
+    });
+    state.feedPosts = result.posts || state.feedPosts;
+    renderFeed();
+  } catch (error) {
+    notify("Reaction failed", error.message || "Try again.", "error");
+  }
+}
+
+async function submitFeedComment(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const postId = form.closest("[data-feed-post]")?.dataset.feedPost;
+  const body = form.elements.body?.value.trim() || "";
+  if (!postId || !body) return;
+  try {
+    const result = await apiFetch(`/api/feed/${encodeURIComponent(postId)}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    });
+    state.feedPosts = result.posts || state.feedPosts;
+    renderFeed();
+  } catch (error) {
+    notify("Comment failed", error.message || "Try again.", "error");
+  }
+}
+
+async function submitFeedReply(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const postId = form.closest("[data-feed-post]")?.dataset.feedPost;
+  const commentId = form.closest("[data-feed-comment-wrap]")?.dataset.feedComment;
+  const body = form.elements.body?.value.trim() || "";
+  if (!postId || !commentId || !body) return;
+  try {
+    const result = await apiFetch(`/api/feed/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}/replies`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    });
+    state.feedPosts = result.posts || state.feedPosts;
+    renderFeed();
+  } catch (error) {
+    notify("Reply failed", error.message || "Try again.", "error");
+  }
+}
+
+async function toggleFeedCommentReaction(postId, commentId, reaction) {
+  if (!postId || !commentId || !state.session) return promptFeedAuth();
+  try {
+    const result = await apiFetch(`/api/feed/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}/reactions`, {
+      method: "POST",
+      body: JSON.stringify({ reaction }),
+    });
+    state.feedPosts = result.posts || state.feedPosts;
+    renderFeed();
+  } catch (error) {
+    notify("Reaction failed", error.message || "Try again.", "error");
+  }
+}
+
+async function moderateFeedComment(postId, commentId, action) {
+  if (!postId || !commentId || !["hide", "delete"].includes(action)) return;
+  const result = await modal({
+    icon: action === "delete" ? "warning" : "question",
+    title: action === "delete" ? "Delete comment?" : "Hide comment?",
+    text: action === "delete" ? "The comment will be removed from normal feed view." : "The comment will be hidden from normal feed view.",
+    confirmButtonText: action === "delete" ? "Delete" : "Hide",
+  });
+  if (!result.isConfirmed) return;
+  try {
+    const response = await apiFetch(`/api/feed/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}/moderation`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+    state.feedPosts = response.posts || state.feedPosts;
+    renderFeed();
+    notify(action === "delete" ? "Comment deleted" : "Comment hidden", "Feed moderation updated.", "success");
+  } catch (error) {
+    notify("Moderation failed", error.message || "Try again.", "error");
+  }
+}
+
+async function shareFeedPost(postId, url) {
+  if (!url) return;
+  const post = state.feedPosts.find((item) => item.id === postId) || state.publicPost || {};
+  const shareData = { title: "KAILA Service Feed", text: post.body || "Public KAILA service post", url };
+  try {
+    if (navigator.share) await navigator.share(shareData);
+    else {
+      await navigator.clipboard?.writeText?.(url);
+      notify("Link copied", "Public post link copied to clipboard.", "success");
+    }
+    if (postId) {
+      await apiFetch(`/api/feed/${encodeURIComponent(postId)}/share`, { method: "POST", body: JSON.stringify({}) });
+      loadFeed({ silent: true, force: true }).catch(() => {});
+    }
+  } catch (error) {
+    if (error.name !== "AbortError") notify("Share failed", "Copy the Facebook link or try again.", "warning");
+  }
+}
+
+function feedReactionTotal(post = {}) {
+  return Object.values(post.reactions || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+}
+
+function feedShareUrl(post = {}) {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("route", "public-post");
+  url.searchParams.set("post", post.id || "");
+  return url.toString();
+}
+
+function canPostOfficialFeed() {
+  return ["admin", "ops", SUPPORT_ROLE].includes(state.session?.role);
+}
+
+function promptFeedAuth() {
+  modal({
+    icon: "info",
+    title: "Join KAILA",
+    text: "Login or create an account to react, comment, post, message, or request service.",
+    confirmButtonText: "Login",
+    showCancelButton: true,
+    cancelButtonText: "Create Account",
+  }).then((result) => {
+    if (result.isConfirmed) route("login");
+    else if (result.dismiss === window.Swal.DismissReason.cancel) route("register");
   });
 }
 
@@ -3035,9 +3545,13 @@ function renderActivity() {
     return;
   }
   const missedCallCards = state.missedCalls.map(renderMissedCallActivity).join("");
+  const feedNotificationCards = state.unreadNotificationItems
+    .filter((item) => item.type === "feed")
+    .map((item) => `<article class="k-card"><h3>${escapeHtml(item.title || "Feed update")}</h3><p>${escapeHtml(item.detail || "")}</p><small>${escapeHtml(formatDateTime(item.createdAt))}</small></article>`)
+    .join("");
   const activityCards = state.activity.map((item) => `<article class="k-card"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.detail)}</p></article>`).join("");
-  const html = missedCallCards || activityCards
-    ? `${missedCallCards}${activityCards}`
+  const html = missedCallCards || feedNotificationCards || activityCards
+    ? `${missedCallCards}${feedNotificationCards}${activityCards}`
     : emptyCard("No activity yet", "Real-time events will appear here.");
   $("[data-activity-feed]").innerHTML = html;
   $("[data-live-feed]").innerHTML = html;
@@ -6603,6 +7117,28 @@ function connectSocket(force = false) {
       addActivity("Socket connection failed", `${socketUrl} - ${error?.message || "Connection error"}`);
     });
     state.socket.on("kaila.state.updated", applyServerState);
+    state.socket.on("kaila.feed.updated", () => {
+      if (state.session) loadFeed({ silent: true, force: true }).catch(() => {});
+    });
+    state.socket.on("kaila.feed.notification", (notification) => {
+      if (!notification || notification.recipientId !== state.session?.id) return;
+      addUnreadNotification(notificationItemFromFeed(notification));
+      playAttentionTone("update");
+      vibrateAfterInteraction([280, 90, 280]);
+      showSystemNotification(`KAILA: ${notification.title || "Feed update"}`, {
+        body: notification.body || "New feed activity.",
+        tag: "kaila-feed",
+        urgency: "update",
+        data: {
+          action: "open-notifications",
+          id: notification.id,
+          postId: notification.postId,
+          commentId: notification.commentId || "",
+          createdAt: notification.createdAt,
+        },
+        actions: [{ action: "open-notifications", title: "Open KAILA" }],
+      });
+    });
     state.socket.on("kaila.request.created", handleRequestCreated);
     state.socket.on("kaila.provider.saved", handleProviderSaved);
     state.socket.on("kaila.offer.saved", handleOfferSaved);
@@ -7344,6 +7880,11 @@ async function syncUnreadNotificationSummaries() {
       serverNotificationKeys.add(`missedCall:${missedCall.id}`);
       addUnreadNotification(notificationItemFromMissedCall(missedCall));
     });
+    (summary.feedNotifications || []).forEach((notification) => {
+      if (!isUnreadNotification("feed", notification.createdAt)) return;
+      serverNotificationKeys.add(`feed:${notification.id}`);
+      addUnreadNotification(notificationItemFromFeed(notification));
+    });
     const beforeCount = state.unreadNotificationItems.length;
     state.unreadNotificationItems = state.unreadNotificationItems.filter((item) => serverNotificationKeys.has(item.key));
     state.unreadNotifications = state.unreadNotificationItems.length;
@@ -7389,6 +7930,18 @@ function notificationItemFromMissedCall(call = {}) {
     title: `Missed ${callLabel}`,
     detail,
     createdAt: call.createdAt,
+  };
+}
+
+function notificationItemFromFeed(notification = {}) {
+  if (!notification.id) return null;
+  return {
+    type: "feed",
+    id: notification.id,
+    key: `feed:${notification.id}`,
+    title: notification.title || "Feed update",
+    detail: notification.body || notification.detail || "",
+    createdAt: notification.createdAt,
   };
 }
 
@@ -9327,6 +9880,7 @@ async function tryOfflineLogin(data = {}) {
   }
 
   state.session = stored.user;
+  state.lastDashboardTabTarget = "#feed-pane";
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   loadAttentionBadgesForSession();
   registerPushToken(state.pushToken).catch((error) => console.warn("KAILA push token registration failed:", error));
@@ -9338,6 +9892,7 @@ async function tryOfflineLogin(data = {}) {
     render();
   }
   syncQueuedValidationEntries();
+  activateTab("#feed-pane");
   await successRedirect("Offline login", `Welcome back, ${displayUserName(state.session)}. Saved entries will sync when online.`);
   return true;
 }
