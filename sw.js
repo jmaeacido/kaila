@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v178-job-flow-marketplace";
+const CACHE_NAME = "kaila-pwa-v180-mobile-flow-redesign";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"

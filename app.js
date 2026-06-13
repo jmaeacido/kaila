@@ -149,6 +149,7 @@ const state = {
   },
   call: null,
   adminMetric: "",
+  jobFilter: "all",
   activeRole: localStorage.getItem(STORAGE.activeRole) || "",
   theme: localStorage.getItem(STORAGE.theme) || "system",
   geography: FALLBACK_GEOGRAPHY,
@@ -2255,9 +2256,12 @@ function renderRequests() {
       : state.requests.filter((request) => request.clientId === state.session?.id);
   const adminPanel = state.session?.role === "admin" ? adminRequestMetricPanel() : "";
   if (state.session?.role === "admin") visible = adminMetricRequests(visible);
+  const jobsHeader = renderJobsHeader(visible);
+  visible = filterJobRequests(visible, state.jobFilter);
 
   if (!visible.length) {
-    host.innerHTML = `${adminPanel}${emptyCard("No matching requests", "This metric has no matching request records yet.")}`;
+    host.innerHTML = `${jobsHeader}${adminPanel}${emptyCard("No matching jobs", "Try a different job filter or post a new request.")}`;
+    bindJobsHeaderActions(host);
     return;
   }
 
@@ -2276,11 +2280,62 @@ function renderRequests() {
     </details>
   ` : "";
 
-  host.innerHTML = `${adminPanel}${requestCards || emptyCard("No active requests", "Cancelled requests are tucked below.")}${cancelledSection}`;
+  host.innerHTML = `${jobsHeader}${adminPanel}${requestCards || emptyCard("No active requests", "Cancelled requests are tucked below.")}${cancelledSection}`;
 
+  bindJobsHeaderActions(host);
   bindRequestCardActions(host);
   hydrateRequestRouteDistances(host);
   hydrateOfferRouteDistances(host);
+}
+
+function filterJobRequests(requests = [], filter = "all") {
+  if (filter === "posted") return requests.filter((request) => ["Posted", "Open"].includes(request.status));
+  if (filter === "offers") return requests.filter((request) => ["Offers Received", "Countered"].includes(request.status) || visibleOffers(request).length);
+  if (filter === "active") return requests.filter((request) => ["Accepted", "In Progress", "Provider Marked Done", "Revision Requested", "Disputed"].includes(request.status));
+  if (filter === "completed") return requests.filter((request) => ["Payment Released", "Rated", "Rated / Closed", "Resolved"].includes(request.status));
+  return requests;
+}
+
+function renderJobsHeader(requests = []) {
+  const filters = [
+    ["all", "All"],
+    ["posted", "Posted"],
+    ["offers", "Offers"],
+    ["active", "In Progress"],
+    ["completed", "Completed"],
+  ];
+  const counts = Object.fromEntries(filters.map(([key]) => [key, filterJobRequests(requests, key).length]));
+  const activeFilter = filters.some(([key]) => key === state.jobFilter) ? state.jobFilter : "all";
+  if (activeFilter !== state.jobFilter) state.jobFilter = activeFilter;
+  return `
+    <section class="jobs-toolbar" aria-label="Jobs">
+      <div class="jobs-toolbar-head">
+        <div>
+          <span>Workspace</span>
+          <h2>My Jobs</h2>
+        </div>
+        <button class="jobs-search-button" type="button" data-home-tab="#feed-pane" aria-label="Search services">
+          <i class="fa-solid fa-magnifying-glass"></i>
+        </button>
+      </div>
+      <div class="jobs-filter-tabs" role="tablist" aria-label="Filter jobs">
+        ${filters.map(([key, label]) => `
+          <button type="button" class="${key === activeFilter ? "active" : ""}" data-job-filter="${key}" role="tab" aria-selected="${key === activeFilter ? "true" : "false"}">
+            <span>${escapeHtml(label)}</span>
+            <b>${counts[key] || 0}</b>
+          </button>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function bindJobsHeaderActions(host = document) {
+  $$("[data-job-filter]", host).forEach((button) => button.addEventListener("click", () => {
+    state.jobFilter = button.dataset.jobFilter || "all";
+    renderRequests();
+  }));
+  $$("[data-home-tab]", host).forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.homeTab)));
 }
 
 function adminMetricRequests(requests) {
@@ -2360,9 +2415,11 @@ function renderJobSummary(request = {}) {
 }
 
 function renderJobPrimaryCta(request = {}) {
-  if (canSelectOffer(request)) return `<button class="btn btn-sm btn-primary" type="button" data-scroll-offers="${escapeAttribute(request.id)}"><i class="fa-solid fa-list-check"></i> View Offers</button>`;
-  if (navigationTargetForRequest(request)) return `<button class="btn btn-sm btn-primary" type="button" data-navigate-request="${escapeAttribute(request.id)}"><i class="fa-solid fa-route"></i> Track Job</button>`;
-  if (request.status === "Provider Marked Done" && request.clientId === state.session?.id) return `<button class="btn btn-sm btn-primary" type="button" data-job-action="client_complete" data-request-id="${escapeAttribute(request.id)}"><i class="fa-solid fa-shield-halved"></i> Review Completion</button>`;
+  if (canSelectOffer(request)) return `<button class="btn btn-sm btn-primary" type="button" data-open-offers-screen="${escapeAttribute(request.id)}"><i class="fa-solid fa-list-check"></i> View Offers</button>`;
+  if (request.status === "Provider Marked Done" && request.clientId === state.session?.id) return `<button class="btn btn-sm btn-primary" type="button" data-open-completed-screen="${escapeAttribute(request.id)}"><i class="fa-solid fa-shield-halved"></i> Review Completion</button>`;
+  if (request.clientId === state.session?.id && request.status === "Payment Released" && !request.clientRatedAt) return `<button class="btn btn-sm btn-primary" type="button" data-open-completed-screen="${escapeAttribute(request.id)}"><i class="fa-solid fa-star"></i> Rate Job</button>`;
+  if (request.acceptedProviderId === state.session?.id && request.status === "Payment Released" && !request.providerRatedAt) return `<button class="btn btn-sm btn-primary" type="button" data-open-completed-screen="${escapeAttribute(request.id)}"><i class="fa-solid fa-star"></i> Rate Job</button>`;
+  if (navigationTargetForRequest(request) || ["Accepted", "In Progress", "Revision Requested"].includes(request.status)) return `<button class="btn btn-sm btn-primary" type="button" data-open-active-job="${escapeAttribute(request.id)}"><i class="fa-solid fa-route"></i> Track Job</button>`;
   if (canViewConversation(request)) return `<button class="btn btn-sm btn-primary" type="button" data-conversation="${escapeAttribute(request.id)}"><i class="fa-solid fa-message"></i> Message</button>`;
   return "";
 }
@@ -2410,7 +2467,8 @@ function renderRequestCard(request) {
         ${canEditRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-edit-request="${request.id}"><i class="fa-solid fa-pen"></i> Edit</button>` : ""}
         ${canAcceptClientPrice(request) ? `<button class="btn btn-sm btn-outline-success" data-accept-client-price="${request.id}"><i class="fa-solid fa-circle-check"></i> Accept Price</button>` : ""}
         ${canUpdateRequestDistance(request) ? `<button class="btn btn-sm btn-outline-secondary" data-update-request-distance="${request.id}"><i class="fa-solid fa-location-crosshairs"></i> Distance</button>` : ""}
-        ${navigationTargetForRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-navigate-request="${request.id}"><i class="fa-solid fa-diamond-turn-right"></i> Navigate</button>` : ""}
+        ${canSelectOffer(request) ? `<button class="btn btn-sm btn-outline-primary" data-open-offers-screen="${request.id}"><i class="fa-solid fa-list-check"></i> Offers</button>` : ""}
+        ${navigationTargetForRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-open-active-job="${request.id}"><i class="fa-solid fa-diamond-turn-right"></i> Track</button>` : ""}
         ${canOffer(request) ? `<button class="btn btn-sm btn-outline-primary" data-offer="${request.id}"><i class="fa-solid fa-hand-holding-dollar"></i> Offer</button>` : ""}
         ${canPass(request) ? `<button class="btn btn-sm btn-outline-secondary" data-pass="${request.id}"><i class="fa-solid fa-forward-step"></i> Pass</button>` : ""}
         ${canViewConversation(request) ? `<button class="btn btn-sm btn-outline-primary" data-conversation="${request.id}"><i class="fa-solid fa-message"></i> Messages</button>` : ""}
@@ -2692,6 +2750,9 @@ function bindRequestCardActions(host) {
   $$("[data-accept-client-price]", host).forEach((button) => button.addEventListener("click", () => acceptClientPrice(button.dataset.acceptClientPrice)));
   $$("[data-update-request-distance]", host).forEach((button) => button.addEventListener("click", () => updateRequestDistance(button.dataset.updateRequestDistance)));
   $$("[data-navigate-request]", host).forEach((button) => button.addEventListener("click", () => openRequestNavigation(button.dataset.navigateRequest)));
+  $$("[data-open-offers-screen]", host).forEach((button) => button.addEventListener("click", () => openOffersScreen(button.dataset.openOffersScreen)));
+  $$("[data-open-active-job]", host).forEach((button) => button.addEventListener("click", () => openActiveJobScreen(button.dataset.openActiveJob)));
+  $$("[data-open-completed-screen]", host).forEach((button) => button.addEventListener("click", () => openCompletedJobScreen(button.dataset.openCompletedScreen)));
   $$("[data-offer]", host).forEach((button) => button.addEventListener("click", () => openOfferModal(button.dataset.offer, "offer")));
   $$("[data-pass]", host).forEach((button) => button.addEventListener("click", () => passRequest(button.dataset.pass)));
   $$("[data-edit-request]", host).forEach((button) => button.addEventListener("click", () => openRequestModal(state.requests.find((request) => request.id === button.dataset.editRequest))));
@@ -2754,6 +2815,350 @@ function renderOffer(offer, requestId, selectable) {
       </div>
     </article>
   `;
+}
+
+function openOffersScreen(requestId) {
+  const request = state.requests.find((item) => item.id === requestId);
+  if (!request) return;
+  openWorkspacePanel(renderOffersScreen(request), {
+    onOpen: (panel) => bindDedicatedJobScreenActions(panel),
+  });
+}
+
+function renderOffersScreen(request = {}) {
+  const offers = visibleOffers(request);
+  return `
+    <section class="mobile-flow-screen offers-flow-screen">
+      ${mobileFlowHeader("Offers")}
+      ${renderMobileJobSummaryCard(request)}
+      <div class="mobile-flow-section-title">
+        <strong>${offers.length} Offer${offers.length === 1 ? "" : "s"} Received</strong>
+        <span>${escapeHtml(formatRelativeTime(requestLastUpdate(request)) || "Updated recently")}</span>
+      </div>
+      <div class="mobile-flow-stack">
+        ${offers.length ? offers.map((offer) => renderMobileOfferCard(offer, request)).join("") : emptyCard("No offers yet", "Providers who match this request will appear here.")}
+      </div>
+    </section>
+  `;
+}
+
+function renderMobileJobSummaryCard(request = {}) {
+  return `
+    <article class="mobile-job-summary-card">
+      ${renderRequestPreviewMedia(request)}
+      <div>
+        <strong>${escapeHtml(request.category || "Job request")}</strong>
+        <span>${escapeHtml(request.area || "Pinned job site")}</span>
+        <small>Posted ${escapeHtml(formatRelativeTime(request.createdAt) || "recently")}</small>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-open-active-job="${escapeAttribute(request.id)}">View Details</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderRequestPreviewMedia(request = {}) {
+  const media = request.requestAttachments?.[0] || request.completionAttachments?.[0];
+  if (!media) {
+    return `
+      <div class="mobile-job-thumb placeholder">
+        <i class="fa-solid ${serviceIcon(request.category)}"></i>
+      </div>
+    `;
+  }
+  const url = resolveMediaUrl(media.url);
+  const isVideo = media.mimeType?.startsWith("video/");
+  return `
+    <button class="mobile-job-thumb" type="button" data-media-open data-request-id="${escapeAttribute(request.id)}" data-media-stage="${request.requestAttachments?.[0] ? "request" : "completion"}" data-media-index="0">
+      ${isVideo ? `<video preload="metadata" src="${escapeAttribute(url)}"></video>` : `<img src="${escapeAttribute(url)}" alt="${escapeAttribute(media.originalName || request.category || "Job media")}">`}
+    </button>
+  `;
+}
+
+function renderMobileOfferCard(offer = {}, request = {}) {
+  const reputation = offerProviderReputation(offer);
+  const average = Number(reputation?.average);
+  const responseRate = Number(reputation?.responseRate);
+  const completedJobs = Number(reputation?.count || 0);
+  const service = providerServiceLabel(offer.providerId) || "Local service provider";
+  return `
+    <article class="mobile-offer-card">
+      <div class="mobile-offer-head">
+        ${mobilePersonAvatar(offer.providerName, offer.providerPhotoUrl)}
+        <div>
+          <strong>${escapeHtml(offer.providerName || "Provider")}</strong>
+          <span>${escapeHtml(service)}</span>
+          <small><i class="fa-solid fa-star"></i> ${Number.isFinite(average) ? average.toFixed(1) : "New"} ${completedJobs ? `(${completedJobs} jobs)` : ""}</small>
+        </div>
+        <div class="mobile-offer-price">
+          <strong>${escapeHtml(formatCurrency(offer.amount))}</strong>
+          <span>Estimate</span>
+        </div>
+      </div>
+      <div class="mobile-offer-stats">
+        <span><i class="fa-solid fa-calendar-check"></i> ${escapeHtml(offer.schedule || "Schedule TBD")}</span>
+        ${Number.isFinite(responseRate) ? `<span><i class="fa-solid fa-reply"></i> ${responseRate}% response</span>` : ""}
+      </div>
+      ${offer.notes ? `<p>${escapeHtml(offer.notes)}</p>` : ""}
+      <div class="mobile-offer-actions">
+        <button class="btn btn-primary" type="button" data-request-id="${escapeAttribute(request.id)}" data-select-offer="${escapeAttribute(offer.id)}"><i class="fa-solid fa-user-check"></i> Hire</button>
+        ${canViewConversation(request)
+          ? `<button class="btn btn-outline-primary" type="button" data-conversation="${escapeAttribute(request.id)}"><i class="fa-solid fa-message"></i> Message</button>`
+          : `<button class="btn btn-outline-primary" type="button" data-offer-message-soon><i class="fa-solid fa-message"></i> Message</button>`}
+      </div>
+    </article>
+  `;
+}
+
+function openActiveJobScreen(requestId) {
+  const request = state.requests.find((item) => item.id === requestId);
+  if (!request) return;
+  openWorkspacePanel(renderActiveJobScreen(request), {
+    onOpen: (panel) => bindDedicatedJobScreenActions(panel),
+  });
+}
+
+function renderActiveJobScreen(request = {}) {
+  const offer = acceptedOffer(request);
+  const provider = userProfile(request.acceptedProviderId);
+  const nav = request.navigationState || {};
+  const statusCopy = navigationTargetForRequest(request)
+    ? navigationStatusText(nav)
+    : request.status === "Accepted" ? "Provider accepted" : request.status || "Job active";
+  return `
+    <section class="mobile-flow-screen active-job-screen">
+      ${mobileFlowHeader(request.category || "Active Job", `<span class="mobile-flow-status">${escapeHtml(request.status || "Active")}</span>`)}
+      ${renderMobileProgressTracker(request)}
+      <article class="mobile-info-card">
+        <div class="mobile-info-card-head">
+          <strong>Provider</strong>
+          <div class="mobile-contact-actions">
+            ${canViewConversation(request) ? `<button type="button" data-conversation="${escapeAttribute(request.id)}" aria-label="Message provider"><i class="fa-solid fa-message"></i></button>` : ""}
+            ${navigationTargetForRequest(request) ? `<button type="button" data-navigate-request="${escapeAttribute(request.id)}" aria-label="Open navigation"><i class="fa-solid fa-route"></i></button>` : ""}
+          </div>
+        </div>
+        ${request.acceptedProviderId ? renderMobileProviderRow({
+          name: request.acceptedProviderContact?.name || offer?.providerName || provider.name || "Selected provider",
+          photoUrl: request.acceptedProviderPhotoUrl || offer?.providerPhotoUrl || provider.photoUrl,
+          service: providerServiceLabel(request.acceptedProviderId) || "Selected provider",
+          reputation: acceptedProviderReputation(request),
+        }) : `<p>No provider selected yet.</p>`}
+      </article>
+      <article class="mobile-status-card">
+        <div>
+          <i class="fa-solid fa-route"></i>
+          <strong>${escapeHtml(statusCopy)}</strong>
+          <span>${escapeHtml(activeJobEtaText(request))}</span>
+        </div>
+      </article>
+      <article class="mobile-info-card">
+        <div class="mobile-info-card-head">
+          <strong>Job Details</strong>
+          <span>${escapeHtml(formatCurrency(request.budget))}</span>
+        </div>
+        <p>${escapeHtml(request.details || "No details provided.")}</p>
+        <div class="mobile-detail-grid">
+          <span><i class="fa-solid fa-location-dot"></i>${escapeHtml(request.area || "Pinned site")}</span>
+          <span><i class="fa-solid fa-clock"></i>${escapeHtml(request.preferredSchedule || request.urgency || "Flexible")}</span>
+        </div>
+      </article>
+      <div class="mobile-flow-actions">
+        ${canViewConversation(request) ? `<button class="btn btn-primary" type="button" data-conversation="${escapeAttribute(request.id)}"><i class="fa-solid fa-message"></i> Contact Provider</button>` : ""}
+        ${navigationTargetForRequest(request) ? `<button class="btn btn-outline-primary" type="button" data-navigate-request="${escapeAttribute(request.id)}"><i class="fa-solid fa-map-location-dot"></i> Open Navigation</button>` : ""}
+        ${jobActionButtons(request)}
+      </div>
+    </section>
+  `;
+}
+
+function openCompletedJobScreen(requestId) {
+  const request = state.requests.find((item) => item.id === requestId);
+  if (!request) return;
+  openWorkspacePanel(renderCompletedJobScreen(request), {
+    onOpen: (panel) => bindCompletedJobScreen(panel, request.id),
+  });
+}
+
+function renderCompletedJobScreen(request = {}) {
+  const firstMedia = request.completionAttachments?.[0] || request.requestAttachments?.[0];
+  const canRate = canRateRequest(request);
+  return `
+    <section class="mobile-flow-screen completed-job-screen">
+      ${mobileFlowHeader("Job Completed")}
+      <div class="completion-success">
+        <span><i class="fa-solid fa-check"></i></span>
+        <strong>${escapeHtml(request.category || "Job completed")}</strong>
+        <small>${request.paymentReleasedAt ? `Completed ${escapeHtml(formatDateTime(request.paymentReleasedAt))}` : escapeHtml(request.status || "Ready for review")}</small>
+      </div>
+      <article class="mobile-info-card">
+        <strong>Completion Photo</strong>
+        ${firstMedia ? renderCompletionProofButton(request, firstMedia) : `<div class="completion-proof-empty"><i class="fa-solid fa-image"></i><span>No completion proof uploaded.</span></div>`}
+        ${request.proofNote ? `<p>${escapeHtml(request.proofNote)}</p>` : ""}
+      </article>
+      <article class="mobile-rating-card">
+        <strong>How was the service?</strong>
+        <div class="star-rating mobile-star-rating" role="radiogroup" aria-label="Rating">
+          ${[1, 2, 3, 4, 5].map((score) => `<button class="star-button selected" type="button" role="radio" aria-checked="${score === 5}" aria-label="${score} star${score === 1 ? "" : "s"}" data-rating-star="${score}">&#9733;</button>`).join("")}
+        </div>
+        <input id="mobile-rating-score" type="hidden" value="5">
+        <textarea id="mobile-rating-note" class="form-control" rows="4" placeholder="Share what went well or what needs improvement." ${canRate ? "" : "disabled"}>${escapeHtml(existingRatingNote(request))}</textarea>
+      </article>
+      <div class="mobile-flow-actions">
+        ${canRate ? `<button class="btn btn-primary" type="button" data-submit-mobile-rating="${escapeAttribute(request.id)}"><i class="fa-solid fa-star"></i> Submit Rating</button>` : ""}
+        ${request.status === "Provider Marked Done" && request.clientId === state.session?.id ? `<button class="btn btn-outline-warning" type="button" data-request-id="${escapeAttribute(request.id)}" data-job-action="request_revision"><i class="fa-solid fa-rotate-left"></i> Request Revision</button>` : ""}
+        ${(request.clientId === state.session?.id || request.acceptedProviderId === state.session?.id) && ["Provider Marked Done", "Payment Released"].includes(request.status) ? `<button class="btn btn-outline-warning" type="button" data-request-id="${escapeAttribute(request.id)}" data-job-action="dispute"><i class="fa-solid fa-triangle-exclamation"></i> Dispute</button>` : ""}
+        ${request.status === "Provider Marked Done" && request.clientId === state.session?.id ? `<button class="btn btn-outline-success" type="button" data-request-id="${escapeAttribute(request.id)}" data-job-action="client_complete"><i class="fa-solid fa-shield-halved"></i> Confirm Completed</button>` : ""}
+      </div>
+    </section>
+  `;
+}
+
+function bindDedicatedJobScreenActions(scope = document) {
+  $("[data-mobile-flow-close]", scope)?.addEventListener("click", () => closeWorkspacePanel());
+  $$("[data-open-active-job]", scope).forEach((button) => button.addEventListener("click", () => openActiveJobScreen(button.dataset.openActiveJob)));
+  $$("[data-select-offer]", scope).forEach((button) => button.addEventListener("click", () => confirmRequest(button.dataset.requestId, button.dataset.selectOffer)));
+  $$("[data-conversation]", scope).forEach((button) => button.addEventListener("click", () => openConversation(button.dataset.conversation)));
+  $$("[data-navigate-request]", scope).forEach((button) => button.addEventListener("click", () => openRequestNavigation(button.dataset.navigateRequest)));
+  $$("[data-job-action]", scope).forEach((button) => button.addEventListener("click", () => openJobAction(button.dataset.requestId, button.dataset.jobAction)));
+  $$("[data-media-open]", scope).forEach((button) => button.addEventListener("click", () => openMediaViewer(button.dataset.requestId, button.dataset.mediaStage, Number(button.dataset.mediaIndex))));
+  $$("[data-offer-message-soon]", scope).forEach((button) => button.addEventListener("click", () => notify("Messaging opens after hire", "Select a provider first to open the job conversation.", "info")));
+}
+
+function bindCompletedJobScreen(scope = document, requestId = "") {
+  bindDedicatedJobScreenActions(scope);
+  bindMobileStarRating(scope);
+  $("[data-submit-mobile-rating]", scope)?.addEventListener("click", async () => {
+    const score = Number($("#mobile-rating-score", scope)?.value || 5);
+    const note = $("#mobile-rating-note", scope)?.value.trim() || "";
+    try {
+      const payload = await apiFetch(`/api/requests/${requestId}/action`, { method: "POST", body: JSON.stringify({ action: "rate", score, note }) });
+      applyServerState(payload.state);
+      notify("Rating submitted", "", "success");
+      closeWorkspacePanel();
+    } catch (error) {
+      notify("Rating failed", error.message, "error");
+    }
+  });
+}
+
+function mobileFlowHeader(title, actionHtml = "") {
+  return `
+    <header class="mobile-flow-header">
+      <button class="chat-icon-button" type="button" data-mobile-flow-close aria-label="Back">
+        <i class="fa-solid fa-arrow-left"></i>
+      </button>
+      <h2>${escapeHtml(title)}</h2>
+      <div>${actionHtml}</div>
+    </header>
+  `;
+}
+
+function renderMobileProviderRow({ name = "Provider", photoUrl = "", service = "", reputation = {} } = {}) {
+  const average = Number(reputation?.average);
+  const count = Number(reputation?.count || 0);
+  return `
+    <div class="mobile-provider-row">
+      ${mobilePersonAvatar(name, photoUrl)}
+      <div>
+        <strong>${escapeHtml(name)}</strong>
+        <span>${escapeHtml(service)}</span>
+        <small><i class="fa-solid fa-star"></i> ${Number.isFinite(average) ? average.toFixed(1) : "New"} ${count ? `(${count} jobs)` : ""}</small>
+      </div>
+    </div>
+  `;
+}
+
+function mobilePersonAvatar(name = "", photoUrl = "") {
+  const resolved = photoUrl ? resolveMediaUrl(photoUrl) : "";
+  const initials = personInitials(name);
+  return resolved
+    ? `<img class="mobile-person-avatar" src="${escapeAttribute(resolved)}" alt="${escapeAttribute(name || "Provider")} photo">`
+    : `<span class="mobile-person-avatar initials">${escapeHtml(initials)}</span>`;
+}
+
+function personInitials(name = "") {
+  const parts = String(name || "KAILA").trim().split(/\s+/).filter(Boolean);
+  return (parts.length > 1 ? `${parts[0][0]}${parts[1][0]}` : (parts[0] || "K").slice(0, 2)).toUpperCase();
+}
+
+function providerServiceLabel(providerId = "") {
+  const provider = state.providers.find((item) => item.userId === providerId);
+  return provider?.specificServices || provider?.skills || categoryList(provider?.category).slice(0, 2).join(", ");
+}
+
+function serviceIcon(category = "") {
+  const text = String(category || "").toLowerCase();
+  if (text.includes("plumb") || text.includes("sink")) return "fa-faucet-drip";
+  if (text.includes("elect")) return "fa-bolt";
+  if (text.includes("appliance")) return "fa-blender";
+  if (text.includes("computer")) return "fa-laptop";
+  if (text.includes("cell")) return "fa-mobile-screen-button";
+  if (text.includes("carpent")) return "fa-hammer";
+  if (text.includes("clean")) return "fa-broom";
+  return "fa-briefcase";
+}
+
+function renderMobileProgressTracker(request = {}) {
+  const step = jobStatusStep(request.status);
+  const labels = ["Posted", "Offers", "Accepted", ["Accepted", "In Progress", "Revision Requested"].includes(request.status) ? "In Progress" : "On The Way", "Completed"];
+  return `
+    <div class="mobile-progress-tracker">
+      ${labels.map((label, index) => `
+        <span class="${index < step ? "done" : index === step ? "active" : ""}">
+          <b>${index < step ? `<i class="fa-solid fa-check"></i>` : index + 1}</b>
+          <em>${escapeHtml(label)}</em>
+        </span>
+      `).join("")}
+    </div>
+  `;
+}
+
+function activeJobEtaText(request = {}) {
+  const nav = request.navigationState || {};
+  if (nav.etaMinutes) return `ETA: ${nav.etaMinutes} minutes`;
+  if (nav.providerLocation) return formatNavigationDistance(nav) ? `${formatNavigationDistance(nav)} from job site` : "Provider location is live";
+  if (request.preferredSchedule) return request.preferredSchedule;
+  if (request.status === "Accepted") return "Provider selected. Start or travel update is next.";
+  if (request.status === "In Progress") return "Job is currently in progress.";
+  return "You will be notified when the provider updates the job.";
+}
+
+function renderCompletionProofButton(request = {}, media = {}) {
+  const mediaUrl = resolveMediaUrl(media.url);
+  const isVideo = media.mimeType?.startsWith("video/");
+  const stage = request.completionAttachments?.includes(media) ? "completion" : "request";
+  return `
+    <button class="completion-proof-card" type="button" data-media-open data-request-id="${escapeAttribute(request.id)}" data-media-stage="${stage}" data-media-index="0">
+      ${isVideo ? `<video preload="metadata" src="${escapeAttribute(mediaUrl)}"></video>` : `<img src="${escapeAttribute(mediaUrl)}" alt="${escapeAttribute(media.originalName || "Completion media")}">`}
+      <span>View Full Size</span>
+    </button>
+  `;
+}
+
+function canRateRequest(request = {}) {
+  if (!state.session) return false;
+  if (request.clientId === state.session.id) return request.status === "Payment Released" && !request.clientRatedAt;
+  if (request.acceptedProviderId === state.session.id) return request.status === "Payment Released" && !request.providerRatedAt;
+  return false;
+}
+
+function existingRatingNote(request = {}) {
+  if (request.clientId === state.session?.id) return request.clientRatingNote || "";
+  if (request.acceptedProviderId === state.session?.id) return request.providerRatingNote || "";
+  return "";
+}
+
+function bindMobileStarRating(scope = document) {
+  const stars = $$("[data-rating-star]", scope);
+  const setRating = (score) => {
+    const input = $("#mobile-rating-score", scope);
+    if (input) input.value = String(score);
+    stars.forEach((star) => {
+      const selected = Number(star.dataset.ratingStar) <= score;
+      star.classList.toggle("selected", selected);
+      star.setAttribute("aria-checked", String(Number(star.dataset.ratingStar) === score));
+    });
+  };
+  stars.forEach((star) => star.addEventListener("click", () => setRating(Number(star.dataset.ratingStar))));
 }
 
 async function updateRequestDistance(requestId) {
@@ -4785,6 +5190,67 @@ function requestScheduleValue(scope = document) {
   return date && time ? `${date} ${time}` : "";
 }
 
+function bindRequestWizard(scope = document) {
+  const wizard = $("[data-request-wizard]", scope);
+  if (!wizard) return;
+  const steps = $$("[data-wizard-step]", wizard);
+  const dots = $$("[data-wizard-dot]", wizard);
+  const prev = $("[data-wizard-prev]", wizard);
+  const next = $("[data-wizard-next]", wizard);
+  const submit = $("[data-workspace-submit]", scope);
+  let current = 1;
+  if (submit) submit.hidden = true;
+
+  const updateReview = () => {
+    const card = $("[data-request-review-card]", wizard);
+    if (!card) return;
+    const category = $("#request-category", scope)?.value || "Service request";
+    const urgency = $("#request-urgency", scope)?.value || "Flexible";
+    const budget = normalizeCurrencyInput($("#request-budget", scope)?.value || "") || "Open";
+    const details = $("#request-details", scope)?.value.trim() || "No details yet.";
+    const pinned = normalizeLocation($("[data-job-map]", scope) ? null : null);
+    card.innerHTML = `
+      <strong>${escapeHtml(category || "Service request")}</strong>
+      <span>${escapeHtml(urgency)} · ${escapeHtml(formatCurrency(budget))}</span>
+      <p>${escapeHtml(details)}</p>
+      <small>${$("[data-location-status]", scope)?.textContent || "Location status unavailable"}</small>
+    `;
+    void pinned;
+  };
+
+  const show = (step) => {
+    current = Math.max(1, Math.min(steps.length, step));
+    steps.forEach((item) => {
+      const active = Number(item.dataset.wizardStep) === current;
+      item.hidden = !active;
+      item.classList.toggle("active", active);
+    });
+    dots.forEach((dot) => {
+      const index = Number(dot.dataset.wizardDot);
+      dot.classList.toggle("done", index < current);
+      dot.classList.toggle("active", index === current);
+    });
+    if (prev) prev.disabled = current === 1;
+    if (next) next.textContent = current === steps.length ? (submit?.textContent || "Post") : "Next";
+    if (submit) submit.hidden = true;
+    if (current === steps.length) updateReview();
+  };
+
+  prev?.addEventListener("click", () => show(current - 1));
+  next?.addEventListener("click", () => {
+    if (current === steps.length) {
+      submit?.click();
+      return;
+    }
+    show(current + 1);
+  });
+  $$("input, select, textarea", wizard).forEach((field) => {
+    field.addEventListener("input", updateReview);
+    field.addEventListener("change", updateReview);
+  });
+  show(1);
+}
+
 async function openRequestModal(existing = null) {
   const editing = Boolean(existing?.id);
   let selectedJobLocation = normalizeLocation(existing?.jobLocation);
@@ -4794,13 +5260,21 @@ async function openRequestModal(existing = null) {
   const result = await workspaceForm({
     title: editing ? "Edit request" : "Post request",
     html: `
-      <div class="request-flow">
-        <section class="request-flow-section">
-          <div class="request-flow-head"><b>1</b><div><strong>What service do you need?</strong><span>Pick the closest category so the right providers see it.</span></div></div>
+      <div class="request-flow request-wizard" data-request-wizard>
+        <div class="request-wizard-progress" aria-label="Post request steps">
+          ${["Category", "Info", "Location", "Details", "Review"].map((label, index) => `
+            <span class="${index === 0 ? "active" : ""}" data-wizard-dot="${index + 1}">
+              <b>${index + 1}</b>
+              <em>${escapeHtml(label)}</em>
+            </span>
+          `).join("")}
+        </div>
+        <section class="request-flow-section request-wizard-step active" data-wizard-step="1">
+          <div class="request-flow-head"><b>1</b><div><strong>What service do you need?</strong><span>Choose a category</span></div></div>
           <label><span>Service category</span>${categorySelect("request-category", true, existing?.category || "")}</label>
         </section>
-        <section class="request-flow-section">
-          <div class="request-flow-head"><b>2</b><div><strong>When do you need it?</strong><span>Set urgency and a schedule if the job has a fixed time.</span></div></div>
+        <section class="request-flow-section request-wizard-step" data-wizard-step="2" hidden>
+          <div class="request-flow-head"><b>2</b><div><strong>Urgency, contact, and budget</strong><span>Set timing and price expectations</span></div></div>
           <div class="request-flow-grid">
             <label><span>Urgency</span>${select("request-urgency", URGENCY_OPTIONS, existing?.urgency || "Today")}</label>
             <label><span>Contact method</span>${select("request-contact-method", CONTACT_CHANNELS, existing?.contactMethod || state.session.preferredContactChannel || "Messenger")}</label>
@@ -4809,20 +5283,10 @@ async function openRequestModal(existing = null) {
             <label><span>Job date</span><input id="request-schedule-date" class="form-control" type="date" value="${escapeAttribute(existingSchedule.date)}"></label>
             <label><span>Job time</span><input id="request-schedule-time" class="form-control" type="time" value="${escapeAttribute(existingSchedule.time)}"></label>
           </div>
+          <label><span>Budget</span><input id="request-budget" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Open / ₱1,500.00" value="${escapeAttribute(currencyNumber(existing?.budget) || "")}"></label>
         </section>
-        <section class="request-flow-section">
-          <div class="request-flow-head"><b>3</b><div><strong>Describe the problem</strong><span>Details help providers price accurately before they visit.</span></div></div>
-          <label><span>Details</span><textarea id="request-details" class="form-control" rows="4" placeholder="What happened? What should the provider inspect or bring?">${escapeHtml(existing?.details || "")}</textarea></label>
-        </section>
-        <section class="request-flow-section">
-          <div class="request-flow-head"><b>4</b><div><strong>Add photos/videos</strong><span>Optional, but useful for faster and better offers.</span></div></div>
-          ${editing ? `<div class="offer"><strong>Existing media</strong><div>Existing request media stays attached. Add a new request if you need to replace photos or videos.</div></div>` : `
-            <label><span>Photos or videos (up to 3 files)</span><input id="request-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
-            <div class="upload-preview" data-request-attachment-preview></div>
-          `}
-        </section>
-        <section class="request-flow-section">
-          <div class="request-flow-head"><b>5</b><div><strong>Job site pin/map</strong><span>Pin the actual job site so providers can estimate distance.</span></div></div>
+        <section class="request-flow-section request-wizard-step" data-wizard-step="3" hidden>
+          <div class="request-flow-head"><b>3</b><div><strong>Location pin/map</strong><span>Pin the actual job site</span></div></div>
           <div class="location-picker" data-location-picker>
             <div>
               <strong>Job site pin</strong>
@@ -4849,21 +5313,34 @@ async function openRequestModal(existing = null) {
             <small class="location-note">Satellite photos and labels may be older or incomplete in some areas. The pin is what KAILA uses for provider distance.</small>
           </div>
         </section>
-        <section class="request-flow-section">
-          <div class="request-flow-head"><b>6</b><div><strong>Budget</strong><span>Leave open or add your expected range for faster matching.</span></div></div>
-          <label><span>Budget</span><input id="request-budget" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Open / ₱1,500.00" value="${escapeAttribute(currencyNumber(existing?.budget) || "")}"></label>
+        <section class="request-flow-section request-wizard-step" data-wizard-step="4" hidden>
+          <div class="request-flow-head"><b>4</b><div><strong>Details and photos</strong><span>Help providers estimate before they visit</span></div></div>
+          <label><span>Details</span><textarea id="request-details" class="form-control" rows="5" placeholder="What happened? What should the provider inspect or bring?">${escapeHtml(existing?.details || "")}</textarea></label>
+          ${editing ? `<div class="offer"><strong>Existing media</strong><div>Existing request media stays attached. Add a new request if you need to replace photos or videos.</div></div>` : `
+            <label><span>Photos or videos (up to 3 files)</span><input id="request-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
+            <div class="upload-preview" data-request-attachment-preview></div>
+          `}
         </section>
-        <section class="request-flow-section request-review-section">
-          <div class="request-flow-head"><b>7</b><div><strong>Review & Post</strong><span>These permissions keep the job flow moving after providers reply.</span></div></div>
+        <section class="request-flow-section request-review-section request-wizard-step" data-wizard-step="5" hidden>
+          <div class="request-flow-head"><b>5</b><div><strong>Review & Post</strong><span>Confirm permissions before publishing</span></div></div>
+          <div class="request-review-card" data-request-review-card>
+            <strong>Ready to post</strong>
+            <span>Your request will be shown to matching local providers.</span>
+          </div>
           <label class="consent-line"><input id="request-forward-consent" type="checkbox" ${existing?.permissionToForward === false ? "" : "checked"}> Permission to forward request details to matching providers.</label>
           <label class="consent-line"><input id="request-rate-consent" type="checkbox" ${existing?.consentToRate === false ? "" : "checked"}> I agree to rate after completion.</label>
         </section>
+        <div class="request-wizard-actions">
+          <button class="btn btn-outline-secondary" type="button" data-wizard-prev disabled>Back</button>
+          <button class="btn btn-primary" type="button" data-wizard-next>Next</button>
+        </div>
       </div>
     `,
     confirmButtonText: editing ? "Save Changes" : "Post",
     didOpen: (workspacePanel) => {
       requestFormRoot = workspacePanel || document;
       bindScheduledRequestFields(requestFormRoot);
+      bindRequestWizard(requestFormRoot);
       bindJobLocationPicker({
         root: requestFormRoot,
         initialLocation: selectedJobLocation,
