@@ -47,7 +47,11 @@ const NATIVE_NOTIFICATION_CHANNELS = {
   calls: "kaila-calls",
 };
 const BARANGAY_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
-const GEOGRAPHY_SOURCE = "assets/Gingoog City PSGC.xlsx";
+const INDEPENDENT_CITY_PROVINCE = "Independent City";
+const GEOGRAPHY_SOURCES = [
+  "assets/Gingoog City PSGC.xlsx",
+  "assets/Butuan City PSGC.xlsx",
+];
 const DEFAULT_MAP_CENTER = { lat: 8.826, lng: 125.117 };
 const ROUTE_DISTANCE_CACHE_MS = 6 * 60 * 60 * 1000;
 const ROUTE_DISTANCE_DIRECT_URL = "https://router.project-osrm.org/route/v1/driving";
@@ -58,9 +62,19 @@ const NAVIGATION_SPEED_KMH = 22;
 const MOBILE_UPDATE_PROMPT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FALLBACK_GEOGRAPHY = {
   region: "Region X (Northern Mindanao)",
+  province: "Misamis Oriental",
   city: "City of Gingoog",
+  regions: ["Region X (Northern Mindanao)"],
+  provinces: ["Misamis Oriental"],
+  cities: ["City of Gingoog"],
+  provinceRegions: { "Misamis Oriental": "Region X (Northern Mindanao)" },
+  provinceCities: { "Misamis Oriental": ["City of Gingoog"] },
+  cityRegions: { "City of Gingoog": "Region X (Northern Mindanao)" },
+  cityProvinces: { "City of Gingoog": "Misamis Oriental" },
+  cityBarangays: {},
   barangays: ["Agay-ayan", "Alagatan", "Anakan", "Bagubad", "Bakidbakid", "Bal-ason", "Bantaawan", "Binakalan", "Capitulangan", "Daan-Lungsod", "Hindangon", "Kalagonoy", "Kibuging", "Kipuntos", "Lawaan", "Lawit", "Libertad", "Libon", "Lunao", "Lunotan", "Malibud", "Malinao", "Maribucao", "Mimbuntong", "Mimbalagon", "Mimbunga", "Minsapinit", "Murallon", "Odiongan", "Pangasihan", "Pigsaluhan", "Barangay 1", "Barangay 10", "Barangay 11", "Barangay 12", "Barangay 13", "Barangay 14", "Barangay 15", "Barangay 16", "Barangay 17", "Barangay 18-A", "Barangay 19", "Barangay 2", "Barangay 20", "Barangay 21", "Barangay 22-A", "Barangay 23", "Barangay 24", "Barangay 25", "Barangay 26", "Barangay 3", "Barangay 4", "Barangay 5", "Barangay 6", "Barangay 7", "Barangay 8", "Barangay 9", "Punong", "Ricoro", "Samay", "San Juan", "San Luis", "San Miguel", "Santiago", "Talisay", "Talon", "Tinabalan", "Tinulongan", "Barangay 18", "Barangay 22", "Barangay 24-A", "Dinawehan", "Eureka", "Kalipay", "Kamanikan", "Kianlagan", "San Jose", "Sangalan", "Tagpako"],
 };
+FALLBACK_GEOGRAPHY.cityBarangays[FALLBACK_GEOGRAPHY.city] = FALLBACK_GEOGRAPHY.barangays;
 
 const state = {
   session: readJson(STORAGE.session, null),
@@ -858,21 +872,86 @@ function initializeSocketUrl() {
 async function loadGeography() {
   if (!window.XLSX) return;
   try {
-    const response = await fetch(GEOGRAPHY_SOURCE);
-    if (!response.ok) throw new Error("Geography source unavailable");
-    const workbook = window.XLSX.read(await response.arrayBuffer(), { type: "array" });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = window.XLSX.utils.sheet_to_json(sheet, { defval: "" });
-    const region = rows.find((row) => row["Geographic Level"] === "Reg")?.Name || FALLBACK_GEOGRAPHY.region;
-    const city = rows.find((row) => row["Geographic Level"] === "City")?.Name || FALLBACK_GEOGRAPHY.city;
-    const barangays = rows
-      .filter((row) => row["Geographic Level"] === "Bgy" && row.Name)
-      .map((row) => String(row.Name).trim())
-      .filter(Boolean);
-    if (barangays.length) state.geography = { region, city, barangays: sortedBarangays(barangays) };
+    const sources = await Promise.all(GEOGRAPHY_SOURCES.map(async (source) => {
+      const response = await fetch(source);
+      if (!response.ok) throw new Error(`Geography source unavailable: ${source}`);
+      const workbook = window.XLSX.read(await response.arrayBuffer(), { type: "array" });
+      return geographyRowsFromWorkbook(workbook);
+    }));
+    const regions = [];
+    const provinces = [];
+    const cities = [];
+    const provinceRegions = {};
+    const provinceCities = {};
+    const cityRegions = {};
+    const cityProvinces = {};
+    const cityBarangays = {};
+    sources.forEach((rows) => {
+      let currentRegion = "";
+      let currentProvince = "";
+      let currentCity = "";
+      rows.forEach((row) => {
+        const level = String(row["Geographic Level"] || "").trim();
+        const name = String(row.Name || "").trim();
+        if (!level || !name) return;
+        if (level === "Reg") {
+          currentRegion = name;
+          currentProvince = "";
+          currentCity = "";
+          regions.push(name);
+        } else if (level === "Prov") {
+          currentProvince = name;
+          currentCity = "";
+          provinces.push(name);
+          if (currentRegion) provinceRegions[name] = currentRegion;
+          provinceCities[name] = provinceCities[name] || [];
+        } else if (["City", "Mun"].includes(level)) {
+          currentCity = name;
+          const province = currentProvince || INDEPENDENT_CITY_PROVINCE;
+          provinces.push(province);
+          cities.push(name);
+          if (currentRegion) cityRegions[name] = currentRegion;
+          if (currentRegion) provinceRegions[province] = currentRegion;
+          cityProvinces[name] = province;
+          provinceCities[province] = provinceCities[province] || [];
+          provinceCities[province].push(name);
+          cityBarangays[name] = cityBarangays[name] || [];
+        } else if (level === "Bgy" && currentCity) {
+          cityBarangays[currentCity].push(name);
+        }
+      });
+    });
+    const barangays = sortedBarangays(Object.values(cityBarangays).flat());
+    if (cities.length && barangays.length) {
+      const defaultCity = cities.includes(FALLBACK_GEOGRAPHY.city) ? FALLBACK_GEOGRAPHY.city : cities[0];
+      const defaultProvince = cityProvinces[defaultCity] || FALLBACK_GEOGRAPHY.province || INDEPENDENT_CITY_PROVINCE;
+      state.geography = {
+        region: cityRegions[defaultCity] || regions[0] || FALLBACK_GEOGRAPHY.region,
+        province: defaultProvince,
+        city: defaultCity,
+        regions: sortedBarangays(regions),
+        provinces: sortedBarangays(provinces),
+        cities: sortedBarangays(cities),
+        provinceRegions,
+        provinceCities: Object.fromEntries(Object.entries(provinceCities).map(([province, items]) => [province, sortedBarangays(items)])),
+        cityRegions,
+        cityProvinces,
+        cityBarangays: Object.fromEntries(Object.entries(cityBarangays).map(([city, items]) => [city, sortedBarangays(items)])),
+        barangays,
+      };
+    }
   } catch (error) {
     console.warn("KAILA geography source failed; using fallback geography.", error);
   }
+}
+
+function geographyRowsFromWorkbook(workbook) {
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = window.XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    if (rows.some((row) => row["Geographic Level"] && row.Name)) return rows;
+  }
+  return [];
 }
 
 function renderRegisterAddress() {
@@ -9729,12 +9808,19 @@ function chipOptionsForId(id) {
 
 function addressFields(id, value = "") {
   const address = parseAddress(value);
-  const barangays = sortedBarangays(state.geography.barangays);
+  const regions = state.geography.regions?.length ? state.geography.regions : [state.geography.region];
+  const selectedRegion = regions.includes(address.region) ? address.region : (regions.includes(regionForAddress(address)) ? regionForAddress(address) : regions[0] || state.geography.region);
+  const provinces = provincesForRegion(selectedRegion);
+  const selectedProvince = provinces.includes(address.province) ? address.province : provinceForAddress(address, selectedRegion);
+  const cities = citiesForProvince(selectedProvince);
+  const selectedCity = cities.includes(address.city) ? address.city : cityForProvince(selectedProvince);
+  const barangays = barangaysForCity(selectedCity);
   const selectedBarangay = barangays.includes(address.barangay) ? address.barangay : "";
   return `
     <div class="address-grid" data-address-group="${escapeAttribute(id)}">
-      <label><span>Region</span>${select(`${id}-region`, [state.geography.region], state.geography.region)}</label>
-      <label><span>City</span>${select(`${id}-city`, [state.geography.city], state.geography.city)}</label>
+      <label><span>Region</span>${select(`${id}-region`, regions, selectedRegion)}</label>
+      <label><span>Province</span>${select(`${id}-province`, provinces, selectedProvince)}</label>
+      <label><span>City / Municipality</span>${select(`${id}-city`, cities, selectedCity)}</label>
       <label><span>Barangay</span>${select(`${id}-barangay`, barangays, selectedBarangay, "Choose barangay")}</label>
       <label><span>Purok</span><input id="${escapeAttribute(id)}-purok" class="form-control" data-address-purok inputmode="text" maxlength="60" value="${escapeAttribute(address.purok)}" placeholder="Purok / Zone"></label>
       <label><span>House No. <small>(optional)</small></span><input id="${escapeAttribute(id)}-house" class="form-control" data-address-house inputmode="text" maxlength="60" value="${escapeAttribute(address.house)}" placeholder="House no."></label>
@@ -9745,11 +9831,65 @@ function addressFields(id, value = "") {
 function bindAddressGroup(id, scope = document) {
   const group = $(`[data-address-group="${escapeCssIdentifier(id)}"]`, scope);
   if (!group) return;
+  const region = $(`#${id}-region`, group);
+  const province = $(`#${id}-province`, group);
   const city = $(`#${id}-city`, group);
   const barangay = $(`#${id}-barangay`, group);
-  city?.addEventListener("change", () => {
-    barangay.innerHTML = `<option value="">Choose barangay</option>${sortedBarangays(state.geography.barangays).map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
+  region?.addEventListener("change", () => {
+    if (!province || !city || !barangay) return;
+    const provinces = provincesForRegion(region.value);
+    province.innerHTML = provinces.map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("");
+    province.value = provinces[0] || "";
+    const cities = citiesForProvince(province.value);
+    city.innerHTML = cities.map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("");
+    city.value = cities[0] || "";
+    barangay.innerHTML = `<option value="">Choose barangay</option>${barangaysForCity(city.value).map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
   });
+  province?.addEventListener("change", () => {
+    if (!city || !barangay) return;
+    const cities = citiesForProvince(province.value);
+    city.innerHTML = cities.map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("");
+    city.value = cities[0] || "";
+    barangay.innerHTML = `<option value="">Choose barangay</option>${barangaysForCity(city.value).map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
+  });
+  city?.addEventListener("change", () => {
+    if (province) province.value = state.geography.cityProvinces?.[city.value] || INDEPENDENT_CITY_PROVINCE;
+    if (region) region.value = state.geography.cityRegions?.[city.value] || state.geography.provinceRegions?.[province?.value] || state.geography.region;
+    if (barangay) {
+      barangay.innerHTML = `<option value="">Choose barangay</option>${barangaysForCity(city.value).map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
+    }
+  });
+}
+
+function regionForAddress(address = {}) {
+  if (address.city && state.geography.cityRegions?.[address.city]) return state.geography.cityRegions[address.city];
+  if (address.province && state.geography.provinceRegions?.[address.province]) return state.geography.provinceRegions[address.province];
+  return state.geography.region;
+}
+
+function provinceForAddress(address = {}, region = state.geography.region) {
+  const provinces = provincesForRegion(region);
+  if (address.city && provinces.includes(state.geography.cityProvinces?.[address.city])) return state.geography.cityProvinces[address.city];
+  if (address.province && provinces.includes(address.province)) return address.province;
+  return provinces.includes(state.geography.province) ? state.geography.province : provinces[0] || state.geography.province || "";
+}
+
+function cityForProvince(province = "") {
+  const cities = citiesForProvince(province);
+  return cities.includes(state.geography.city) ? state.geography.city : cities[0] || state.geography.city;
+}
+
+function provincesForRegion(region = "") {
+  const provinces = state.geography.provinces?.length ? state.geography.provinces : [state.geography.province || INDEPENDENT_CITY_PROVINCE];
+  return sortedBarangays(provinces.filter((province) => (state.geography.provinceRegions?.[province] || state.geography.region) === region));
+}
+
+function citiesForProvince(province = "") {
+  return sortedBarangays(state.geography.provinceCities?.[province] || state.geography.cities || [state.geography.city]);
+}
+
+function barangaysForCity(city = "") {
+  return sortedBarangays(state.geography.cityBarangays?.[city] || state.geography.barangays);
 }
 
 function sortedBarangays(barangays = []) {
@@ -9763,21 +9903,31 @@ function addressValue(id, scope = document) {
   const barangay = $(`#${id}-barangay`, group)?.value || "";
   if (!barangay) return "";
   const city = $(`#${id}-city`, group)?.value || state.geography.city;
+  const province = $(`#${id}-province`, group)?.value || state.geography.cityProvinces?.[city] || state.geography.province || INDEPENDENT_CITY_PROVINCE;
   const purok = $("[data-address-purok]", group)?.value.trim() || "";
   const house = $("[data-address-house]", group)?.value.trim() || "";
-  return [house, purok, barangay, city].filter(Boolean).join(", ");
+  return [house, purok, barangay, city, province].filter(Boolean).join(", ");
 }
 
 function parseAddress(value = "") {
   const parts = String(value || "").split(",").map((part) => part.trim()).filter(Boolean);
-  const cityIndex = parts.findIndex((part) => /gingoog/i.test(part));
-  const beforeCity = cityIndex >= 0 ? parts.slice(0, cityIndex) : parts;
-  const barangay = [...beforeCity].reverse().find((part) => state.geography.barangays.includes(part)) || beforeCity[beforeCity.length - 1] || "";
+  const cities = state.geography.cities?.length ? state.geography.cities : [state.geography.city];
+  const cityIndex = parts.findIndex((part) => cities.includes(part));
+  const city = cityIndex >= 0 ? parts[cityIndex] : "";
+  const afterCity = cityIndex >= 0 ? parts.slice(cityIndex + 1) : [];
+  const provinces = state.geography.provinces?.length ? state.geography.provinces : [state.geography.province || INDEPENDENT_CITY_PROVINCE];
+  const province = afterCity.find((part) => provinces.includes(part)) || (city ? state.geography.cityProvinces?.[city] || "" : "");
+  const beforeCity = cityIndex >= 0 ? parts.slice(0, cityIndex) : parts.filter((part) => !provinces.includes(part));
+  const barangayOptions = city ? barangaysForCity(city) : state.geography.barangays;
+  const barangay = [...beforeCity].reverse().find((part) => barangayOptions.includes(part)) || beforeCity[beforeCity.length - 1] || "";
   const detailParts = beforeCity.filter((part) => part !== barangay);
   return {
     house: detailParts.length > 1 ? detailParts[0] : "",
     purok: detailParts.length ? detailParts[detailParts.length - 1] : "",
     barangay,
+    city,
+    province,
+    region: regionForAddress({ city, province }),
   };
 }
 

@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v171-feed";
+const CACHE_NAME = "kaila-pwa-v174-independent-city";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"
@@ -14,6 +14,7 @@ const APP_SHELL = [
   "./robots.txt",
   "./sitemap.xml",
   "./assets/Gingoog City PSGC.xlsx",
+  "./assets/Butuan City PSGC.xlsx",
   "./assets/android-chrome-192x192.png",
   "./assets/android-chrome-512x512.png",
   "./assets/apple-touch-icon.png",
