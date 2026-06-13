@@ -66,6 +66,9 @@ Important environment settings:
   unreadable.
 - `GROQ_API_KEY` enables server-side AI suggestions for validation Decision
   Signal prefilling and dashboard analytics. Keep it in ignored `socket/.env`.
+- `KAILA_GOOGLE_CLIENT_ID`, `KAILA_FACEBOOK_APP_ID`, and
+  `KAILA_FACEBOOK_APP_SECRET` enable optional Google/Facebook login and signup.
+  Keep provider secrets in ignored `socket/.env`.
 - `KAILA_ANDROID_LATEST_VERSION_CODE`, `KAILA_ANDROID_LATEST_VERSION_NAME`,
   `KAILA_ANDROID_APK_URL`, and `KAILA_ANDROID_RELEASE_NOTES` are fallback/manual
   settings for `/api/mobile-update`. The normal path is to keep the stable

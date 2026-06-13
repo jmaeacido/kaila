@@ -11,6 +11,7 @@ const http = require("http");
 const cors = require("cors");
 const mysql = require("mysql2/promise");
 const { Server } = require("socket.io");
+const { OAuth2Client } = require("google-auth-library");
 let firebaseAdmin = null;
 try {
   firebaseAdmin = require("firebase-admin");
@@ -42,6 +43,9 @@ const CALL_DISCONNECT_GRACE_MS = Number(process.env.KAILA_CALL_DISCONNECT_GRACE_
 const FIREBASE_SERVICE_ACCOUNT_JSON = String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || "").trim();
 const GROQ_API_KEY = sanitizeToken(process.env.GROQ_API_KEY || "");
 const GROQ_MODEL = sanitizeToken(process.env.GROQ_MODEL || "llama-3.1-8b-instant");
+const GOOGLE_CLIENT_ID = sanitizeToken(process.env.KAILA_GOOGLE_CLIENT_ID || "");
+const FACEBOOK_APP_ID = sanitizeToken(process.env.KAILA_FACEBOOK_APP_ID || "");
+const FACEBOOK_APP_SECRET = sanitizeToken(process.env.KAILA_FACEBOOK_APP_SECRET || "");
 const ROUTE_DISTANCE_URL = sanitizeToken(process.env.KAILA_ROUTE_DISTANCE_URL || "https://router.project-osrm.org/route/v1/driving");
 const ROUTE_DISTANCE_CACHE_MS = Number(process.env.KAILA_ROUTE_DISTANCE_CACHE_MS || 6 * 60 * 60 * 1000);
 const MOBILE_UPDATE_METADATA_FILE = path.resolve(__dirname, "mobile-update.json");
@@ -79,6 +83,7 @@ const DB_CONFIG = {
 };
 
 let pool;
+const googleOAuthClient = new OAuth2Client(GOOGLE_CLIENT_ID || undefined);
 const conversationPresence = new Map();
 const directConversationPresence = new Map();
 const activeCalls = new Map();
@@ -529,8 +534,13 @@ function mysqlDateTimeFromInput(value) {
 
 function publicUser(user) {
   if (!user) return null;
-  const { password_hash, password, email, ...safe } = user;
+  const { password_hash, password, email, authSubject, ...safe } = user;
   return maskStaffUser(safe);
+}
+
+function privateUser(user) {
+  const safe = publicUser(user);
+  return safe ? { ...safe, email: user.email || "" } : null;
 }
 
 function publicUserForViewer(user, viewer) {
@@ -608,6 +618,8 @@ async function initializeDatabase() {
       messenger_link VARCHAR(255) NULL,
       preferred_contact_channel VARCHAR(80) NULL,
       best_contact_time VARCHAR(120) NULL,
+      auth_provider VARCHAR(40) NULL,
+      auth_subject VARCHAR(255) NULL,
       data_privacy_consent TINYINT(1) NOT NULL DEFAULT 0,
       deleted_at DATETIME NULL,
       created_at DATETIME NOT NULL
@@ -620,12 +632,15 @@ async function initializeDatabase() {
   await ensureColumn("users", "messenger_link", "VARCHAR(255) NULL");
   await ensureColumn("users", "preferred_contact_channel", "VARCHAR(80) NULL");
   await ensureColumn("users", "best_contact_time", "VARCHAR(120) NULL");
+  await ensureColumn("users", "auth_provider", "VARCHAR(40) NULL");
+  await ensureColumn("users", "auth_subject", "VARCHAR(255) NULL");
   await ensureColumn("users", "data_privacy_consent", "TINYINT(1) NOT NULL DEFAULT 0");
   await ensureColumn("users", "deleted_at", "DATETIME NULL");
   await pool.query("ALTER TABLE users MODIFY COLUMN role ENUM('client','provider','admin','ops','customer_service') NOT NULL");
   await pool.query("ALTER TABLE users MODIFY COLUMN category VARCHAR(255) NULL");
   await backfillUsernames();
   await ensureIndex("users", "users_username_unique", "username", true);
+  await ensureIndex("users", "users_auth_subject_unique", "auth_subject", true);
   await pool.query("ALTER TABLE users MODIFY COLUMN username VARCHAR(80) NOT NULL");
   await pool.query("ALTER TABLE users MODIFY COLUMN email VARCHAR(190) NULL");
   await pool.query(`
@@ -1156,6 +1171,157 @@ async function backfillUsernames() {
   }
 }
 
+async function uniqueUsernameFrom(source = "user") {
+  const base = String(source || "user").split("@")[0]
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "_")
+    .replace(/^[_\W]+|[_\W]+$/g, "")
+    .slice(0, 40) || "user";
+  let username = base;
+  let suffix = 2;
+  while (true) {
+    const [rows] = await pool.query("SELECT id FROM users WHERE username = ? LIMIT 1", [username]);
+    if (!rows.length) return username;
+    username = `${base.slice(0, 36)}_${suffix++}`;
+  }
+}
+
+function publicSocialProfile(profile = {}) {
+  const email = String(profile.email || "").trim().toLowerCase();
+  return {
+    provider: profile.provider || "",
+    name: profile.name || "",
+    email,
+    username: email ? email.split("@")[0].toLowerCase().replace(/[^a-z0-9._-]+/g, "_").slice(0, 40) : "",
+    photoUrl: profile.photoUrl || "",
+  };
+}
+
+function authSubject(provider, subject) {
+  const cleanProvider = String(provider || "").trim().toLowerCase();
+  const cleanSubject = String(subject || "").trim();
+  return cleanProvider && cleanSubject ? `${cleanProvider}:${cleanSubject}` : "";
+}
+
+function looksLikeJwt(value = "") {
+  const parts = String(value || "").split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const header = JSON.parse(Buffer.from(parts[0].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    return Boolean(header && typeof header === "object" && header.alg);
+  } catch {
+    return false;
+  }
+}
+
+async function verifyGoogleCredential(credential = "") {
+  if (!GOOGLE_CLIENT_ID) {
+    const error = new Error("Google login is not configured");
+    error.status = 503;
+    throw error;
+  }
+  const cleanCredential = String(credential || "").trim();
+  if (!cleanCredential) {
+    const error = new Error("Google credential is required");
+    error.status = 401;
+    throw error;
+  }
+  if (!looksLikeJwt(cleanCredential)) {
+    const tokenUrl = new URL("https://oauth2.googleapis.com/tokeninfo");
+    tokenUrl.searchParams.set("access_token", cleanCredential);
+    const tokenResponse = await fetch(tokenUrl);
+    const tokenInfo = await tokenResponse.json().catch(() => ({}));
+    if (!tokenResponse.ok || String(tokenInfo.aud || "") !== GOOGLE_CLIENT_ID || !tokenInfo.sub || !tokenInfo.email || tokenInfo.email_verified === "false") {
+      const error = new Error("Google access token could not be verified");
+      error.status = 401;
+      throw error;
+    }
+    const profileResponse = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
+      headers: { Authorization: `Bearer ${cleanCredential}` },
+    });
+    const profile = await profileResponse.json().catch(() => ({}));
+    return {
+      provider: "google",
+      subject: tokenInfo.sub,
+      email: String(tokenInfo.email || profile.email || "").toLowerCase(),
+      name: profile.name || tokenInfo.email,
+      photoUrl: profile.picture || "",
+    };
+  }
+  let ticket;
+  try {
+    ticket = await googleOAuthClient.verifyIdToken({ idToken: cleanCredential, audience: GOOGLE_CLIENT_ID });
+  } catch {
+    const error = new Error("Google ID token could not be verified");
+    error.status = 401;
+    throw error;
+  }
+  const payload = ticket.getPayload() || {};
+  if (!payload.sub || !payload.email || payload.email_verified === false) {
+    const error = new Error("Google account email could not be verified");
+    error.status = 401;
+    throw error;
+  }
+  return {
+    provider: "google",
+    subject: payload.sub,
+    email: String(payload.email || "").toLowerCase(),
+    name: payload.name || payload.email,
+    photoUrl: payload.picture || "",
+  };
+}
+
+async function verifyFacebookAccessToken(accessToken = "") {
+  if (!FACEBOOK_APP_ID || !FACEBOOK_APP_SECRET) {
+    const error = new Error("Facebook login is not configured");
+    error.status = 503;
+    throw error;
+  }
+  const appToken = `${FACEBOOK_APP_ID}|${FACEBOOK_APP_SECRET}`;
+  const debugUrl = new URL("https://graph.facebook.com/debug_token");
+  debugUrl.searchParams.set("input_token", accessToken);
+  debugUrl.searchParams.set("access_token", appToken);
+  const debugResponse = await fetch(debugUrl);
+  const debugPayload = await debugResponse.json().catch(() => ({}));
+  const data = debugPayload.data || {};
+  if (!debugResponse.ok || !data.is_valid || String(data.app_id || "") !== FACEBOOK_APP_ID) {
+    const error = new Error("Facebook token could not be verified");
+    error.status = 401;
+    throw error;
+  }
+
+  const grantedScopes = Array.isArray(data.scopes) ? data.scopes : [];
+  const profileFields = grantedScopes.includes("email")
+    ? "id,name,email,picture.type(large)"
+    : "id,name,picture.type(large)";
+  const profileUrl = new URL("https://graph.facebook.com/me");
+  profileUrl.searchParams.set("fields", profileFields);
+  profileUrl.searchParams.set("access_token", accessToken);
+  const profileResponse = await fetch(profileUrl);
+  const profile = await profileResponse.json().catch(() => ({}));
+  if (!profileResponse.ok || !profile.id) {
+    const error = new Error("Facebook profile could not be loaded");
+    error.status = 401;
+    throw error;
+  }
+  return {
+    provider: "facebook",
+    subject: profile.id,
+    email: String(profile.email || "").toLowerCase(),
+    name: profile.name || "Facebook user",
+    photoUrl: profile.picture?.data?.url || "",
+  };
+}
+
+async function verifySocialCredential(provider, token) {
+  const cleanProvider = String(provider || "").trim().toLowerCase();
+  if (cleanProvider === "google") return verifyGoogleCredential(token);
+  if (cleanProvider === "facebook") return verifyFacebookAccessToken(token);
+  const error = new Error("Unsupported social login provider");
+  error.status = 400;
+  throw error;
+}
+
 async function encryptExistingMessages() {
   const [rows] = await pool.query("SELECT id, detail FROM job_messages");
   for (const row of rows) {
@@ -1199,6 +1365,8 @@ function mapUser(row, reputation = emptyReputation()) {
     messengerLink: row.messenger_link || "",
     preferredContactChannel: row.preferred_contact_channel || "",
     bestContactTime: row.best_contact_time || "",
+    authProvider: row.auth_provider || "",
+    authSubject: row.auth_subject || "",
     dataPrivacyConsent: Boolean(row.data_privacy_consent),
     photoUrl: row.photo_file ? `/profile-media/${encodeURIComponent(row.id)}?v=${photoVersion}` : "",
     reputation: staffRole ? emptyReputation() : reputation,
@@ -2915,8 +3083,13 @@ async function createAccount(input = {}, allowedRoles = ["client", "provider"]) 
   const name = String(input.name || "").trim();
   const cleanUsername = String(input.username || "").trim().toLowerCase();
   const password = String(input.password || "");
+  const socialPassword = Boolean(input.authSubject && !password);
+  const passwordForStorage = socialPassword ? crypto.randomBytes(32).toString("hex") : password;
   const role = normalizeAccountRole(input.role);
   const cleanCategory = normalizeCategories(input.category);
+  const cleanEmail = String(input.email || "").trim().toLowerCase() || null;
+  const cleanAuthProvider = String(input.authProvider || "").trim().toLowerCase();
+  const cleanAuthSubject = String(input.authSubject || "").trim();
   const area = role === "ops"
     ? (String(input.area || "").trim() || "Operations")
     : role === "customer_service"
@@ -2945,7 +3118,7 @@ async function createAccount(input = {}, allowedRoles = ["client", "provider"]) 
     rulesAgreement: boolField(input.rulesAgreement),
   };
 
-  if (!name || !cleanUsername || !password || !role || !area || !contactNumber || !preferredContactChannel || !dataPrivacyConsent) {
+  if (!name || !cleanUsername || !passwordForStorage || !role || !area || !contactNumber || !preferredContactChannel || !dataPrivacyConsent) {
     const error = new Error("Missing required fields");
     error.status = 400;
     throw error;
@@ -2955,7 +3128,7 @@ async function createAccount(input = {}, allowedRoles = ["client", "provider"]) 
     error.status = 400;
     throw error;
   }
-  if (password.length < 6) {
+  if (!socialPassword && password.length < 6) {
     const error = new Error("Password must be at least 6 characters");
     error.status = 400;
     throw error;
@@ -2982,13 +3155,29 @@ async function createAccount(input = {}, allowedRoles = ["client", "provider"]) 
     error.status = 409;
     throw error;
   }
+  if (cleanEmail) {
+    const [emailRows] = await pool.query("SELECT id FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1", [cleanEmail]);
+    if (emailRows.length) {
+      const error = new Error("Email already registered");
+      error.status = 409;
+      throw error;
+    }
+  }
+  if (cleanAuthSubject) {
+    const [authRows] = await pool.query("SELECT id FROM users WHERE auth_subject = ? AND deleted_at IS NULL LIMIT 1", [cleanAuthSubject]);
+    if (authRows.length) {
+      const error = new Error("Social account already registered");
+      error.status = 409;
+      throw error;
+    }
+  }
 
   const user = {
     id: createId(),
     name,
     username: cleanUsername,
-    email: null,
-    password_hash: passwordHash(password),
+    email: cleanEmail,
+    password_hash: passwordHash(passwordForStorage),
     role,
     area,
     category: cleanCategory,
@@ -2996,13 +3185,15 @@ async function createAccount(input = {}, allowedRoles = ["client", "provider"]) 
     messengerLink: String(input.messengerLink || "").trim(),
     preferredContactChannel,
     bestContactTime: String(input.bestContactTime || "").trim(),
+    authProvider: cleanAuthProvider,
+    authSubject: cleanAuthSubject,
     dataPrivacyConsent,
     createdAt: nowMysql(),
   };
 
   await pool.query(
-    "INSERT INTO users (id, name, username, email, password_hash, role, area, category, contact_number, messenger_link, preferred_contact_channel, best_contact_time, data_privacy_consent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [user.id, user.name, user.username, user.email, user.password_hash, user.role, user.area, user.category, user.contactNumber, user.messengerLink, user.preferredContactChannel, user.bestContactTime, user.dataPrivacyConsent ? 1 : 0, user.createdAt]
+    "INSERT INTO users (id, name, username, email, password_hash, role, area, category, contact_number, messenger_link, preferred_contact_channel, best_contact_time, auth_provider, auth_subject, data_privacy_consent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [user.id, user.name, user.username, user.email, user.password_hash, user.role, user.area, user.category, user.contactNumber, user.messengerLink, user.preferredContactChannel, user.bestContactTime, user.authProvider || null, user.authSubject || null, user.dataPrivacyConsent ? 1 : 0, user.createdAt]
   );
 
   if (role === "provider") {
@@ -3054,6 +3245,13 @@ app.get("/health", async (req, res) => {
 
 app.get("/api/rtc-config", (req, res) => {
   res.json({ iceServers: parseIceServers() });
+});
+
+app.get("/api/auth/config", (req, res) => {
+  res.json({
+    googleClientId: GOOGLE_CLIENT_ID,
+    facebookAppId: FACEBOOK_APP_ID,
+  });
 });
 
 app.get("/media/:id", async (req, res) => {
@@ -3441,7 +3639,60 @@ app.post("/api/register", async (req, res) => {
   await addActivity("User registered", `${user.name} joined as ${user.role}`);
   const state = await getState();
   broadcast("kaila.state.updated", state);
-  res.status(201).json({ user: publicUser(user), state });
+  res.status(201).json({ user: privateUser(user), state });
+});
+
+app.post("/api/auth/social/profile", async (req, res) => {
+  try {
+    const profile = await verifySocialCredential(req.body?.provider, req.body?.token || req.body?.credential || req.body?.accessToken);
+    res.json({ profile: publicSocialProfile(profile) });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || "Social profile failed" });
+  }
+});
+
+app.post("/api/auth/social", async (req, res) => {
+  try {
+    const mode = String(req.body?.mode || "login").trim().toLowerCase();
+    const profile = await verifySocialCredential(req.body?.provider, req.body?.token || req.body?.credential || req.body?.accessToken);
+    const subject = authSubject(profile.provider, profile.subject);
+    const [authRows] = await pool.query("SELECT * FROM users WHERE auth_subject = ? AND deleted_at IS NULL LIMIT 1", [subject]);
+    let user = mapUser(authRows[0]);
+    if (!user && profile.email) {
+      const [emailRows] = await pool.query("SELECT * FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1", [profile.email]);
+      user = mapUser(emailRows[0]);
+      if (user && !user.authSubject) {
+        await pool.query("UPDATE users SET auth_provider = ?, auth_subject = ? WHERE id = ?", [profile.provider, subject, user.id]);
+        user = await getUser(user.id);
+      }
+    }
+
+    if (user) return res.json({ user: privateUser(user), state: await getStateFor(user) });
+    if (mode !== "signup") {
+      return res.json({
+        requiresSignup: true,
+        profile: publicSocialProfile(profile),
+        message: "No KAILA account is linked to this social account. Use signup first.",
+      });
+    }
+
+    const username = await uniqueUsernameFrom(profile.email || profile.name || `${profile.provider}_${profile.subject}`);
+    user = await createAccount({
+      ...req.body,
+      name: String(req.body?.name || "").trim() || profile.name,
+      username,
+      email: profile.email || null,
+      authProvider: profile.provider,
+      authSubject: subject,
+      dataPrivacyConsent: boolField(req.body?.dataPrivacyConsent),
+    }, ["client", "provider"]);
+    await addActivity("User registered", `${user.name} joined with ${profile.provider}`);
+    const state = await getState();
+    broadcast("kaila.state.updated", state);
+    res.status(201).json({ user: privateUser(user), state });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || "Social authentication failed" });
+  }
 });
 
 app.post("/api/login", async (req, res) => {
@@ -3450,7 +3701,7 @@ app.post("/api/login", async (req, res) => {
   const [rows] = await pool.query("SELECT * FROM users WHERE username = ? AND deleted_at IS NULL LIMIT 1", [username]);
   const user = mapUser(rows[0]);
   if (!user || !verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Invalid username or password" });
-  res.json({ user: publicUser(user), state: await getStateFor(user) });
+  res.json({ user: privateUser(user), state: await getStateFor(user) });
 });
 
 app.post("/api/forgot-password", async (req, res) => {
@@ -3459,11 +3710,16 @@ app.post("/api/forgot-password", async (req, res) => {
 
 app.post("/api/profile", requireUser, async (req, res) => {
   try {
-    const { name, area, category, photo, contactNumber, messengerLink, preferredContactChannel, bestContactTime, dataPrivacyConsent } = req.body || {};
+    const { name, email, area, category, photo, contactNumber, messengerLink, preferredContactChannel, bestContactTime, dataPrivacyConsent } = req.body || {};
     const cleanName = String(name || "").trim();
+    const cleanEmail = String(email || "").trim().toLowerCase() || null;
     const cleanArea = String(area || "").trim();
     const cleanCategory = normalizeCategories(category);
     if (!cleanName || !cleanArea) return res.status(400).json({ error: "Name and area are required" });
+    if (cleanEmail) {
+      const [emailRows] = await pool.query("SELECT id FROM users WHERE email = ? AND id <> ? AND deleted_at IS NULL LIMIT 1", [cleanEmail, req.user.id]);
+      if (emailRows.length) return res.status(409).json({ error: "Email already registered" });
+    }
 
     let photoUpdate = "";
     let photoParams = [];
@@ -3479,9 +3735,10 @@ app.post("/api/profile", requireUser, async (req, res) => {
     }
 
     await pool.query(
-      `UPDATE users SET name = ?, area = ?, category = ?, contact_number = ?, messenger_link = ?, preferred_contact_channel = ?, best_contact_time = ?, data_privacy_consent = ?${photoUpdate} WHERE id = ?`,
+      `UPDATE users SET name = ?, email = ?, area = ?, category = ?, contact_number = ?, messenger_link = ?, preferred_contact_channel = ?, best_contact_time = ?, data_privacy_consent = ?${photoUpdate} WHERE id = ?`,
       [
         cleanName,
+        cleanEmail,
         cleanArea,
         cleanCategory,
         String(contactNumber || "").trim(),
@@ -3505,7 +3762,7 @@ app.post("/api/profile", requireUser, async (req, res) => {
     await addActivity("Profile updated", `${updated.name} updated profile settings`);
     const state = await getStateFor(updated);
     broadcast("kaila.state.updated", state);
-    res.json({ user: publicUser(updated), state });
+    res.json({ user: privateUser(updated), state });
   } catch (error) {
     console.error("Profile update failed:", error);
     res.status(400).json({ error: error.message || "Profile update failed" });

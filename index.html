@@ -38,7 +38,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
-  <link rel="stylesheet" href="style.css?v=20260613-admin-account">
+  <link rel="stylesheet" href="style.css?v=20260613-facebook-sdk-once">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -166,14 +166,19 @@
     </section>
 
     <section class="view" data-view="register">
-      <div class="container-fluid px-3 py-3">
-        <div class="auth-card">
-          <div class="d-flex justify-content-between align-items-center mb-2">
+      <div class="container-fluid px-3 py-3 auth-page register-auth-page">
+        <div class="auth-card register-card">
+          <div class="d-flex justify-content-between align-items-center mb-2 register-card-head">
             <h1 class="h4 fw-black m-0">Register</h1>
             <button class="btn btn-sm btn-link" type="button" data-route="login">Login</button>
           </div>
-          <form data-register-form class="compact-form" method="post" autocomplete="on">
+          <form data-register-form class="compact-form register-form" method="post" autocomplete="on">
+            <div class="social-auth-row" data-social-auth="signup" hidden>
+              <button class="btn btn-outline-primary w-100" type="button" data-social-provider="google" data-social-mode="signup"><i class="fa-brands fa-google"></i> Continue with Google</button>
+              <button class="btn btn-outline-primary w-100" type="button" data-social-provider="facebook" data-social-mode="signup"><i class="fa-brands fa-facebook"></i> Continue with Facebook</button>
+            </div>
             <input id="register-name" class="form-control" name="name" placeholder="Full name" autocomplete="name" maxlength="80" required>
+            <input id="register-email" class="form-control" name="email" type="email" placeholder="Email address" autocomplete="email" maxlength="190">
             <input id="register-username" class="form-control" name="username" placeholder="Username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40" required>
             <div class="password-field">
               <input id="register-password" class="form-control" name="password" type="password" placeholder="Password" autocomplete="new-password" minlength="6" required>
@@ -205,8 +210,8 @@
               <option>After hours</option>
               <option>By appointment</option>
             </select>
-            <div data-register-address></div>
-            <div data-provider-category-field hidden>
+            <div class="register-address-section" data-register-address></div>
+            <div class="register-provider-section" data-provider-category-field hidden>
               <input class="form-control" name="displayName" placeholder="Provider display name">
               <select class="form-select" name="providerType">
                 <option value="">Provider type</option>
@@ -362,6 +367,10 @@
           </div>
           <form data-login-form class="compact-form" method="post" autocomplete="on">
             <div class="connection-banner" data-login-queue-status role="status"></div>
+            <div class="social-auth-row" data-social-auth="login" hidden>
+              <button class="btn btn-outline-primary w-100" type="button" data-social-provider="google" data-social-mode="login"><i class="fa-brands fa-google"></i> Login with Google</button>
+              <button class="btn btn-outline-primary w-100" type="button" data-social-provider="facebook" data-social-mode="login"><i class="fa-brands fa-facebook"></i> Login with Facebook</button>
+            </div>
             <input id="login-username" class="form-control" name="username" placeholder="Username" autocomplete="username" autocapitalize="none" spellcheck="false" enterkeyhint="next" required>
             <div class="password-field">
               <input id="login-password" class="form-control" name="password" type="password" placeholder="Password" autocomplete="current-password" enterkeyhint="done" required>
@@ -611,6 +620,6 @@
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=20260613-admin-account"></script>
+  <script src="app.js?v=20260613-facebook-sdk-once"></script>
 </body>
 </html>

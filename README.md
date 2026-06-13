@@ -207,6 +207,7 @@ For deployment:
 - Run MySQL and configure `socket/.env`.
 - Set `KAILA_SOCKET_BEARER_TOKEN` in `socket/.env`.
 - Set `GROQ_API_KEY` in `socket/.env` if AI-assisted Decision Signal prefilling and dashboard analytics should be enabled.
+- Optional: set `KAILA_GOOGLE_CLIENT_ID`, `KAILA_FACEBOOK_APP_ID`, and `KAILA_FACEBOOK_APP_SECRET` in `socket/.env` to enable Google/Facebook login and signup.
 - Update the socket URL in the app if the deployed socket URL changes.
 - Serve the PWA over HTTPS so browsers allow microphone and camera access outside local development.
 - Configure a TURN server before production rollout if calls must work reliably across restrictive mobile networks.

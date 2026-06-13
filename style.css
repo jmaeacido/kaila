@@ -1102,6 +1102,11 @@ body.app-mode > .navbar {
   gap: 0.55rem;
 }
 
+.social-auth-row {
+  display: grid;
+  gap: 0.45rem;
+}
+
 .password-field {
   position: relative;
   display: block;
@@ -10410,5 +10415,114 @@ body.app-mode .app-view.active,
 
   .request-wizard:has(.request-wizard-step[data-wizard-step="3"].active) .request-wizard-actions {
     bottom: 1.5rem;
+  }
+}
+
+/* Desktop registration should feel like a browser form, not the phone app shell. */
+@media (min-width: 900px) {
+  .register-auth-page {
+    width: min(100%, 1220px);
+    margin-inline: auto;
+    padding-block: clamp(2rem, 5vh, 3.75rem) 3rem !important;
+  }
+
+  .register-card.auth-card {
+    width: min(100%, 1120px);
+    max-width: 1120px !important;
+    margin-inline: auto;
+    padding: clamp(1.25rem, 2.4vw, 2rem) !important;
+    border-radius: 12px !important;
+  }
+
+  .register-card-head {
+    margin-bottom: 1rem !important;
+  }
+
+  .register-card-head h1 {
+    font-size: clamp(1.45rem, 2vw, 2rem) !important;
+  }
+
+  .register-form.compact-form {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.85rem 0.95rem;
+    align-items: start;
+  }
+
+  .register-form > .social-auth-row,
+  .register-form > .register-address-section,
+  .register-form > .register-provider-section,
+  .register-form > .consent-line,
+  .register-form > p,
+  .register-form > button[type="submit"] {
+    grid-column: 1 / -1;
+  }
+
+  .register-form > .form-control,
+  .register-form > .form-select,
+  .register-form > .password-field {
+    grid-column: span 2;
+    min-width: 0;
+  }
+
+  .register-form > select[name="role"],
+  .register-form > select[name="preferredContactChannel"] {
+    grid-column: span 1;
+  }
+
+  .register-form > select[name="bestContactTime"] {
+    grid-column: span 2;
+  }
+
+  .register-form > input[name="messengerLink"] {
+    grid-column: span 3;
+  }
+
+  .register-form .social-auth-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .register-form .address-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .register-form .address-grid label {
+    grid-column: span 2;
+  }
+
+  .register-form .address-grid label:nth-child(-n + 4) {
+    grid-column: span 3;
+  }
+
+  .register-provider-section:not([hidden]) {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.85rem 0.95rem;
+  }
+
+  .register-provider-section > .form-control,
+  .register-provider-section > .form-select,
+  .register-provider-section > .range-grid {
+    grid-column: span 2;
+    min-width: 0;
+  }
+
+  .register-provider-section > .auth-field-label,
+  .register-provider-section > div[data-register-category],
+  .register-provider-section > div[data-register-coverage],
+  .register-provider-section > div[data-register-days],
+  .register-provider-section > textarea,
+  .register-provider-section > .consent-line {
+    grid-column: 1 / -1;
+  }
+
+  .register-provider-section .category-chip-options {
+    max-height: 10.5rem;
+  }
+
+  .register-form > button[type="submit"] {
+    width: min(100%, 28rem) !important;
+    justify-self: end;
   }
 }

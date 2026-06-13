@@ -16,6 +16,8 @@ const STORAGE = {
   mobileUpdateCheck: "kaila.deploy.mobileUpdateCheck",
   activeRole: "kaila.deploy.activeRole",
 };
+const SOCIAL_AUTH_PENDING_PREFIX = "kaila.socialAuth.";
+const SOCIAL_AUTH_GOOGLE_PROFILE_TOKEN = "kaila.socialAuth.googleProfileToken";
 const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Cellphone repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Cleaning", "AirCon Cleaning", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
 const CONTACT_CHANNELS = ["Messenger", "SMS", "Call", "Email", "Other"];
@@ -125,6 +127,10 @@ const state = {
   pushStatus: "",
   pushError: "",
   pushServerStatus: null,
+  socialAuthConfig: null,
+  facebookSdkAppId: "",
+  pendingGoogleSignupToken: "",
+  pendingGoogleSignupProfile: null,
   deviceLocation: null,
   deviceLocationCheckedAt: 0,
   navigationWatchId: null,
@@ -172,11 +178,14 @@ async function init() {
   bindEvents();
   setupLoginCredentialFill();
   initializeSocketUrl();
+  await loadSocialAuthConfig();
+  hydratePendingGoogleSignup();
   await loadGeography();
   renderRegisterAddress();
   await loadState();
   syncQueuedValidationEntries();
-  route(initialRoute());
+  const handledSocialRedirect = await handleGoogleRedirectResult();
+  if (!handledSocialRedirect) route(initialRoute());
   connectSocket();
   setupMobileUpdateChecks();
   checkMobileUpdate({ force: true });
@@ -815,6 +824,7 @@ function bindEvents() {
   $$("[data-password-toggle]").forEach((button) => button.addEventListener("click", togglePasswordVisibility));
   $("[data-forgot-password]")?.addEventListener("click", openForgotPasswordModal);
   $$("[data-logout]").forEach((button) => button.addEventListener("click", logout));
+  $$("[data-social-provider]").forEach((button) => button.addEventListener("click", () => handleSocialAuth(button.dataset.socialProvider, button.dataset.socialMode)));
   $("[data-open-live]").addEventListener("click", () => $("[data-live-panel]").hidden = false);
   $("[data-close-live]").addEventListener("click", () => $("[data-live-panel]").hidden = true);
   $("[data-reconnect]").addEventListener("click", () => connectSocket(true));
@@ -1208,6 +1218,283 @@ async function login(event) {
   form.reset();
   runPostAuthTasks(data.username, data.password, payload.user);
   await successRedirect("Logged in", `Welcome back, ${displayUserName(state.session)}.`);
+}
+
+async function loadSocialAuthConfig() {
+  try {
+    state.socialAuthConfig = await apiFetch("/api/auth/config");
+    renderSocialAuthButtons();
+  } catch (error) {
+    console.warn("Social auth config unavailable:", error.message);
+    state.socialAuthConfig = {};
+    renderSocialAuthButtons();
+  }
+}
+
+function renderSocialAuthButtons() {
+  const config = state.socialAuthConfig || {};
+  $$("[data-social-auth]").forEach((row) => {
+    const hasAny = Boolean(config.googleClientId || config.facebookAppId);
+    row.hidden = !hasAny;
+    const google = $('[data-social-provider="google"]', row);
+    const facebook = $('[data-social-provider="facebook"]', row);
+    if (google) google.hidden = !config.googleClientId;
+    if (facebook) facebook.hidden = !config.facebookAppId;
+  });
+}
+
+function socialAuthPayloadFromRegisterForm(form = $("[data-register-form]")) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  data.name = String(data.name || "").trim();
+  data.email = String(data.email || "").trim();
+  data.username = String(data.username || "").trim();
+  data.category = selectedCategoryChips("register-category");
+  data.area = addressValue("register-address");
+  data.availableDays = selectedCategoryChips("register-days").join(", ");
+  data.availableTime = timeRangeValue("[data-register-form] [name='availableTimeStart']", "[data-register-form] [name='availableTimeEnd']");
+  data.coverageArea = selectedCategoryChips("register-coverage").join(", ");
+  data.minimumFee = normalizeCurrencyInput(data.minimumFee);
+  data.priceRange = priceRangeValue("[data-register-form] [name='priceRangeMin']", "[data-register-form] [name='priceRangeMax']");
+  data.dataPrivacyConsent = form.elements.dataPrivacyConsent?.checked;
+  data.validIdConsent = form.elements.validIdConsent?.checked;
+  data.consentRequests = form.elements.consentRequests?.checked;
+  data.consentRatings = form.elements.consentRatings?.checked;
+  data.rulesAgreement = form.elements.rulesAgreement?.checked;
+  delete data.password;
+  delete data.availableTimeStart;
+  delete data.availableTimeEnd;
+  delete data.priceRangeMin;
+  delete data.priceRangeMax;
+  return data;
+}
+
+function applySocialProfileToRegister(profile = {}) {
+  const form = $("[data-register-form]");
+  if (!form) return;
+  if (profile.name && !form.elements.name.value) form.elements.name.value = profile.name;
+  if (profile.email && !form.elements.email.value) form.elements.email.value = profile.email;
+  if (profile.username && !form.elements.username.value) form.elements.username.value = profile.username;
+}
+
+function validateSocialSignup(data = {}) {
+  if (!data.name || !data.contactNumber || !data.preferredContactChannel || !data.area || !data.dataPrivacyConsent) {
+    notify("Signup incomplete", "Name, contact number, preferred contact, address, and consent are required.", "warning");
+    return false;
+  }
+  if (data.role === "provider" && (!data.category.length || !data.specificServices || !data.coverageArea || !data.consentRequests || !data.consentRatings || !data.rulesAgreement)) {
+    notify("Signup incomplete", "Provider category, services, coverage area, request consent, rating consent, and rules agreement are required.", "warning");
+    return false;
+  }
+  return true;
+}
+
+async function handleSocialAuth(provider, mode = "login") {
+  if (provider === "google") {
+    if (mode === "signup" && state.pendingGoogleSignupToken) {
+      return completeSocialAuthWithToken(provider, state.pendingGoogleSignupToken, mode);
+    }
+    try {
+      startGoogleRedirectAuth(mode);
+    } catch (error) {
+      notify("Google sign-in failed", socialAuthErrorMessage(error), "error");
+    }
+    return;
+  }
+  try {
+    const token = await socialProviderToken(provider);
+    return completeSocialAuthWithToken(provider, token, mode);
+  } catch (error) {
+    notify("Social sign-in cancelled", socialAuthErrorMessage(error), "warning");
+  }
+}
+
+async function completeSocialAuthWithToken(provider, token, mode = "login") {
+  try {
+    const profileResponse = await apiFetch("/api/auth/social/profile", {
+      method: "POST",
+      body: JSON.stringify({ provider, token }),
+    });
+    if (mode === "signup") {
+      applySocialProfileToRegister(profileResponse.profile);
+      if (provider === "google") rememberPendingGoogleSignup(token, profileResponse.profile);
+    }
+    const body = { provider, token, mode };
+    if (mode === "signup") {
+      Object.assign(body, socialAuthPayloadFromRegisterForm());
+      if (!validateSocialSignup(body)) {
+        route("register");
+        return;
+      }
+    }
+    const payload = await apiFetch("/api/auth/social", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    if (payload.requiresSignup) {
+      if (provider === "google") rememberPendingGoogleSignup(token, payload.profile);
+      applySocialProfileToRegister(payload.profile);
+      notify("Social account not linked", "Complete signup with this Google or Facebook account first.", "warning");
+      route("register");
+      return;
+    }
+    if (provider === "google") forgetPendingGoogleSignup();
+    await completeAuthenticatedSession(payload, mode === "signup" ? "Account created" : "Logged in", mode === "signup" ? "Welcome to KAILA." : `Welcome back, ${displayUserName(payload.user)}.`);
+  } catch (error) {
+    if (mode === "login" && error.status === 404) {
+      if (provider === "google") await prepareGoogleSignupFromToken(token);
+      notify("Social account not linked", "Open Register and complete signup with the same Google or Facebook account first.", "warning");
+      route("register");
+      return;
+    }
+    notify("Social sign-in failed", socialAuthErrorMessage(error), "error");
+  }
+}
+
+function socialAuthErrorMessage(error = {}) {
+  if (error.status === 400 || error.status === 401) return "The provider could not verify this sign-in. Try again or use username/password.";
+  return error.message || "Social sign-in could not be completed.";
+}
+
+async function completeAuthenticatedSession(payload, title, message) {
+  state.session = payload.user;
+  state.activeRole = defaultActiveRole();
+  state.lastDashboardTabTarget = "#feed-pane";
+  localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
+  localStorage.setItem(STORAGE.activeRole, state.activeRole);
+  loadAttentionBadgesForSession();
+  syncSocketIdentity();
+  safeApplyState(payload.state);
+  activateTab("#feed-pane");
+  runPostAuthTasks("", "", payload.user);
+  await successRedirect(title, message);
+}
+
+async function socialProviderToken(provider) {
+  if (provider === "google") throw new Error("Google sign-in redirects to Google before returning to KAILA.");
+  if (provider === "facebook") return facebookAccessToken();
+  throw new Error("Unsupported social provider");
+}
+
+function loadScriptOnce(src, globalName) {
+  if (globalName && window[globalName]) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const existing = $$("script").find((script) => script.src === src);
+    if (existing) {
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", reject, { once: true });
+      if (globalName && window[globalName]) resolve();
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    script.defer = true;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("Could not load social sign-in script"));
+    document.head.appendChild(script);
+  });
+}
+
+function googleRedirectUri() {
+  return `${window.location.origin}${window.location.pathname}`;
+}
+
+function startGoogleRedirectAuth(mode = "login") {
+  const clientId = state.socialAuthConfig?.googleClientId;
+  if (!clientId) throw new Error("Google login is not configured");
+  const marker = window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  sessionStorage.setItem(`${SOCIAL_AUTH_PENDING_PREFIX}${marker}`, JSON.stringify({ provider: "google", mode, createdAt: Date.now() }));
+  const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("redirect_uri", googleRedirectUri());
+  url.searchParams.set("response_type", "token");
+  url.searchParams.set("scope", "openid email profile");
+  url.searchParams.set("prompt", "select_account");
+  url.searchParams.set("state", marker);
+  window.location.assign(url.toString());
+}
+
+async function handleGoogleRedirectResult() {
+  const hash = window.location.hash.replace(/^#/, "");
+  if (!hash) return false;
+  const params = new URLSearchParams(hash);
+  const marker = params.get("state") || "";
+  const pendingKey = marker ? `${SOCIAL_AUTH_PENDING_PREFIX}${marker}` : "";
+  const pending = pendingKey ? readSessionJson(pendingKey, null) : null;
+  if (pending?.provider !== "google") return false;
+  sessionStorage.removeItem(pendingKey);
+  history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+  if (params.get("error")) {
+    notify("Google sign-in cancelled", params.get("error_description") || params.get("error") || "Google did not complete sign-in.", "warning");
+    return true;
+  }
+  const token = params.get("access_token");
+  if (!token) {
+    notify("Google sign-in failed", "Google did not return an access token.", "error");
+    return true;
+  }
+  await completeSocialAuthWithToken("google", token, pending.mode || "login");
+  return true;
+}
+
+async function prepareGoogleSignupFromToken(token) {
+  try {
+    const profileResponse = await apiFetch("/api/auth/social/profile", {
+      method: "POST",
+      body: JSON.stringify({ provider: "google", token }),
+    });
+    rememberPendingGoogleSignup(token, profileResponse.profile);
+    applySocialProfileToRegister(profileResponse.profile);
+  } catch (error) {
+    console.warn("KAILA could not preload Google profile for signup:", error);
+  }
+}
+
+function rememberPendingGoogleSignup(token, profile = null) {
+  state.pendingGoogleSignupToken = token || "";
+  state.pendingGoogleSignupProfile = profile || null;
+  if (token) sessionStorage.setItem(SOCIAL_AUTH_GOOGLE_PROFILE_TOKEN, JSON.stringify({ token, profile, createdAt: Date.now() }));
+}
+
+function hydratePendingGoogleSignup() {
+  const saved = readSessionJson(SOCIAL_AUTH_GOOGLE_PROFILE_TOKEN, null);
+  if (!saved?.token || Date.now() - Number(saved.createdAt || 0) > 50 * 60 * 1000) {
+    sessionStorage.removeItem(SOCIAL_AUTH_GOOGLE_PROFILE_TOKEN);
+    return;
+  }
+  state.pendingGoogleSignupToken = saved.token;
+  state.pendingGoogleSignupProfile = saved.profile || null;
+}
+
+function forgetPendingGoogleSignup() {
+  state.pendingGoogleSignupToken = "";
+  state.pendingGoogleSignupProfile = null;
+  sessionStorage.removeItem(SOCIAL_AUTH_GOOGLE_PROFILE_TOKEN);
+}
+
+async function facebookAccessToken() {
+  const appId = state.socialAuthConfig?.facebookAppId;
+  if (!appId) throw new Error("Facebook login is not configured");
+  await ensureFacebookSdk(appId);
+  return new Promise((resolve, reject) => {
+    window.FB.login((response) => {
+      if (response.authResponse?.accessToken) resolve(response.authResponse.accessToken);
+      else reject(new Error("Facebook sign-in was cancelled"));
+    }, { scope: "public_profile" });
+  });
+}
+
+async function ensureFacebookSdk(appId) {
+  await loadScriptOnce("https://connect.facebook.net/en_US/sdk.js", "FB");
+  if (state.facebookSdkAppId === appId) return;
+  window.FB.init({
+    appId,
+    cookie: false,
+    status: false,
+    xfbml: false,
+    version: "v20.0",
+  });
+  state.facebookSdkAppId = appId;
 }
 
 function runPostAuthTasks(username, password, user) {
@@ -4287,6 +4574,7 @@ function renderSettings() {
       </div>
       <div class="settings-grid">
         <label><span>Name</span><input class="form-control" name="name" autocomplete="name" maxlength="80" value="${escapeAttribute(state.session.name || "")}" required></label>
+        <label><span>Email</span><input class="form-control" name="email" type="email" autocomplete="email" maxlength="190" value="${escapeAttribute(state.session.email || "")}"></label>
         <label><span>Contact number</span><input class="form-control" name="contactNumber" type="tel" inputmode="tel" autocomplete="tel" maxlength="32" value="${escapeAttribute(state.session.contactNumber || "")}"></label>
         <label><span>${isAdmin ? "Admin contact link" : "Messenger / Facebook"}</span><input class="form-control" name="messengerLink" inputmode="url" autocomplete="url" maxlength="240" value="${escapeAttribute(state.session.messengerLink || "")}"></label>
         <label><span>${isAdmin ? "Internal contact" : "Preferred contact"}</span>${select("settings-contact-channel", CONTACT_CHANNELS, state.session.preferredContactChannel || "Messenger")}</label>
@@ -7880,6 +8168,7 @@ async function saveSettings(event) {
   }
   const payload = {
     name: form.elements.name.value.trim(),
+    email: form.elements.email?.value.trim() || "",
     area: state.session.role === "admin" ? state.session.area || "KAILA Administration" : addressValue("settings-address"),
     category: state.session.role === "provider" ? selectedCategoryChips("settings-category") : [],
     contactNumber: form.elements.contactNumber.value.trim(),
@@ -7977,6 +8266,7 @@ async function openAdminCreateAccountModal() {
       <div class="swal-form two">
         <label><span>Role</span>${select("admin-account-role", ["client", "provider", SUPPORT_LABEL, "ops"], "client")}</label>
         <label><span>Full name</span><input id="admin-account-name" class="form-control" autocomplete="name" maxlength="80"></label>
+        <label><span>Email</span><input id="admin-account-email" class="form-control" type="email" autocomplete="email" maxlength="190"></label>
         <label><span>Username</span><input id="admin-account-username" class="form-control" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40"></label>
         <label><span>Contact number</span><input id="admin-account-contact" class="form-control" type="tel" inputmode="tel" autocomplete="tel" maxlength="32"></label>
         <label><span>Messenger / Facebook</span><input id="admin-account-messenger" class="form-control" inputmode="url" autocomplete="url" maxlength="240"></label>
@@ -8030,6 +8320,7 @@ async function openAdminCreateAccountModal() {
       const payload = {
         role,
         name: $("#admin-account-name").value.trim(),
+        email: $("#admin-account-email").value.trim(),
         username: $("#admin-account-username").value.trim(),
         password: $("#admin-account-password").value,
         contactNumber: $("#admin-account-contact").value.trim(),
@@ -11104,6 +11395,10 @@ function showInlineToast(title, text = "", icon = "info", timer = 3500) {
 
 function readJson(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
+}
+
+function readSessionJson(key, fallback) {
+  try { return JSON.parse(sessionStorage.getItem(key)) ?? fallback; } catch { return fallback; }
 }
 
 function readJsonFromString(value, fallback) {

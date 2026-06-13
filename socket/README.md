@@ -19,6 +19,25 @@ Job-message content is encrypted at rest with AES-256-GCM. Set `KAILA_MESSAGE_EN
 
 Public registration creates only Client and Provider accounts. Admin can also create Ops and Customer Service accounts. Customer Service accounts can view support context, message clients/providers directly, and join accepted job conversations for assistance without receiving client/provider job-action permissions.
 
+## Social Login
+
+Google and Facebook login/signup are optional. Google uses a full-page OAuth
+redirect back to the app origin, so the Google OAuth client must allow the
+deployed app URL such as `https://kaila-app.com/` as a redirect URI. Facebook
+uses the Facebook SDK login flow with `public_profile` only until Meta approves
+email access. The browser sends the returned Google OAuth access token or
+Facebook access token to the Node service, and the server verifies it before
+login or account creation. Signup uses available provider profile data to
+prefill KAILA fields such as name, email, and username; Facebook email is
+prefilled only when Meta grants the email scope. Users can edit their profile
+later from Account.
+
+```env
+KAILA_GOOGLE_CLIENT_ID=
+KAILA_FACEBOOK_APP_ID=
+KAILA_FACEBOOK_APP_SECRET=
+```
+
 ## Safety, Reports, and Account Deletion
 
 The service stores user and job reports in `moderation_reports` for Admin and Customer Service review. User blocks are stored in `user_blocks`; blocked pairs cannot open direct messages or direct calls. Clients and providers can delete their own accounts through `/api/account`, which removes login access, push tokens, and profile/contact details while retaining operational job, message, report, and rating history.
