@@ -361,6 +361,26 @@ function hasCategory(categories, category) {
   return normalizeCategories(categories).split(",").map((item) => item.trim().toLowerCase()).includes(target);
 }
 
+function normalizeAreaCity(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function cityFromArea(area = "") {
+  const parts = String(area || "").split(",").map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return "";
+  return parts[parts.length - 2] || "";
+}
+
+function sameCityArea(leftArea = "", rightArea = "") {
+  const leftCity = normalizeAreaCity(cityFromArea(leftArea));
+  const rightCity = normalizeAreaCity(cityFromArea(rightArea));
+  return Boolean(leftCity && rightCity && leftCity === rightCity);
+}
+
+function providerMatchesRequestRow(provider = {}, request = {}) {
+  return Boolean(provider && hasCategory(provider.category, request.category) && sameCityArea(provider.area, request.area));
+}
+
 async function activeProviderProfileFor(userId) {
   if (!userId) return null;
   const [rows] = await pool.query("SELECT * FROM providers WHERE user_id = ? AND status = 'Active' LIMIT 1", [userId]);
@@ -1267,13 +1287,13 @@ function clearJobRequestNotification(userIds, requestId) {
   });
 }
 
-async function providerUserIdsForRequestCategory(category) {
-  const [rows] = await pool.query("SELECT user_id, category FROM providers WHERE status = 'Active'");
-  return rows.filter((row) => hasCategory(row.category, category)).map((row) => row.user_id);
+async function providerUserIdsForRequest(request = {}) {
+  const [rows] = await pool.query("SELECT user_id, category, area FROM providers WHERE status = 'Active'");
+  return rows.filter((row) => providerMatchesRequestRow(row, request)).map((row) => row.user_id);
 }
 
 async function requestAlertUserIds(request = {}) {
-  const providerIds = await providerUserIdsForRequestCategory(request.category);
+  const providerIds = await providerUserIdsForRequest(request);
   return Array.from(new Set([...providerIds, request.accepted_provider_id].filter(Boolean)));
 }
 
@@ -2498,7 +2518,7 @@ async function getState(viewer = null) {
     if (row.accepted_provider_id) return false;
     if (!["Posted", "Offers Received", "Countered"].includes(row.status)) return false;
     if (passedOfferKeys.has(`${row.id}:${viewer.id}`)) return false;
-    return hasCategory(viewerProvider.category, row.category);
+    return providerMatchesRequestRow(viewerProvider, row);
   });
   const visibleRequestIds = new Set(visibleRequestRows.map((row) => row.id));
   const navigationByRequest = new Map();
@@ -3543,7 +3563,7 @@ app.post("/api/reports/job", requireUser, async (req, res) => {
   const request = rows[0];
   const involved = request.client_id === req.user.id || request.accepted_provider_id === req.user.id || ["admin", "customer_service"].includes(req.user.role);
   const provider = await activeProviderProfileFor(req.user.id);
-  const matchingProvider = Boolean(provider && hasCategory(provider.category, request.category));
+  const matchingProvider = Boolean(provider && providerMatchesRequestRow(provider, request));
   if (!involved && !matchingProvider) return res.status(403).json({ error: "You cannot report this job" });
   if (!reason) return res.status(400).json({ error: "Report reason is required" });
   const timestamp = nowMysql();
@@ -3556,6 +3576,24 @@ app.post("/api/reports/job", requireUser, async (req, res) => {
   const state = await getStateFor(req.user);
   broadcast("kaila.moderation.reported", { reportId, type: "job", requestId: request.id });
   res.status(201).json({ state });
+});
+
+app.post("/api/reports/:id/action", requireUser, async (req, res) => {
+  if (!["admin", "customer_service"].includes(req.user.role)) return res.status(403).json({ error: "Only staff can update reports" });
+  const action = String(req.body?.action || "").trim();
+  const nextStatus = {
+    review: "In Review",
+    close: "Closed",
+    reopen: "Open",
+  }[action];
+  if (!nextStatus) return res.status(400).json({ error: "Unsupported report action" });
+  const [rows] = await pool.query("SELECT id, type, reason, status FROM moderation_reports WHERE id = ? LIMIT 1", [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: "Report not found" });
+  const timestamp = nowMysql();
+  await pool.query("UPDATE moderation_reports SET status = ?, updated_at = ? WHERE id = ?", [nextStatus, timestamp, req.params.id]);
+  await addActivity("Report updated", `${displayNameForUser(req.user)} marked ${rows[0].type} report '${rows[0].reason}' as ${nextStatus}`);
+  broadcast("kaila.state.updated", await getState());
+  res.json({ state: await getStateFor(req.user) });
 });
 
 app.post("/api/blocks/:userId", requireUser, async (req, res) => {
@@ -3679,7 +3717,7 @@ app.post("/api/requests", requireUser, async (req, res) => {
   }
   await addActivity("Request posted", `${request.category} in ${request.area}`);
   broadcast("kaila.request.created", { request });
-  const providerUserIds = await providerUserIdsForRequestCategory(request.category);
+  const providerUserIds = await providerUserIdsForRequest(request);
   pushNotification(providerUserIds, {
     type: "request",
     title: "New KAILA job request",
@@ -3752,7 +3790,7 @@ app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
   if (requestRows[0].client_id === req.user.id) return res.status(400).json({ error: "You cannot send an offer to your own request" });
   if (!["Posted", "Offers Received", "Countered"].includes(requestRows[0].status)) return res.status(400).json({ error: "This request is no longer accepting offers" });
   const provider = await activeProviderProfileFor(req.user.id);
-  if (!provider || !hasCategory(provider.category, requestRows[0].category)) return res.status(403).json({ error: "This request does not match your provider categories" });
+  if (!provider || !providerMatchesRequestRow(provider, requestRows[0])) return res.status(403).json({ error: "This request is outside your city/municipality or provider categories" });
   const [passRows] = await pool.query("SELECT request_id FROM request_passes WHERE request_id = ? AND provider_id = ? LIMIT 1", [req.params.id, req.user.id]);
   if (passRows.length) return res.status(400).json({ error: "You already passed this request" });
   const { amount, schedule, notes, type, providerLocation } = req.body || {};
@@ -3796,12 +3834,12 @@ app.post("/api/requests/:id/offers", requireUser, async (req, res) => {
 
 app.post("/api/requests/:id/pass", requireUser, async (req, res) => {
   if (!canUseMarketplaceRole(req.user)) return res.status(403).json({ error: "Only marketplace accounts can pass requests" });
-  const [requestRows] = await pool.query("SELECT status, client_id, category FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
+  const [requestRows] = await pool.query("SELECT status, client_id, category, area FROM requests WHERE id = ? LIMIT 1", [req.params.id]);
   if (!requestRows.length) return res.status(404).json({ error: "Request not found" });
   if (requestRows[0].client_id === req.user.id) return res.status(400).json({ error: "You cannot pass your own request" });
   const provider = await activeProviderProfileFor(req.user.id);
   if (!provider) return res.status(403).json({ error: "Create a provider profile before passing requests" });
-  if (!hasCategory(provider.category, requestRows[0].category)) return res.status(403).json({ error: "This request does not match your provider categories" });
+  if (!providerMatchesRequestRow(provider, requestRows[0])) return res.status(403).json({ error: "This request is outside your city/municipality or provider categories" });
   if (!["Posted", "Offers Received", "Countered"].includes(requestRows[0].status)) return res.status(400).json({ error: "This request can no longer be passed" });
   const timestamp = nowMysql();
   await pool.query(

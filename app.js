@@ -814,7 +814,7 @@ function bindEvents() {
   bindFeedAudienceSelector();
   $$("[data-password-toggle]").forEach((button) => button.addEventListener("click", togglePasswordVisibility));
   $("[data-forgot-password]")?.addEventListener("click", openForgotPasswordModal);
-  $("[data-logout]").addEventListener("click", logout);
+  $$("[data-logout]").forEach((button) => button.addEventListener("click", logout));
   $("[data-open-live]").addEventListener("click", () => $("[data-live-panel]").hidden = false);
   $("[data-close-live]").addEventListener("click", () => $("[data-live-panel]").hidden = true);
   $("[data-reconnect]").addEventListener("click", () => connectSocket(true));
@@ -3707,7 +3707,7 @@ function renderAdminProviderMetricDetail(provider) {
 
 function providerResponseStats(provider) {
   const categories = categoryList(provider.category);
-  const matching = state.requests.filter((request) => categories.includes(request.category) && request.status !== "Cancelled");
+  const matching = state.requests.filter((request) => categories.includes(request.category) && sameCityArea(provider.area, request.area) && request.status !== "Cancelled");
   const offers = matching.filter((request) => visibleOffers(request).some((offer) => offer.providerId === provider.userId)).length;
   const passes = matching.filter((request) => request.passedProviderIds?.includes(provider.userId)).length;
   const replies = offers + passes;
@@ -3827,6 +3827,7 @@ function renderCustomerService() {
       </div>
     </article>
   `;
+  bindCustomerServiceActions(host);
 }
 
 function renderInbox() {
@@ -3967,9 +3968,25 @@ function renderModerationReports() {
           ${report.requestCategory ? `<span>${escapeHtml(report.requestCategory)}</span>` : ""}
           <span>${formatDateTime(report.createdAt)}</span>
         </div>
+        <div class="card-actions">
+          ${report.requestId ? `<button class="btn btn-sm btn-outline-primary" type="button" data-support-focus-request="${escapeAttribute(report.requestId)}"><i class="fa-solid fa-clipboard-list"></i> View Job</button>` : ""}
+          ${reportActionButtons(report)}
+        </div>
       </article>
     `).join("")}
   `;
+}
+
+function reportActionButtons(report = {}) {
+  if (!["admin", SUPPORT_ROLE].includes(state.session?.role)) return "";
+  const status = report.status || "Open";
+  const button = (action, label, style, icon) => `<button class="btn btn-sm btn-${style}" type="button" data-report-id="${escapeAttribute(report.id)}" data-report-action="${action}"><i class="fa-solid ${icon}"></i> ${label}</button>`;
+  if (status === "Closed") return button("reopen", "Reopen", "outline-secondary", "fa-arrow-rotate-left");
+  const actions = [];
+  if (status !== "In Review") actions.push(button("review", "In Review", "outline-primary", "fa-eye"));
+  if (status === "In Review") actions.push(button("reopen", "Reopen", "outline-secondary", "fa-arrow-rotate-left"));
+  actions.push(button("close", "Close", "outline-secondary", "fa-check"));
+  return actions.join("");
 }
 
 function renderSupportRequestSummary(request) {
@@ -4002,9 +4019,26 @@ function bindCustomerServiceActions(host = document) {
   $$("[data-support-focus-request]", host).forEach((button) => {
     button.addEventListener("click", () => focusRequestCard(button.dataset.supportFocusRequest));
   });
+  $$("[data-report-action]", host).forEach((button) => {
+    button.addEventListener("click", () => updateReportStatus(button.dataset.reportId, button.dataset.reportAction));
+  });
   $$("[data-job-action]", host).forEach((button) => {
     button.addEventListener("click", () => openJobAction(button.dataset.requestId, button.dataset.jobAction));
   });
+}
+
+async function updateReportStatus(reportId, action) {
+  if (!reportId || !action) return;
+  try {
+    const response = await apiFetch(`/api/reports/${encodeURIComponent(reportId)}/action`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+    safeApplyState(response.state);
+    notify("Report updated", "", "success");
+  } catch (error) {
+    notify("Report update failed", error.message, "error");
+  }
 }
 
 function renderOps() {
@@ -4246,36 +4280,40 @@ function renderSettings() {
       <div class="settings-head">
         <img class="profile-photo" src="${escapeAttribute(photoUrl)}" alt="">
         <div>
-          <h3>Profile settings</h3>
-          <p>Update your visible name, service area, and photo.</p>
-          ${renderReputationBadge("Your reputation", state.session.reputation, "reputation-line")}
+          <h3>${isAdmin ? "Admin account" : "Profile settings"}</h3>
+          <p>${isAdmin ? "Manage the official KAILA administrator identity, contact path, alerts, and session." : "Update your visible name, service area, and photo."}</p>
+          ${isAdmin ? `<div class="reputation-line"><span><i class="fa-solid fa-shield-halved"></i> ${escapeHtml(roleLabel(state.session.role))}</span><span><i class="fa-solid fa-location-dot"></i> ${escapeHtml(state.session.area || "KAILA Administration")}</span></div>` : renderReputationBadge("Your reputation", state.session.reputation, "reputation-line")}
         </div>
       </div>
       <div class="settings-grid">
         <label><span>Name</span><input class="form-control" name="name" autocomplete="name" maxlength="80" value="${escapeAttribute(state.session.name || "")}" required></label>
         <label><span>Contact number</span><input class="form-control" name="contactNumber" type="tel" inputmode="tel" autocomplete="tel" maxlength="32" value="${escapeAttribute(state.session.contactNumber || "")}"></label>
-        <label><span>Messenger / Facebook</span><input class="form-control" name="messengerLink" inputmode="url" autocomplete="url" maxlength="240" value="${escapeAttribute(state.session.messengerLink || "")}"></label>
-        <label><span>Preferred contact</span>${select("settings-contact-channel", CONTACT_CHANNELS, state.session.preferredContactChannel || "Messenger")}</label>
+        <label><span>${isAdmin ? "Admin contact link" : "Messenger / Facebook"}</span><input class="form-control" name="messengerLink" inputmode="url" autocomplete="url" maxlength="240" value="${escapeAttribute(state.session.messengerLink || "")}"></label>
+        <label><span>${isAdmin ? "Internal contact" : "Preferred contact"}</span>${select("settings-contact-channel", CONTACT_CHANNELS, state.session.preferredContactChannel || "Messenger")}</label>
         <label><span>Best contact time</span>${select("settings-best-time", AVAILABLE_TIME_OPTIONS, state.session.bestContactTime || "", "Choose time")}</label>
         ${isAdmin ? "" : `<label class="wide"><span>Address</span>${addressFields("settings-address", state.session.area || "")}</label>`}
         ${isProvider ? `<label class="wide"><span>Service categories</span>${categoryChips("settings-category", state.session.category || "")}</label>` : ""}
         <label class="wide"><span>Theme</span>${select("settings-theme", ["System", "Light", "Dark"], capitalize(state.theme))}</label>
         <label class="wide"><span>Photo</span><input class="form-control" name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
-        <label class="wide consent-line"><input type="checkbox" name="dataPrivacyConsent" ${state.session.dataPrivacyConsent ? "checked" : ""}> Data privacy consent for pilot matching</label>
+        ${isAdmin ? "" : `<label class="wide consent-line"><input type="checkbox" name="dataPrivacyConsent" ${state.session.dataPrivacyConsent ? "checked" : ""}> Data privacy consent for pilot matching</label>`}
       </div>
       <div class="upload-preview settings-preview" data-settings-photo-preview></div>
       <button class="btn btn-primary" type="submit">Save Settings</button>
     </form>
+    ${isAdmin ? renderAdminAccountSettings() : ""}
     ${renderNotificationSettings()}
     ${renderSafetySettings()}
   `;
     $("[data-settings-form]")?.addEventListener("submit", saveSettings);
     $("#settings-theme")?.addEventListener("change", (event) => applyTheme(event.currentTarget.value.toLowerCase()));
     $("[data-delete-account]")?.addEventListener("click", deleteAccount);
+    $("[data-settings-panel] [data-logout]")?.addEventListener("click", logout);
     $("[data-enable-notifications]")?.addEventListener("click", enableNotificationsFromSettings);
     $("[data-settings-panel] [data-reconnect]")?.addEventListener("click", () => connectSocket(true));
     $("[data-settings-support]")?.addEventListener("click", openCustomerServicePlatform);
+    $("[data-settings-panel] [data-admin-create-account]")?.addEventListener("click", openAdminCreateAccountModal);
     $$("[data-route]", host).forEach((button) => button.addEventListener("click", () => route(button.dataset.route)));
+    $$("[data-home-tab]", host).forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.homeTab)));
     $$("[data-unblock-settings]").forEach((button) => button.addEventListener("click", () => unblockUser(button.dataset.unblockSettings)));
     bindCategoryChips("settings-category");
     bindAddressGroup("settings-address");
@@ -4284,6 +4322,35 @@ function renderSettings() {
     console.error("Settings render failed:", error);
     host.innerHTML = emptyCard("Settings unavailable", "Refresh the app and try again.");
   }
+}
+
+function renderAdminAccountSettings() {
+  const openReports = (state.reports || []).filter((report) => report.status !== "Closed").length;
+  const staffCount = state.users.filter((user) => STAFF_ROLES.includes(user.role)).length;
+  const marketplaceUsers = state.users.filter((user) => ["client", "provider"].includes(user.role)).length;
+  return `
+    <section class="settings-card">
+      <div class="settings-head">
+        <div class="profile-photo safety-icon"><i class="fa-solid fa-screwdriver-wrench"></i></div>
+        <div>
+          <h3>KAILA control scope</h3>
+          <p>Admin access covers pilot users, staff accounts, provider supply, reports, validation, and marketplace operations.</p>
+        </div>
+      </div>
+      <div class="meta">
+        <span>${marketplaceUsers} marketplace users</span>
+        <span>${state.providers.length} providers</span>
+        <span>${staffCount} staff accounts</span>
+        <span>${openReports} active reports</span>
+      </div>
+      <div class="card-actions mt-2">
+        <button class="btn btn-sm btn-outline-primary" type="button" data-admin-create-account><i class="fa-solid fa-user-plus"></i> Create Account</button>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-home-tab="#customer-service-pane"><i class="fa-solid fa-headset"></i> Support Desk</button>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-home-tab="#validation-pane"><i class="fa-solid fa-clipboard-check"></i> Validation</button>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-home-tab="#activity-pane"><i class="fa-solid fa-chart-line"></i> Activity</button>
+      </div>
+    </section>
+  `;
 }
 
 function renderNotificationSettings() {
@@ -4372,6 +4439,11 @@ function renderSafetySettings() {
           <button class="btn btn-sm btn-outline-danger mt-2" type="button" data-delete-account><i class="fa-solid fa-trash"></i> Delete Account</button>
         </div>
       ` : ""}
+      <div class="offer mt-2">
+        <strong>Account session</strong>
+        <div>Sign out of this device.</div>
+        <button class="btn btn-sm btn-outline-danger mt-2" type="button" data-logout><i class="fa-solid fa-right-from-bracket"></i> Logout</button>
+      </div>
     </section>
   `;
 }
@@ -7808,7 +7880,7 @@ async function saveSettings(event) {
   }
   const payload = {
     name: form.elements.name.value.trim(),
-    area: state.session.role === "admin" ? state.session.area || "" : addressValue("settings-address"),
+    area: state.session.role === "admin" ? state.session.area || "KAILA Administration" : addressValue("settings-address"),
     category: state.session.role === "provider" ? selectedCategoryChips("settings-category") : [],
     contactNumber: form.elements.contactNumber.value.trim(),
     messengerLink: form.elements.messengerLink.value.trim(),
@@ -9396,7 +9468,7 @@ function addActivity(title, detail) {
 }
 
 function canOffer(request) {
-  return canActAsProvider() && request.clientId !== state.session?.id && ["Posted", "Offers Received", "Countered"].includes(request.status);
+  return canActAsProvider() && request.clientId !== state.session?.id && providerMatchesRequest(request) && ["Posted", "Offers Received", "Countered"].includes(request.status);
 }
 
 function hasClientPrice(request) {
@@ -9408,7 +9480,7 @@ function canAcceptClientPrice(request) {
 }
 
 function canPass(request) {
-  return canActAsProvider() && request.clientId !== state.session?.id && ["Posted", "Offers Received", "Countered"].includes(request.status);
+  return canActAsProvider() && request.clientId !== state.session?.id && providerMatchesRequest(request) && ["Posted", "Offers Received", "Countered"].includes(request.status);
 }
 
 function isVisibleToProvider(request) {
@@ -9418,9 +9490,28 @@ function isVisibleToProvider(request) {
   return ["Posted", "Offers Received", "Countered"].includes(request.status);
 }
 
+function normalizeAreaCity(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function cityFromArea(area = "") {
+  const parts = String(area || "").split(",").map((part) => part.trim()).filter(Boolean);
+  if (!parts.length) return "";
+  const knownCity = parts.find((part) => (state.geography.cities || []).includes(part));
+  if (knownCity) return knownCity;
+  if (parts.length < 2) return "";
+  return parts[parts.length - 2] || "";
+}
+
+function sameCityArea(leftArea = "", rightArea = "") {
+  const leftCity = normalizeAreaCity(cityFromArea(leftArea));
+  const rightCity = normalizeAreaCity(cityFromArea(rightArea));
+  return Boolean(leftCity && rightCity && leftCity === rightCity);
+}
+
 function providerMatchesRequest(request) {
   const provider = state.providers.find((item) => item.userId === state.session?.id);
-  return categoryList(provider?.category).includes(request.category);
+  return Boolean(provider && categoryList(provider.category).includes(request.category) && sameCityArea(provider.area, request.area));
 }
 
 async function passRequest(requestId) {
