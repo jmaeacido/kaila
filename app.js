@@ -16,7 +16,7 @@ const STORAGE = {
   mobileUpdateCheck: "kaila.deploy.mobileUpdateCheck",
   activeRole: "kaila.deploy.activeRole",
 };
-const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Cellphone repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Graphic / digital services", "General odd jobs"];
+const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Cellphone repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Cleaning", "AirCon Cleaning", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
 const CONTACT_CHANNELS = ["Messenger", "SMS", "Call", "Email", "Other"];
 const PROVIDER_TYPES = ["Individual", "Freelancer", "Shop", "Small team", "Business"];
@@ -823,6 +823,8 @@ function bindEvents() {
   $$("[data-new-request]").forEach((button) => button.addEventListener("click", openRequestModal));
   $$("[data-home-tab]").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.homeTab)));
   $$("[data-home-support]").forEach((button) => button.addEventListener("click", openCustomerServicePlatform));
+  $("[data-home-search]")?.addEventListener("input", applyHomeSearch);
+  $("[data-home-search]")?.addEventListener("search", applyHomeSearch);
   $$("[data-service-category]").forEach((button) => button.addEventListener("click", () => {
     openRequestModal();
     setTimeout(() => {
@@ -1701,6 +1703,7 @@ function renderFeed() {
     ? state.feedPosts.map((post) => renderFeedPost(post)).join("")
     : `<div class="empty-card"><strong>No posts yet</strong><p>Share the first service update or community note.</p></div>`;
   bindFeedPostActions(list);
+  applyHomeSearch();
 }
 
 function bindFeedAudienceSelector(scope = document) {
@@ -1726,6 +1729,38 @@ function bindFeedAudienceSelector(scope = document) {
       });
     });
   });
+}
+
+function homeSearchText(values = []) {
+  return values
+    .flat(Infinity)
+    .filter((value) => value !== null && value !== undefined)
+    .join(" ")
+    .toLowerCase();
+}
+
+function applyHomeSearch() {
+  const input = $("[data-home-search]");
+  if (!input) return;
+  const query = input.value.trim().toLowerCase();
+  const categoryTiles = $$("[data-service-category]");
+  const feedItems = $$("[data-feed-list] [data-home-search-item]");
+  const jobItems = $$("[data-request-list] [data-home-search-item]");
+  const providerItems = $$("[data-provider-list] [data-home-search-item]");
+  let matches = 0;
+  const apply = (items, getText) => {
+    items.forEach((item) => {
+      const matched = !query || getText(item).includes(query);
+      item.hidden = !matched;
+      if (matched) matches += 1;
+    });
+  };
+  apply(categoryTiles, (item) => homeSearchText([item.dataset.serviceCategory, item.textContent]));
+  apply(feedItems, (item) => item.dataset.homeSearchText || item.textContent.toLowerCase());
+  apply(jobItems, (item) => item.dataset.homeSearchText || item.textContent.toLowerCase());
+  apply(providerItems, (item) => item.dataset.homeSearchText || item.textContent.toLowerCase());
+  const empty = $("[data-home-search-empty]");
+  if (empty) empty.hidden = !query || matches > 0;
 }
 
 function setFeedAudienceValue(value = "public", audience = $("[data-feed-audience]")) {
@@ -1773,7 +1808,7 @@ function renderFeedPost(post = {}, options = {}) {
   const shareUrl = feedShareUrl(post);
   const visibilityIcon = post.visibility === "private" ? "fa-lock" : "fa-globe";
   return `
-    <article class="feed-card ${post.official ? "official" : ""}" data-feed-post="${escapeAttribute(post.id)}">
+    <article class="feed-card ${post.official ? "official" : ""}" data-feed-post="${escapeAttribute(post.id)}" data-home-search-item="feed" data-home-search-text="${escapeAttribute(homeSearchText([post.authorName, post.body, post.visibility, ...(post.comments || []).map((comment) => comment.body)]))}">
       <div class="feed-card-head">
         <img src="${escapeAttribute(resolveMediaUrl(post.authorPhotoUrl))}" alt="${escapeAttribute(post.authorName || "KAILA user")} photo">
         <div>
@@ -2286,6 +2321,7 @@ function renderRequests() {
   bindRequestCardActions(host);
   hydrateRequestRouteDistances(host);
   hydrateOfferRouteDistances(host);
+  applyHomeSearch();
 }
 
 function filterJobRequests(requests = [], filter = "all") {
@@ -2426,7 +2462,7 @@ function renderJobPrimaryCta(request = {}) {
 
 function renderRequestCard(request) {
   return `
-    <article class="k-card request-card" data-request-card="${escapeAttribute(request.id)}">
+    <article class="k-card request-card" data-request-card="${escapeAttribute(request.id)}" data-home-search-item="job" data-home-search-text="${escapeAttribute(homeSearchText([request.title, request.category, request.details, request.description, request.status, request.area, request.urgency, request.preferredSchedule]))}">
       <div class="request-card-head">
         <div class="request-title-block">
           <span class="request-kicker">${escapeHtml(request.urgency || "Request")}</span>
@@ -3490,7 +3526,7 @@ function renderProviders() {
     return;
   }
   host.innerHTML = `${adminPanel}${providers.map((provider) => `
-    <article class="k-card provider-card">
+    <article class="k-card provider-card" data-home-search-item="provider" data-home-search-text="${escapeAttribute(homeSearchText([provider.displayName, provider.name, provider.specificServices, provider.skills, provider.category, provider.area, provider.trustLevel]))}">
       <div class="d-flex justify-content-between gap-2">
         <div>
           ${renderIdentity(provider.displayName || provider.name, provider.photoUrl, "Provider reputation", providerReputation(provider))}
@@ -3516,6 +3552,7 @@ function renderProviders() {
       ${directContactButtons(provider.userId)}
     </article>
   `).join("")}`;
+  applyHomeSearch();
 }
 
 function adminMetricProviders(providers) {
