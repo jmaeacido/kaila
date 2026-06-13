@@ -508,7 +508,13 @@ async function checkMobileUpdate({ force = false } = {}) {
     const currentVersionCode = Number(info?.versionCode || 0);
     const currentVersionName = String(info?.versionName || "").trim();
     const latestVersionCode = Number(update?.latestVersionCode || 0);
-    if (!update?.enabled || !update?.apkUrl || !currentVersionCode || latestVersionCode <= currentVersionCode) return;
+    const latestVersionName = String(update?.latestVersionName || "").trim();
+    const versionCodeIsNewer = latestVersionCode > currentVersionCode;
+    const publishedVersionDiffers = latestVersionCode === currentVersionCode
+      && latestVersionName
+      && currentVersionName
+      && latestVersionName !== currentVersionName;
+    if (!update?.enabled || !update?.apkUrl || !currentVersionCode || (!versionCodeIsNewer && !publishedVersionDiffers)) return;
     rememberMobileUpdateCheck({ latestVersionCode });
     if (!force && !shouldPromptMobileUpdate(latestVersionCode)) return;
     rememberMobileUpdateCheck({ promptedVersionCode: latestVersionCode, promptedAt: Date.now() });

@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v201-facebook-sdk-once";
+const CACHE_NAME = "kaila-pwa-v202-mobile-update-check";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"

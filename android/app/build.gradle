@@ -33,7 +33,17 @@ if (kailaMobileUpdateMetadataFile.exists()) {
     }
 }
 def kailaExplicitVersionCode = findProperty("KAILA_VERSION_CODE") ?: System.getenv("KAILA_VERSION_CODE")
-def kailaVersionCode = (kailaExplicitVersionCode ?: String.valueOf((System.currentTimeMillis() / 1000) as Integer)) as Integer
+def kailaExistingVersionCode = 0L
+try {
+    kailaExistingVersionCode = (kailaExistingMobileUpdateMetadata.latestVersionCode ?: 0) as Long
+} catch (ignored) {
+    kailaExistingVersionCode = 0L
+}
+def kailaAutoVersionCode = Math.max((System.currentTimeMillis() / 1000) as Long, kailaExistingVersionCode + 1L)
+def kailaVersionCode = (kailaExplicitVersionCode ?: String.valueOf(kailaAutoVersionCode)) as Integer
+if (kailaExplicitVersionCode && kailaVersionCode <= kailaExistingVersionCode) {
+    throw new GradleException("KAILA_VERSION_CODE must be greater than existing latestVersionCode ${kailaExistingVersionCode}.")
+}
 def kailaVersionName = findProperty("KAILA_VERSION_NAME") ?: System.getenv("KAILA_VERSION_NAME") ?: "1.0.${kailaVersionCode}"
 def kailaUpdateApkUrl = kailaConfigValue("KAILA_ANDROID_APK_URL", null, String.valueOf(kailaExistingMobileUpdateMetadata.apkUrl ?: ""))
 def kailaUpdateReleaseNotes = kailaConfigValue("KAILA_ANDROID_RELEASE_NOTES", null, String.valueOf(kailaExistingMobileUpdateMetadata.releaseNotes ?: ""))

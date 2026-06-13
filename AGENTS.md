@@ -90,6 +90,17 @@ Important environment settings:
 
 Do not commit runtime uploads, local database dumps, secrets, or `node_modules/`.
 
+Every repository change should include a native update metadata bump so the
+installed Android app can detect an available update on launch. Increment
+`socket/mobile-update.json` `latestVersionCode` and refresh its generated
+timestamp whenever frontend or backend behavior changes. Android Gradle builds
+must always publish a higher version; the normal auto-version path uses the
+greater of current epoch seconds or the previous `latestVersionCode + 1`, while
+manual `KAILA_VERSION_CODE` values must be higher than the tracked manifest. For
+frontend shell changes, also bump `sw.js` `CACHE_NAME` and the `index.html`
+asset query strings as needed so the PWA and native web bundle fetch fresh
+assets.
+
 ## Reference Package
 
 `KAILA_Founder_Grade_Package/` contains business proposals, playbooks,
