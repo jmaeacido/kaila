@@ -38,7 +38,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
-  <link rel="stylesheet" href="style.css?v=20260613-marketplace-visual-system">
+  <link rel="stylesheet" href="style.css?v=20260613-home-feed-marketplace">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -446,13 +446,13 @@
 
           <nav class="nav nav-pills nav-fill compact-tabs app-tabs" role="tablist">
             <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#feed-pane" type="button" data-feed-tab>
-              <i class="fa-solid fa-house"></i><span>Feed</span>
+              <i class="fa-solid fa-house"></i><span>Home</span>
             </button>
             <button class="nav-link" data-bs-toggle="pill" data-bs-target="#requests-pane" type="button" data-requests-tab>
-              <i class="fa-solid fa-clipboard-list"></i><span>Requests</span>
+              <i class="fa-solid fa-clipboard-list"></i><span>Jobs</span>
             </button>
             <button class="nav-link" data-bs-toggle="pill" data-bs-target="#providers-pane" type="button" data-providers-tab>
-              <i class="fa-solid fa-people-carry-box"></i><span>Providers</span>
+              <i class="fa-solid fa-people-carry-box"></i><span>Services</span>
             </button>
             <button class="nav-link" data-bs-toggle="pill" data-bs-target="#clients-pane" type="button" data-clients-tab hidden>
               <i class="fa-solid fa-users"></i><span>Clients</span>
@@ -474,13 +474,60 @@
               <i class="fa-solid fa-clipboard-question"></i><span>Validation</span>
             </button>
             <button class="nav-link" data-bs-toggle="pill" data-bs-target="#settings-pane" type="button" data-settings-tab>
-              <i class="fa-solid fa-gear"></i><span>Settings</span>
+              <i class="fa-solid fa-user"></i><span>Account</span>
             </button>
           </nav>
 
           <div class="tab-content app-tab-content">
             <div class="tab-pane fade show active" id="feed-pane">
               <div class="feed-shell">
+                <section class="home-hero" aria-label="KAILA marketplace home">
+                  <div class="home-greeting">
+                    <span data-home-greeting>Good day</span>
+                    <h2>What service do you need today?</h2>
+                  </div>
+                  <label class="home-search" aria-label="Search services">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <input type="search" placeholder="Search plumbing, electrical, repair..." data-home-search>
+                  </label>
+                  <div class="home-cta-row">
+                    <button class="home-post-button" type="button" data-new-request>
+                      <i class="fa-solid fa-plus"></i>
+                      <span>Post Request</span>
+                    </button>
+                    <button class="home-shortcut" type="button" data-home-tab="#requests-pane">
+                      <i class="fa-solid fa-briefcase"></i>
+                      <span>My Jobs</span>
+                    </button>
+                    <button class="home-shortcut" type="button" data-home-tab="#providers-pane">
+                      <i class="fa-solid fa-screwdriver-wrench"></i>
+                      <span>Providers</span>
+                    </button>
+                    <button class="home-shortcut" type="button" data-home-support>
+                      <i class="fa-solid fa-headset"></i>
+                      <span>Support</span>
+                    </button>
+                  </div>
+                </section>
+
+                <section class="home-categories" aria-label="Service categories">
+                  <button type="button" data-service-category="Plumbing"><i class="fa-solid fa-faucet-drip"></i><span>Plumbing</span></button>
+                  <button type="button" data-service-category="Electrical"><i class="fa-solid fa-bolt"></i><span>Electrical</span></button>
+                  <button type="button" data-service-category="Appliance repair"><i class="fa-solid fa-blender"></i><span>Appliance Repair</span></button>
+                  <button type="button" data-service-category="Computer repair"><i class="fa-solid fa-laptop"></i><span>Computer Repair</span></button>
+                  <button type="button" data-service-category="Cellphone repair"><i class="fa-solid fa-mobile-screen-button"></i><span>Cellphone Repair</span></button>
+                  <button type="button" data-service-category="Carpentry / home maintenance"><i class="fa-solid fa-hammer"></i><span>Carpentry</span></button>
+                  <button type="button" data-service-category="Cleaning"><i class="fa-solid fa-broom"></i><span>Cleaning</span></button>
+                  <button type="button" data-service-category="General odd jobs"><i class="fa-solid fa-toolbox"></i><span>General Odd Jobs</span></button>
+                </section>
+
+                <div class="home-feed-title">
+                  <div>
+                    <strong>Recent activity</strong>
+                    <span>Updates, tips, and community posts</span>
+                  </div>
+                </div>
+
                 <form class="feed-composer" data-feed-form>
                   <div class="feed-composer-row">
                     <img src="assets/android-chrome-192x192.png" alt="" data-feed-composer-photo>
@@ -565,6 +612,6 @@
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=20260613-marketplace-visual-system"></script>
+  <script src="app.js?v=20260613-home-feed-marketplace"></script>
 </body>
 </html>

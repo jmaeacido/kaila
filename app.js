@@ -819,6 +819,18 @@ function bindEvents() {
   $("[data-reconnect]").addEventListener("click", () => connectSocket(true));
   $("[data-notification-bell]")?.addEventListener("click", openNotificationBell);
   $("[data-message-bell]")?.addEventListener("click", openMessageBell);
+  $$("[data-new-request]").forEach((button) => button.addEventListener("click", openRequestModal));
+  $$("[data-home-tab]").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.homeTab)));
+  $$("[data-home-support]").forEach((button) => button.addEventListener("click", openCustomerServicePlatform));
+  $$("[data-service-category]").forEach((button) => button.addEventListener("click", () => {
+    openRequestModal();
+    setTimeout(() => {
+      const category = $("#request-category");
+      if (category && [...category.options].some((option) => option.value === button.dataset.serviceCategory)) {
+        category.value = button.dataset.serviceCategory;
+      }
+    }, 50);
+  }));
   $("[data-settings-tab]")?.addEventListener("shown.bs.tab", renderSettings);
   $("[data-settings-tab]")?.addEventListener("click", renderSettings);
   $("[data-activity-tab]")?.addEventListener("shown.bs.tab", clearUnreadNotifications);
@@ -1543,7 +1555,7 @@ function renderActions() {
   row.innerHTML = actions.join("");
 
   $$("[data-active-role]", row).forEach((button) => button.addEventListener("click", () => setActiveRole(button.dataset.activeRole)));
-  $("[data-new-request]")?.addEventListener("click", openRequestModal);
+  $$("[data-new-request]", row).forEach((button) => button.addEventListener("click", openRequestModal));
   $("[data-provider-profile]")?.addEventListener("click", openProviderModal);
   $("[data-admin-create-account]")?.addEventListener("click", openAdminCreateAccountModal);
   $("[data-client-survey]")?.addEventListener("click", openClientSurveyModal);
@@ -1553,6 +1565,8 @@ function renderActions() {
   const activeRoleLabel = state.activeRole ? roleLabel(state.activeRole) : roleLabel(state.session.role);
   $("[data-dashboard-title]").textContent = `${activeRoleLabel} Dashboard`;
   $("[data-role-pill]").textContent = `${activeRoleLabel}${state.activeRole && state.activeRole !== state.session.role ? ` mode · ${roleLabel(state.session.role)} account` : ""}`;
+  const firstName = String(state.session.name || state.session.username || "there").trim().split(/\s+/)[0] || "there";
+  $("[data-home-greeting]") && ($("[data-home-greeting]").textContent = `Good day, ${firstName}`);
 }
 
 function renderStats() {
