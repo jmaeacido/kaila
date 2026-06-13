@@ -8945,3 +8945,1050 @@ body.app-mode .app-view.active {
     grid-template-columns: 1fr;
   }
 }
+
+/* 2026-06 consumer polish: closer light/dark marketplace mockup. */
+:root {
+  --kaila-app-blue: #1463ff;
+  --kaila-app-blue-2: #27b7ff;
+  --kaila-app-ink: #0a1220;
+  --kaila-app-muted: #66758a;
+  --kaila-app-bg: #f4f7fb;
+  --kaila-app-card: #ffffff;
+  --kaila-app-line: rgba(13, 24, 43, 0.08);
+  --kaila-app-soft: #eef4fb;
+  --kaila-app-success: #13b981;
+  --kaila-app-warning: #f59e0b;
+  --kaila-app-danger: #ef4444;
+  --kaila-app-shadow: 0 10px 26px rgba(15, 23, 42, 0.065);
+  --kaila-app-shadow-strong: 0 18px 42px rgba(15, 23, 42, 0.12);
+  --kaila-app-shadow-soft: 0 6px 18px rgba(15, 23, 42, 0.045);
+}
+
+:root[data-theme="dark"] {
+  --kaila-app-ink: #f7fbff;
+  --kaila-app-muted: #b1bfd1;
+  --kaila-app-bg: #07111f;
+  --kaila-app-card: #101d2e;
+  --kaila-app-line: rgba(180, 199, 224, 0.16);
+  --kaila-app-soft: #17283d;
+  --kaila-app-shadow: 0 14px 34px rgba(0, 0, 0, 0.32);
+  --kaila-app-shadow-strong: 0 22px 52px rgba(0, 0, 0, 0.46);
+  --kaila-app-shadow-soft: 0 10px 24px rgba(0, 0, 0, 0.24);
+}
+
+body.app-mode,
+body.app-mode .app-view.active {
+  background:
+    radial-gradient(circle at 82% -8%, rgba(39, 183, 255, 0.16), transparent 13rem),
+    linear-gradient(180deg, #fbfdff 0, var(--kaila-app-bg) 14rem) !important;
+}
+
+:root[data-theme="dark"] body.app-mode,
+:root[data-theme="dark"] body.app-mode .app-view.active {
+  background:
+    radial-gradient(circle at 82% -8%, rgba(39, 183, 255, 0.13), transparent 13rem),
+    linear-gradient(180deg, #0c1727 0, var(--kaila-app-bg) 14rem) !important;
+}
+
+.app-content {
+  gap: 0.82rem;
+  padding-top: 0.9rem;
+}
+
+.app-header {
+  min-height: var(--app-header-height);
+  padding: calc(0.62rem + env(safe-area-inset-top)) 0.82rem 0.58rem;
+  border-radius: 0 0 1.35rem 1.35rem;
+  background: color-mix(in srgb, var(--kaila-app-card) 88%, transparent) !important;
+}
+
+.app-title img {
+  width: 2.45rem;
+  height: 2.45rem;
+}
+
+.app-title strong {
+  font-size: 1rem;
+}
+
+.icon-btn,
+.chat-icon-button,
+.mobile-contact-actions button,
+.jobs-search-button {
+  border: 1px solid var(--kaila-app-line) !important;
+  background: color-mix(in srgb, var(--kaila-app-card) 76%, var(--kaila-app-soft)) !important;
+  color: var(--kaila-app-ink) !important;
+  box-shadow: var(--kaila-app-shadow-soft) !important;
+}
+
+.app-header .role-badge,
+.app-header .queue-badge {
+  display: none !important;
+}
+
+.bell-count,
+.tab-count {
+  border-color: var(--kaila-app-card) !important;
+}
+
+.home-greeting h2,
+.jobs-toolbar-head h2 {
+  letter-spacing: 0;
+}
+
+.home-search {
+  min-height: 3.15rem;
+  border-color: var(--kaila-app-line);
+  background: var(--kaila-app-card);
+  box-shadow: var(--kaila-app-shadow-soft);
+}
+
+.home-cta-row,
+.home-categories {
+  gap: 0.72rem 0.6rem;
+}
+
+.home-post-button i,
+.home-shortcut i,
+.home-categories i {
+  width: 3.18rem;
+  height: 3.18rem;
+  border-radius: 1rem;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--kaila-app-card) 88%, var(--kaila-app-soft)), var(--kaila-app-card));
+  box-shadow: var(--kaila-app-shadow-soft);
+}
+
+.home-post-button i {
+  background: linear-gradient(135deg, var(--kaila-app-blue), var(--kaila-app-blue-2));
+  box-shadow: 0 14px 28px rgba(20, 99, 255, 0.24);
+}
+
+.home-post-button span,
+.home-shortcut span,
+.home-categories span {
+  max-width: 4.8rem;
+  color: var(--kaila-app-ink);
+}
+
+.home-feed-title {
+  padding-inline: 0.08rem;
+}
+
+.jobs-toolbar {
+  gap: 0.78rem;
+}
+
+.jobs-filter-tabs {
+  gap: 0.58rem;
+}
+
+.jobs-filter-tabs button {
+  padding-inline: 0.1rem;
+  font-size: 0.75rem;
+}
+
+.jobs-filter-tabs b {
+  background: var(--kaila-app-card);
+  box-shadow: inset 0 0 0 1px var(--kaila-app-line);
+}
+
+.k-card,
+.request-card,
+.provider-card,
+.feed-card,
+.offer-card,
+.settings-card,
+.inbox-item,
+.mobile-job-summary-card,
+.mobile-info-card,
+.mobile-status-card,
+.mobile-offer-card,
+.mobile-rating-card,
+.request-flow-section {
+  border-color: var(--kaila-app-line) !important;
+  border-radius: 1.08rem !important;
+  background: var(--kaila-app-card) !important;
+  box-shadow: var(--kaila-app-shadow) !important;
+}
+
+.request-card,
+.provider-card,
+.mobile-offer-card,
+.mobile-info-card,
+.mobile-rating-card {
+  padding: 0.9rem;
+}
+
+.request-card:hover,
+.provider-card:hover,
+.offer-card:hover,
+.mobile-offer-card:hover {
+  box-shadow: var(--kaila-app-shadow-strong) !important;
+}
+
+.request-card-head {
+  align-items: start;
+}
+
+.request-kicker,
+.status-pill,
+.badge,
+.reputation-badge,
+.offer-distance,
+.meta span,
+.mobile-flow-status {
+  border: 1px solid transparent !important;
+  font-weight: 900;
+}
+
+.status-pill,
+.badge {
+  min-height: 1.55rem;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.text-bg-light,
+.badge.text-bg-light {
+  background: var(--kaila-app-soft) !important;
+  color: var(--kaila-app-ink) !important;
+}
+
+.text-bg-primary,
+.text-bg-info,
+.status-pill.text-bg-primary,
+.status-pill.text-bg-info {
+  background: rgba(20, 99, 255, 0.11) !important;
+  color: var(--kaila-app-blue) !important;
+}
+
+.text-bg-success,
+.status-pill.text-bg-success {
+  background: rgba(19, 185, 129, 0.13) !important;
+  color: var(--kaila-app-success) !important;
+}
+
+.text-bg-warning,
+.status-pill.text-bg-warning {
+  background: rgba(245, 158, 11, 0.15) !important;
+  color: var(--kaila-app-warning) !important;
+}
+
+.text-bg-danger,
+.status-pill.text-bg-danger {
+  background: rgba(239, 68, 68, 0.13) !important;
+  color: var(--kaila-app-danger) !important;
+}
+
+.job-summary-row span,
+.mobile-offer-stats span,
+.mobile-detail-grid span,
+.offer-price-row > div,
+.request-review-card,
+.completion-proof-empty {
+  background: color-mix(in srgb, var(--kaila-app-soft) 82%, var(--kaila-app-card)) !important;
+}
+
+.job-status-tracker,
+.mobile-progress-tracker,
+.request-wizard-progress {
+  background: transparent;
+}
+
+.job-status-tracker b,
+.mobile-progress-tracker b,
+.request-wizard-progress b {
+  box-shadow: 0 0 0 3px var(--kaila-app-card);
+}
+
+.user-identity {
+  background: color-mix(in srgb, var(--kaila-app-soft) 54%, var(--kaila-app-card)) !important;
+}
+
+.user-avatar,
+.mobile-person-avatar {
+  box-shadow: var(--kaila-app-shadow-soft);
+}
+
+.offer,
+.provider-contact-card,
+.navigation-card,
+.completion-panel {
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--kaila-app-soft) 66%, var(--kaila-app-card)), var(--kaila-app-card)) !important;
+  box-shadow: none !important;
+}
+
+.btn {
+  letter-spacing: 0;
+}
+
+.btn-primary,
+.btn-success,
+.btn-info {
+  background: linear-gradient(135deg, var(--kaila-app-blue), var(--kaila-app-blue-2)) !important;
+  color: #fff !important;
+  box-shadow: 0 12px 24px rgba(20, 99, 255, 0.22) !important;
+}
+
+.btn-outline-primary,
+.btn-outline-secondary,
+.btn-outline-success,
+.btn-outline-warning,
+.btn-outline-danger,
+.btn-register {
+  background: var(--kaila-app-card) !important;
+  border-color: var(--kaila-app-line) !important;
+  color: var(--kaila-app-ink) !important;
+  box-shadow: var(--kaila-app-shadow-soft) !important;
+}
+
+.btn-outline-primary:hover,
+.btn-outline-secondary:hover,
+.btn-outline-success:hover,
+.btn-outline-warning:hover,
+.btn-outline-danger:hover {
+  background: var(--kaila-app-soft) !important;
+  color: var(--kaila-app-blue) !important;
+}
+
+.card-actions,
+.offer-card-actions,
+.completion-actions,
+.mobile-flow-actions,
+.mobile-offer-actions {
+  gap: 0.52rem;
+}
+
+.card-actions .btn,
+.offer-card-actions .btn,
+.completion-actions .btn,
+.mobile-flow-actions .btn,
+.mobile-offer-actions .btn,
+.job-primary-cta .btn {
+  min-height: 2.65rem;
+}
+
+.app-tabs {
+  height: 4.35rem;
+  padding: 0.42rem;
+  border: 1px solid var(--kaila-app-line) !important;
+  border-radius: 1.55rem !important;
+  background: color-mix(in srgb, var(--kaila-app-card) 90%, transparent) !important;
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.18) !important;
+  backdrop-filter: blur(22px);
+}
+
+:root[data-theme="dark"] .app-tabs {
+  box-shadow: 0 22px 54px rgba(0, 0, 0, 0.5) !important;
+}
+
+.app-tabs .nav-link {
+  position: relative;
+  min-height: 3.35rem;
+  border-radius: 1.12rem !important;
+  color: var(--kaila-app-muted) !important;
+  transition: background 0.16s ease, color 0.16s ease, transform 0.16s ease;
+}
+
+.app-tabs .nav-link i {
+  font-size: 1.05rem;
+}
+
+.app-tabs .nav-link.active {
+  transform: translateY(-1px);
+}
+
+.app-tabs .nav-link.active i,
+.app-tabs .nav-link.active span {
+  color: #fff !important;
+}
+
+.form-control,
+.form-select,
+.swal2-input,
+.swal2-textarea,
+.swal2-select {
+  min-height: 3rem;
+  border-color: var(--kaila-app-line) !important;
+  border-radius: 1rem !important;
+  background-color: var(--kaila-app-card) !important;
+  color: var(--kaila-app-ink) !important;
+  box-shadow: var(--kaila-app-shadow-soft) !important;
+}
+
+.form-control::placeholder,
+.swal2-input::placeholder,
+.swal2-textarea::placeholder {
+  color: color-mix(in srgb, var(--kaila-app-muted) 78%, transparent);
+}
+
+:root[data-theme="dark"] .form-control,
+:root[data-theme="dark"] .form-select,
+:root[data-theme="dark"] .swal2-input,
+:root[data-theme="dark"] .swal2-textarea,
+:root[data-theme="dark"] .swal2-select {
+  background-color: #0c1929 !important;
+}
+
+.category-chip-box,
+.location-picker {
+  background: color-mix(in srgb, var(--kaila-app-soft) 70%, var(--kaila-app-card)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.48);
+}
+
+.category-chip {
+  min-height: 2.45rem;
+  padding-inline: 0.72rem;
+  background: var(--kaila-app-card) !important;
+  color: var(--kaila-app-ink) !important;
+  box-shadow: var(--kaila-app-shadow-soft) !important;
+}
+
+.category-chip.selected {
+  background: linear-gradient(135deg, var(--kaila-app-blue), var(--kaila-app-blue-2)) !important;
+  color: #fff !important;
+}
+
+.empty-state {
+  min-height: 12.5rem;
+  justify-items: center;
+  align-content: center;
+  text-align: center;
+}
+
+.empty-state i {
+  width: 3.55rem;
+  height: 3.55rem;
+  border-radius: 1.15rem;
+  box-shadow: 0 14px 30px rgba(20, 99, 255, 0.16);
+}
+
+.mobile-flow-screen {
+  gap: 0.86rem;
+  padding-inline: 0.86rem;
+}
+
+.mobile-flow-header {
+  grid-template-columns: 2.6rem minmax(0, 1fr) minmax(2.6rem, auto);
+}
+
+.mobile-job-summary-card {
+  grid-template-columns: 5.75rem minmax(0, 1fr);
+  padding: 0.64rem;
+}
+
+.mobile-job-thumb {
+  width: 5.75rem;
+  border-radius: 1rem;
+}
+
+.mobile-status-card {
+  background:
+    linear-gradient(135deg, rgba(20, 99, 255, 0.11), var(--kaila-app-card)) !important;
+}
+
+.completion-success span {
+  background: linear-gradient(135deg, var(--kaila-app-success), #6ee7b7);
+}
+
+@media (max-width: 370px) {
+  .app-content {
+    padding-inline: 0.62rem;
+  }
+
+  .home-post-button i,
+  .home-shortcut i,
+  .home-categories i {
+    width: 2.78rem;
+    height: 2.78rem;
+  }
+
+  .app-tabs .nav-link span {
+    font-size: 0.54rem;
+  }
+}
+
+/* Final consumer marketplace polish. */
+:root {
+  --kaila-app-danger: #ef4444;
+  --kaila-polish-card-shadow: 0 10px 26px rgba(15, 23, 42, 0.055);
+  --kaila-polish-card-shadow-hover: 0 16px 38px rgba(15, 23, 42, 0.105);
+  --kaila-polish-nav-shadow: 0 18px 42px rgba(15, 23, 42, 0.14);
+}
+
+:root[data-theme="dark"] {
+  --kaila-polish-card-shadow: 0 12px 30px rgba(0, 0, 0, 0.26);
+  --kaila-polish-card-shadow-hover: 0 18px 44px rgba(0, 0, 0, 0.38);
+  --kaila-polish-nav-shadow: 0 22px 52px rgba(0, 0, 0, 0.48);
+}
+
+body.app-mode,
+body.app-mode .app-view.active,
+.workspace-panel:has(.mobile-flow-screen),
+.workspace-panel:has(.request-wizard) {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--kaila-app-card) 34%, var(--kaila-app-bg)) 0, var(--kaila-app-bg) 13rem),
+    var(--kaila-app-bg) !important;
+}
+
+:root[data-theme="dark"] body.app-mode,
+:root[data-theme="dark"] body.app-mode .app-view.active,
+:root[data-theme="dark"] .workspace-panel:has(.mobile-flow-screen),
+:root[data-theme="dark"] .workspace-panel:has(.request-wizard) {
+  background:
+    linear-gradient(180deg, #08192b 0, var(--kaila-app-bg) 15rem),
+    var(--kaila-app-bg) !important;
+}
+
+.app-content,
+.mobile-flow-screen,
+.workspace-panel:has(.request-wizard) .workspace-form-body {
+  max-width: 420px;
+}
+
+.app-header,
+.workspace-form-header,
+.mobile-flow-header {
+  max-width: 420px;
+  margin-inline: auto;
+}
+
+.app-header {
+  padding-inline: 0.9rem;
+  border-radius: 0 0 1.15rem 1.15rem;
+  box-shadow: none;
+}
+
+.app-title {
+  min-width: 0;
+}
+
+.app-title img {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.app-title strong,
+.workspace-form-header h2,
+.mobile-flow-header h2 {
+  color: var(--kaila-app-ink) !important;
+  font-size: 1rem;
+  font-weight: 950;
+  line-height: 1.08;
+}
+
+.app-title strong {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.app-title > div::before {
+  content: "KAILA";
+  display: block;
+  color: var(--kaila-app-ink);
+  font-size: 1rem;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+  line-height: 1.08;
+}
+
+.app-title span {
+  max-width: 13rem;
+  color: var(--kaila-app-muted) !important;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.icon-btn,
+.chat-icon-button,
+.jobs-search-button {
+  width: 2.25rem;
+  height: 2.25rem;
+  min-height: 2.25rem;
+  border-color: color-mix(in srgb, var(--kaila-app-line) 72%, transparent) !important;
+  box-shadow: none !important;
+}
+
+.home-greeting span {
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.home-greeting h2 {
+  max-width: 14ch;
+  font-size: 1.22rem;
+  line-height: 1.17;
+}
+
+.home-search {
+  min-height: 2.72rem;
+  padding-inline: 0.72rem;
+  border-radius: 0.86rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62), var(--kaila-polish-card-shadow);
+}
+
+:root[data-theme="dark"] .home-search {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), var(--kaila-polish-card-shadow);
+}
+
+.home-search input {
+  min-height: 2.55rem !important;
+  font-size: 0.74rem;
+}
+
+.home-cta-row,
+.home-categories {
+  gap: 0.58rem;
+}
+
+.home-post-button,
+.home-shortcut,
+.home-categories button {
+  gap: 0.32rem;
+  font-size: 0.58rem;
+  line-height: 1.08;
+}
+
+.home-post-button i,
+.home-shortcut i,
+.home-categories i {
+  width: 2.72rem;
+  height: 2.72rem;
+  border-radius: 0.78rem;
+  font-size: 1rem;
+}
+
+.home-post-button i {
+  box-shadow: 0 12px 22px rgba(13, 110, 253, 0.2);
+}
+
+.home-shortcut i,
+.home-categories i {
+  border-color: color-mix(in srgb, var(--kaila-app-line) 78%, transparent);
+}
+
+.home-post-button span,
+.home-shortcut span,
+.home-categories span {
+  max-width: 4.5rem;
+  min-height: 1.25rem;
+  display: grid;
+  place-items: start center;
+  font-size: 0.58rem;
+}
+
+.home-feed-title strong,
+.jobs-toolbar-head h2,
+.mobile-flow-section-title strong {
+  font-size: 0.88rem;
+}
+
+.jobs-toolbar {
+  gap: 0.54rem;
+}
+
+.jobs-toolbar-head {
+  min-height: 2.45rem;
+}
+
+.jobs-toolbar-head span {
+  display: none;
+}
+
+.jobs-toolbar-head h2 {
+  font-size: 1.1rem;
+}
+
+.jobs-filter-tabs {
+  gap: 0.7rem;
+  padding-bottom: 0.22rem;
+}
+
+.jobs-filter-tabs button {
+  min-height: 1.72rem;
+  padding-bottom: 0.38rem;
+  font-size: 0.62rem;
+}
+
+.jobs-filter-tabs b {
+  display: none;
+}
+
+.k-card,
+.request-card,
+.provider-card,
+.feed-card,
+.offer-card,
+.settings-card,
+.inbox-item,
+.mobile-job-summary-card,
+.mobile-info-card,
+.mobile-status-card,
+.mobile-offer-card,
+.mobile-rating-card,
+.request-flow-section {
+  border-color: color-mix(in srgb, var(--kaila-app-line) 82%, transparent) !important;
+  border-radius: 0.88rem !important;
+  box-shadow: var(--kaila-polish-card-shadow) !important;
+}
+
+:root[data-theme="dark"] .k-card,
+:root[data-theme="dark"] .request-card,
+:root[data-theme="dark"] .provider-card,
+:root[data-theme="dark"] .feed-card,
+:root[data-theme="dark"] .offer-card,
+:root[data-theme="dark"] .settings-card,
+:root[data-theme="dark"] .inbox-item,
+:root[data-theme="dark"] .mobile-job-summary-card,
+:root[data-theme="dark"] .mobile-info-card,
+:root[data-theme="dark"] .mobile-status-card,
+:root[data-theme="dark"] .mobile-offer-card,
+:root[data-theme="dark"] .mobile-rating-card,
+:root[data-theme="dark"] .request-flow-section {
+  background: #0c1d30 !important;
+  border-color: rgba(148, 163, 184, 0.17) !important;
+}
+
+.request-card,
+.provider-card,
+.mobile-offer-card,
+.mobile-info-card,
+.mobile-rating-card {
+  padding: 0.74rem;
+}
+
+.request-card:hover,
+.provider-card:hover,
+.offer-card:hover,
+.mobile-offer-card:hover {
+  box-shadow: var(--kaila-polish-card-shadow-hover) !important;
+}
+
+.request-card h3,
+.provider-card h3,
+.mobile-job-summary-card strong,
+.mobile-offer-card strong,
+.mobile-info-card strong,
+.mobile-rating-card strong {
+  font-size: 0.86rem;
+  letter-spacing: 0;
+}
+
+.request-card p,
+.provider-card p,
+.mobile-offer-card p,
+.mobile-info-card p {
+  color: var(--kaila-app-muted) !important;
+  font-size: 0.72rem;
+  line-height: 1.34;
+}
+
+.request-card-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem;
+}
+
+.request-kicker,
+.status-pill,
+.badge,
+.meta span,
+.reputation-badge,
+.mobile-flow-status {
+  min-height: 1.28rem;
+  padding: 0.18rem 0.42rem;
+  font-size: 0.55rem;
+}
+
+.status-pill.text-bg-primary,
+.status-pill.text-bg-info,
+.text-bg-primary,
+.text-bg-info {
+  background: rgba(13, 110, 253, 0.1) !important;
+}
+
+.status-pill.text-bg-success,
+.text-bg-success {
+  background: rgba(16, 185, 129, 0.13) !important;
+}
+
+.status-pill.text-bg-warning,
+.text-bg-warning {
+  background: rgba(245, 158, 11, 0.16) !important;
+}
+
+.job-summary-row {
+  gap: 0.32rem;
+}
+
+.job-summary-row span,
+.mobile-offer-stats span,
+.mobile-detail-grid span,
+.offer-price-row > div {
+  min-height: 2.15rem;
+  padding: 0.35rem 0.44rem;
+  border-radius: 0.62rem;
+  font-size: 0.58rem;
+}
+
+.job-summary-row i,
+.mobile-offer-stats i,
+.mobile-detail-grid i {
+  font-size: 0.72rem;
+}
+
+.job-status-tracker,
+.mobile-progress-tracker {
+  padding-top: 0.1rem;
+}
+
+.job-status-tracker b,
+.mobile-progress-tracker b,
+.request-wizard-progress b {
+  width: 1.34rem;
+  height: 1.34rem;
+  font-size: 0.56rem;
+}
+
+.job-status-tracker em,
+.mobile-progress-tracker em,
+.request-wizard-progress em {
+  font-size: 0.5rem;
+}
+
+.user-identity {
+  gap: 0.48rem;
+  padding: 0.4rem !important;
+  border-radius: 0.72rem;
+}
+
+.user-avatar,
+.mobile-person-avatar {
+  width: 2.2rem;
+  height: 2.2rem;
+}
+
+.user-identity-copy strong {
+  font-size: 0.74rem;
+}
+
+.reputation-badge {
+  margin-top: 0.14rem;
+}
+
+.offer,
+.provider-contact-card,
+.navigation-card,
+.completion-panel {
+  padding: 0.58rem;
+  border-radius: 0.76rem !important;
+}
+
+.btn,
+.feed-file-button,
+.feed-audience-button,
+.chat-icon-button {
+  min-height: 2.38rem;
+  border-radius: 0.82rem !important;
+  font-size: 0.72rem;
+}
+
+.btn-primary,
+.btn-success,
+.btn-info {
+  box-shadow: 0 10px 20px rgba(13, 110, 253, 0.2) !important;
+}
+
+.btn-outline-primary,
+.btn-outline-secondary,
+.btn-outline-success,
+.btn-outline-warning,
+.btn-outline-danger,
+.btn-register {
+  box-shadow: none !important;
+}
+
+.card-actions .btn,
+.offer-card-actions .btn,
+.completion-actions .btn,
+.mobile-flow-actions .btn,
+.mobile-offer-actions .btn,
+.job-primary-cta .btn {
+  min-height: 2.34rem;
+  font-size: 0.68rem;
+}
+
+.app-tabs {
+  right: max(0.48rem, calc((100vw - 420px) / 2 + 0.48rem));
+  left: max(0.48rem, calc((100vw - 420px) / 2 + 0.48rem));
+  height: 3.8rem;
+  padding: 0.32rem;
+  border-radius: 1.18rem !important;
+  box-shadow: var(--kaila-polish-nav-shadow) !important;
+}
+
+.app-tabs .nav-link {
+  min-height: 3.05rem;
+  border-radius: 0.88rem !important;
+}
+
+.app-tabs .nav-link i {
+  font-size: 0.94rem;
+}
+
+.app-tabs .nav-link span {
+  margin-top: 0.08rem;
+  font-size: 0.54rem;
+}
+
+.app-tabs .nav-link.active {
+  background: linear-gradient(135deg, var(--kaila-app-blue), #0877ff) !important;
+}
+
+.form-control,
+.form-select,
+.swal2-input,
+.swal2-textarea,
+.swal2-select {
+  min-height: 2.7rem;
+  border-radius: 0.82rem !important;
+  font-size: 0.82rem;
+  box-shadow: none !important;
+}
+
+.form-control:focus,
+.form-select:focus,
+.swal2-input:focus,
+.swal2-textarea:focus,
+.swal2-select:focus {
+  border-color: rgba(13, 110, 253, 0.46) !important;
+  box-shadow: 0 0 0 0.18rem rgba(13, 110, 253, 0.12) !important;
+}
+
+.empty-state {
+  min-height: 10.5rem;
+  padding: 1rem;
+}
+
+.empty-state i {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.9rem;
+}
+
+.empty-state h3 {
+  font-size: 0.92rem;
+}
+
+.empty-state p {
+  max-width: 18rem;
+  font-size: 0.76rem;
+}
+
+.mobile-flow-screen {
+  max-width: 420px;
+  gap: 0.66rem;
+  padding-inline: 0.72rem;
+}
+
+.mobile-flow-header {
+  min-height: 2.7rem;
+  grid-template-columns: 2.35rem minmax(0, 1fr) minmax(2.35rem, auto);
+}
+
+.mobile-job-summary-card {
+  grid-template-columns: 4.7rem minmax(0, 1fr);
+  gap: 0.58rem;
+  padding: 0.52rem;
+}
+
+.mobile-job-thumb {
+  width: 4.7rem;
+  border-radius: 0.72rem;
+}
+
+.mobile-offer-card {
+  gap: 0.52rem;
+}
+
+.mobile-offer-head {
+  gap: 0.5rem;
+}
+
+.mobile-offer-price strong {
+  font-size: 0.88rem;
+}
+
+.mobile-offer-price span,
+.mobile-offer-head span,
+.mobile-offer-head small {
+  font-size: 0.62rem;
+}
+
+.completion-success {
+  padding-top: 0.72rem;
+}
+
+.completion-success span {
+  width: 3.1rem;
+  height: 3.1rem;
+  font-size: 1.2rem;
+}
+
+.completion-proof-card {
+  min-height: 7rem;
+}
+
+.request-wizard-progress {
+  padding-bottom: 0.34rem;
+}
+
+.request-flow-head {
+  gap: 0.58rem;
+}
+
+.request-flow-head b {
+  width: 2.15rem;
+  height: 2.15rem;
+  font-size: 0.86rem;
+}
+
+.request-flow-head strong {
+  font-size: 0.96rem;
+}
+
+.request-flow-head span {
+  font-size: 0.72rem;
+}
+
+.request-wizard-actions {
+  grid-template-columns: 0.82fr 1.18fr;
+}
+
+@media (min-width: 640px) {
+  .app-tabs {
+    right: max(0.75rem, calc((100vw - 420px) / 2));
+    left: max(0.75rem, calc((100vw - 420px) / 2));
+  }
+}
+
+@media (max-width: 360px) {
+  .home-post-button i,
+  .home-shortcut i,
+  .home-categories i {
+    width: 2.52rem;
+    height: 2.52rem;
+  }
+
+  .home-post-button span,
+  .home-shortcut span,
+  .home-categories span {
+    font-size: 0.53rem;
+  }
+}
