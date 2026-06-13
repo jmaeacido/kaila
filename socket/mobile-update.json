@@ -1,8 +1,8 @@
 {
-  "latestVersionCode": 1781353498,
-  "latestVersionName": "1.0.1781353498",
+  "latestVersionCode": 1781393074,
+  "latestVersionName": "1.0.1781393074",
   "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
-  "releaseNotes": "Native update detection metadata and monotonic Gradle versioning update.",
-  "generatedAt": "2026-06-13T00:00:00+08:00",
+  "releaseNotes": "Blue and cyan KAILA asset refresh for icons, logo, preview, and support avatar.",
+  "generatedAt": "2026-06-13T23:24:34Z",
   "source": "tracked"
 }

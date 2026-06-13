@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v202-mobile-update-check";
+const CACHE_NAME = "kaila-pwa-v203-blue-assets";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"
@@ -18,6 +18,11 @@ const APP_SHELL = [
   "./assets/android-chrome-192x192.png",
   "./assets/android-chrome-512x512.png",
   "./assets/apple-touch-icon.png",
+  "./assets/favicon.ico",
+  "./assets/favicon-16x16.png",
+  "./assets/favicon-32x32.png",
+  "./assets/kaila-icon.svg",
+  "./assets/kaila-logo.svg",
   "./assets/kaila-icon.png",
   "./assets/kaila-logo.png",
   "./assets/kaila-customer-service-avatar.png",
