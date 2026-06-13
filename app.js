@@ -2312,6 +2312,61 @@ function adminRequestMetricPanel() {
   return `<article class="k-card admin-metric-panel"><h3>${escapeHtml(entry[0])}</h3><p>${escapeHtml(entry[1])}</p>${analyticsInsightButton()}</article>`;
 }
 
+function jobStatusStep(status = "") {
+  if (["Offers Received", "Countered"].includes(status)) return 1;
+  if (["Accepted", "Revision Requested"].includes(status)) return 2;
+  if (["In Progress", "Provider Marked Done", "Disputed"].includes(status)) return 3;
+  if (["Payment Released", "Rated", "Rated / Closed", "Resolved"].includes(status)) return 4;
+  return 0;
+}
+
+function renderJobStatusTracker(request = {}) {
+  const activeStep = jobStatusStep(request.status);
+  const steps = ["Posted", "Offers Received", "Provider Selected", "In Progress", "Completed"];
+  return `
+    <div class="job-status-tracker" aria-label="Job status tracker">
+      ${steps.map((label, index) => `
+        <span class="${index < activeStep ? "done" : index === activeStep ? "active" : ""}">
+          <b>${index + 1}</b>
+          <em>${escapeHtml(label)}</em>
+        </span>
+      `).join("")}
+    </div>
+  `;
+}
+
+function requestLastUpdate(request = {}) {
+  const values = [
+    request.updatedAt,
+    request.paymentReleasedAt,
+    request.clientRatedAt,
+    request.providerRatedAt,
+    request.autoConfirmAt,
+    request.createdAt,
+  ].filter(Boolean);
+  return values[0] || "";
+}
+
+function renderJobSummary(request = {}) {
+  const offers = visibleOffers(request);
+  return `
+    <div class="job-summary-row">
+      <span><i class="fa-solid fa-location-dot"></i>${escapeHtml(request.area || "Pinned job site")}</span>
+      <span><i class="fa-solid fa-handshake-angle"></i>${offers.length} offer${offers.length === 1 ? "" : "s"}</span>
+      <span><i class="fa-solid fa-wallet"></i>${escapeHtml(formatCurrency(request.budget))}</span>
+      <span><i class="fa-solid fa-clock"></i>${escapeHtml(formatRelativeTime(requestLastUpdate(request)) || "recent")}</span>
+    </div>
+  `;
+}
+
+function renderJobPrimaryCta(request = {}) {
+  if (canSelectOffer(request)) return `<button class="btn btn-sm btn-primary" type="button" data-scroll-offers="${escapeAttribute(request.id)}"><i class="fa-solid fa-list-check"></i> View Offers</button>`;
+  if (navigationTargetForRequest(request)) return `<button class="btn btn-sm btn-primary" type="button" data-navigate-request="${escapeAttribute(request.id)}"><i class="fa-solid fa-route"></i> Track Job</button>`;
+  if (request.status === "Provider Marked Done" && request.clientId === state.session?.id) return `<button class="btn btn-sm btn-primary" type="button" data-job-action="client_complete" data-request-id="${escapeAttribute(request.id)}"><i class="fa-solid fa-shield-halved"></i> Review Completion</button>`;
+  if (canViewConversation(request)) return `<button class="btn btn-sm btn-primary" type="button" data-conversation="${escapeAttribute(request.id)}"><i class="fa-solid fa-message"></i> Message</button>`;
+  return "";
+}
+
 function renderRequestCard(request) {
   return `
     <article class="k-card request-card" data-request-card="${escapeAttribute(request.id)}">
@@ -2323,6 +2378,8 @@ function renderRequestCard(request) {
         </div>
         <span class="badge text-bg-${statusColor(request.status)} status-pill align-self-start">${escapeHtml(request.status)}</span>
       </div>
+      ${renderJobSummary(request)}
+      ${renderJobStatusTracker(request)}
       ${renderIdentity(request.clientName, request.clientPhotoUrl, "Client reputation", request.clientReputation)}
       <div class="meta">
         <span>${escapeHtml(request.area)}</span>
@@ -2344,13 +2401,11 @@ function renderRequestCard(request) {
       ${renderNavigationCard(request)}
       ${renderOffers(request)}
       ${renderAttachments("Request media", request.requestAttachments, request.id)}
-      ${request.proofNote ? `<div class="offer"><strong>Proof / completion note</strong><div>${escapeHtml(request.proofNote)}</div></div>` : ""}
-      ${renderAttachments("Completion media", request.completionAttachments, request.id)}
-      ${request.revisionNote ? `<div class="offer"><strong>Revision requested</strong><div>${escapeHtml(request.revisionNote)}</div></div>` : ""}
-      ${request.autoConfirmAt && request.status === "Provider Marked Done" ? `<div class="offer"><strong>Auto-confirm deadline</strong><div>${formatDateTime(request.autoConfirmAt)}</div></div>` : ""}
+      ${renderCompletionPanel(request)}
       ${renderRatings(request)}
       ${request.disputeNote ? `<div class="offer"><strong>Dispute note</strong><div>${escapeHtml(request.disputeNote)}</div></div>` : ""}
       ${renderAttachments("Dispute media", request.disputeAttachments, request.id)}
+      ${renderJobPrimaryCta(request) ? `<div class="job-primary-cta">${renderJobPrimaryCta(request)}</div>` : ""}
       <div class="card-actions">
         ${canEditRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-edit-request="${request.id}"><i class="fa-solid fa-pen"></i> Edit</button>` : ""}
         ${canAcceptClientPrice(request) ? `<button class="btn btn-sm btn-outline-success" data-accept-client-price="${request.id}"><i class="fa-solid fa-circle-check"></i> Accept Price</button>` : ""}
@@ -2597,7 +2652,43 @@ function renderAcceptedClientContact(request) {
   `;
 }
 
+function renderCompletionPanel(request = {}) {
+  const hasCompletion = Boolean(request.proofNote || request.completionAttachments?.length || ["Provider Marked Done", "Payment Released", "Rated", "Rated / Closed", "Resolved", "Revision Requested"].includes(request.status));
+  if (!hasCompletion) return "";
+  const firstMedia = request.completionAttachments?.[0];
+  const mediaUrl = firstMedia ? resolveMediaUrl(firstMedia.url) : "";
+  const isVideo = firstMedia?.mimeType?.startsWith("video/");
+  return `
+    <section class="completion-panel">
+      <div class="completion-panel-head">
+        <div>
+          <strong>Completion review</strong>
+          <span>${request.status === "Provider Marked Done" ? "Provider marked this job done." : "Completion details and rating actions."}</span>
+        </div>
+        ${request.autoConfirmAt && request.status === "Provider Marked Done" ? `<small>Auto-confirms ${escapeHtml(formatDateTime(request.autoConfirmAt))}</small>` : ""}
+      </div>
+      ${firstMedia ? `
+        <button class="completion-media" type="button" data-media-open data-request-id="${escapeAttribute(request.id)}" data-media-stage="completion" data-media-index="0">
+          ${isVideo ? `<video preload="metadata" src="${escapeAttribute(mediaUrl)}"></video>` : `<img src="${escapeAttribute(mediaUrl)}" alt="${escapeAttribute(firstMedia.originalName || "Completion media")}">`}
+          <span>${request.completionAttachments.length} proof file${request.completionAttachments.length === 1 ? "" : "s"}</span>
+        </button>
+      ` : ""}
+      ${request.proofNote ? `<div class="completion-note"><strong>Provider note</strong><p>${escapeHtml(request.proofNote)}</p></div>` : ""}
+      ${request.revisionNote ? `<div class="completion-note warning"><strong>Revision requested</strong><p>${escapeHtml(request.revisionNote)}</p></div>` : ""}
+      <div class="completion-actions">
+        ${request.status === "Provider Marked Done" && request.clientId === state.session?.id ? `<button class="btn btn-sm btn-success" data-request-id="${escapeAttribute(request.id)}" data-job-action="client_complete"><i class="fa-solid fa-shield-halved"></i> Confirm completed</button>` : ""}
+        ${request.status === "Provider Marked Done" && request.clientId === state.session?.id ? `<button class="btn btn-sm btn-outline-warning" data-request-id="${escapeAttribute(request.id)}" data-job-action="request_revision"><i class="fa-solid fa-rotate-left"></i> Request revision</button>` : ""}
+        ${(request.clientId === state.session?.id || request.acceptedProviderId === state.session?.id) && ["Accepted", "In Progress", "Provider Marked Done", "Payment Released"].includes(request.status) ? `<button class="btn btn-sm btn-outline-warning" data-request-id="${escapeAttribute(request.id)}" data-job-action="dispute"><i class="fa-solid fa-triangle-exclamation"></i> Dispute</button>` : ""}
+        ${request.clientId === state.session?.id && request.status === "Payment Released" && !request.clientRatedAt ? `<button class="btn btn-sm btn-outline-primary" data-request-id="${escapeAttribute(request.id)}" data-job-action="rate"><i class="fa-solid fa-star"></i> Rate provider</button>` : ""}
+      </div>
+    </section>
+  `;
+}
+
 function bindRequestCardActions(host) {
+  $$("[data-scroll-offers]", host).forEach((button) => button.addEventListener("click", () => {
+    $(`[data-offers-for="${escapeCssIdentifier(button.dataset.scrollOffers)}"]`, host)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }));
   $$("[data-accept-client-price]", host).forEach((button) => button.addEventListener("click", () => acceptClientPrice(button.dataset.acceptClientPrice)));
   $$("[data-update-request-distance]", host).forEach((button) => button.addEventListener("click", () => updateRequestDistance(button.dataset.updateRequestDistance)));
   $$("[data-navigate-request]", host).forEach((button) => button.addEventListener("click", () => openRequestNavigation(button.dataset.navigateRequest)));
@@ -2616,16 +2707,16 @@ function renderOffers(request) {
   if (!offers.length) return "";
   if (canSelectOffer(request)) {
     return `
-      <section class="offers-section">
+      <section class="offers-section offer-comparison" data-offers-for="${escapeAttribute(request.id)}">
         <div class="offers-heading">
-          <strong>Provider offers</strong>
+          <strong>Compare provider offers</strong>
           <span>${offers.length} candidate${offers.length === 1 ? "" : "s"}</span>
         </div>
         <div class="offers-grid">${offers.map((offer) => renderOffer(offer, request.id, true)).join("")}</div>
       </section>
     `;
   }
-  return `<section class="offers-section"><strong>Your offer</strong><div class="offers-grid">${offers.map((offer) => renderOffer(offer, request.id, false)).join("")}</div></section>`;
+  return `<section class="offers-section offer-comparison" data-offers-for="${escapeAttribute(request.id)}"><strong>Your offer</strong><div class="offers-grid">${offers.map((offer) => renderOffer(offer, request.id, false)).join("")}</div></section>`;
 }
 
 function renderOffer(offer, requestId, selectable) {
@@ -2636,17 +2727,31 @@ function renderOffer(offer, requestId, selectable) {
     : request?.jobLocation && offer.providerLocation
       ? "Calculating route distance..."
       : "";
+  const reputation = offerProviderReputation(offer);
+  const average = Number(reputation?.average);
+  const responseRate = Number(reputation?.responseRate);
+  const completedJobs = Number(reputation?.count || 0);
   return `
     <article class="offer-card" data-offer-card="${escapeAttribute(offer.id)}">
       <div class="offer-card-head">
         <span>${escapeHtml(offer.type === "counter" ? "Counter-offer" : "Offer")}</span>
       </div>
       ${renderIdentity(offer.providerName, offer.providerPhotoUrl, "Provider reputation", offerProviderReputation(offer), "compact")}
-      <div class="offer-amount">${escapeHtml(formatCurrency(offer.amount))}</div>
-      <div class="offer-schedule">${escapeHtml(offer.schedule || "Schedule TBD")}</div>
+      <div class="offer-comparison-stats">
+        <span><i class="fa-solid fa-star"></i>${Number.isFinite(average) ? average.toFixed(1) : "New"}</span>
+        <span><i class="fa-solid fa-circle-check"></i>${completedJobs || 0} completed</span>
+        ${Number.isFinite(responseRate) ? `<span><i class="fa-solid fa-reply"></i>${responseRate}% response</span>` : ""}
+      </div>
+      <div class="offer-price-row">
+        <div><small>Price</small><strong>${escapeHtml(formatCurrency(offer.amount))}</strong></div>
+        <div><small>ETA / schedule</small><span>${escapeHtml(offer.schedule || "Schedule TBD")}</span></div>
+      </div>
       ${distanceCopy ? `<div class="offer-distance" data-route-distance="${escapeAttribute(requestId)}:${escapeAttribute(offer.id)}"><i class="fa-solid fa-route"></i> ${escapeHtml(distanceCopy)}</div>` : ""}
       ${offer.notes ? `<p>${escapeHtml(offer.notes)}</p>` : ""}
-      ${selectable ? `<button class="btn btn-sm btn-success w-100" type="button" data-request-id="${requestId}" data-select-offer="${offer.id}">Select Offer</button>` : ""}
+      <div class="offer-card-actions">
+        ${canViewConversation(request) ? `<button class="btn btn-sm btn-outline-primary" type="button" data-conversation="${escapeAttribute(requestId)}"><i class="fa-solid fa-message"></i> Message</button>` : ""}
+        ${selectable ? `<button class="btn btn-sm btn-success" type="button" data-request-id="${requestId}" data-select-offer="${offer.id}"><i class="fa-solid fa-user-check"></i> Confirm Hire</button>` : ""}
+      </div>
     </article>
   `;
 }
@@ -4689,48 +4794,70 @@ async function openRequestModal(existing = null) {
   const result = await workspaceForm({
     title: editing ? "Edit request" : "Post request",
     html: `
-      <div class="swal-form two">
-        <label><span>Category</span>${categorySelect("request-category", true, existing?.category || "")}</label>
-        <label><span>Urgency</span>${select("request-urgency", URGENCY_OPTIONS, existing?.urgency || "Today")}</label>
-        <label><span>Contact method</span>${select("request-contact-method", CONTACT_CHANNELS, existing?.contactMethod || state.session.preferredContactChannel || "Messenger")}</label>
-        <label><span>Budget</span><input id="request-budget" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Open / ₱1,500.00" value="${escapeAttribute(currencyNumber(existing?.budget) || "")}"></label>
-        <div class="wide schedule-fields ${existing?.urgency === "Scheduled" ? "" : "d-none"}" data-scheduled-fields>
-          <label><span>Job date</span><input id="request-schedule-date" class="form-control" type="date" value="${escapeAttribute(existingSchedule.date)}"></label>
-          <label><span>Job time</span><input id="request-schedule-time" class="form-control" type="time" value="${escapeAttribute(existingSchedule.time)}"></label>
-        </div>
-        <div class="wide location-picker" data-location-picker>
-          <div>
-            <strong>Job site pin</strong>
-            <small data-location-status>${selectedJobLocation ? "Pinned. Providers can see approximate distance." : "Required. Use your current GPS only if you are already at the job site."}</small>
+      <div class="request-flow">
+        <section class="request-flow-section">
+          <div class="request-flow-head"><b>1</b><div><strong>What service do you need?</strong><span>Pick the closest category so the right providers see it.</span></div></div>
+          <label><span>Service category</span>${categorySelect("request-category", true, existing?.category || "")}</label>
+        </section>
+        <section class="request-flow-section">
+          <div class="request-flow-head"><b>2</b><div><strong>When do you need it?</strong><span>Set urgency and a schedule if the job has a fixed time.</span></div></div>
+          <div class="request-flow-grid">
+            <label><span>Urgency</span>${select("request-urgency", URGENCY_OPTIONS, existing?.urgency || "Today")}</label>
+            <label><span>Contact method</span>${select("request-contact-method", CONTACT_CHANNELS, existing?.contactMethod || state.session.preferredContactChannel || "Messenger")}</label>
           </div>
-          <div class="location-actions">
-            <button class="btn btn-sm btn-outline-primary" type="button" data-use-current-location><i class="fa-solid fa-location-crosshairs"></i> I am at the job site</button>
-            <button class="btn btn-sm btn-outline-secondary" type="button" data-show-location-map><i class="fa-solid fa-map-location-dot"></i> Pick on map</button>
-            <button class="btn btn-sm btn-outline-danger ${selectedJobLocation ? "" : "d-none"}" type="button" data-clear-job-location><i class="fa-solid fa-xmark"></i> Clear</button>
+          <div class="schedule-fields ${existing?.urgency === "Scheduled" ? "" : "d-none"}" data-scheduled-fields>
+            <label><span>Job date</span><input id="request-schedule-date" class="form-control" type="date" value="${escapeAttribute(existingSchedule.date)}"></label>
+            <label><span>Job time</span><input id="request-schedule-time" class="form-control" type="time" value="${escapeAttribute(existingSchedule.time)}"></label>
           </div>
-          <div class="map-mode-toggle ${selectedJobLocation ? "" : "d-none"}" data-map-mode-toggle>
-            <button type="button" data-map-mode="street"><i class="fa-solid fa-road"></i> Street</button>
-            <button type="button" data-map-mode="satellite"><i class="fa-solid fa-earth-asia"></i> Satellite</button>
-            <button type="button" data-map-mode="hybrid"><i class="fa-solid fa-layer-group"></i> Hybrid</button>
-          </div>
-          <div class="job-map-wrap ${selectedJobLocation ? "" : "d-none"}" data-job-map-wrap>
-            <div class="job-map" data-job-map></div>
-            <div class="k-map-zoom" aria-label="Map zoom controls">
-              <button type="button" data-map-zoom-in aria-label="Zoom in"><i class="fa-solid fa-plus"></i></button>
-              <button type="button" data-map-zoom-out aria-label="Zoom out"><i class="fa-solid fa-minus"></i></button>
+        </section>
+        <section class="request-flow-section">
+          <div class="request-flow-head"><b>3</b><div><strong>Describe the problem</strong><span>Details help providers price accurately before they visit.</span></div></div>
+          <label><span>Details</span><textarea id="request-details" class="form-control" rows="4" placeholder="What happened? What should the provider inspect or bring?">${escapeHtml(existing?.details || "")}</textarea></label>
+        </section>
+        <section class="request-flow-section">
+          <div class="request-flow-head"><b>4</b><div><strong>Add photos/videos</strong><span>Optional, but useful for faster and better offers.</span></div></div>
+          ${editing ? `<div class="offer"><strong>Existing media</strong><div>Existing request media stays attached. Add a new request if you need to replace photos or videos.</div></div>` : `
+            <label><span>Photos or videos (up to 3 files)</span><input id="request-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
+            <div class="upload-preview" data-request-attachment-preview></div>
+          `}
+        </section>
+        <section class="request-flow-section">
+          <div class="request-flow-head"><b>5</b><div><strong>Job site pin/map</strong><span>Pin the actual job site so providers can estimate distance.</span></div></div>
+          <div class="location-picker" data-location-picker>
+            <div>
+              <strong>Job site pin</strong>
+              <small data-location-status>${selectedJobLocation ? "Pinned. Providers can see approximate distance." : "Required. Use your current GPS only if you are already at the job site."}</small>
             </div>
-            <div class="map-hint"><i class="fa-solid fa-hand-pointer"></i> Tap map to move pin. Drag pin for finer placement.</div>
+            <div class="location-actions">
+              <button class="btn btn-sm btn-outline-primary" type="button" data-use-current-location><i class="fa-solid fa-location-crosshairs"></i> I am at the job site</button>
+              <button class="btn btn-sm btn-outline-secondary" type="button" data-show-location-map><i class="fa-solid fa-map-location-dot"></i> Pick on map</button>
+              <button class="btn btn-sm btn-outline-danger ${selectedJobLocation ? "" : "d-none"}" type="button" data-clear-job-location><i class="fa-solid fa-xmark"></i> Clear</button>
+            </div>
+            <div class="map-mode-toggle ${selectedJobLocation ? "" : "d-none"}" data-map-mode-toggle>
+              <button type="button" data-map-mode="street"><i class="fa-solid fa-road"></i> Street</button>
+              <button type="button" data-map-mode="satellite"><i class="fa-solid fa-earth-asia"></i> Satellite</button>
+              <button type="button" data-map-mode="hybrid"><i class="fa-solid fa-layer-group"></i> Hybrid</button>
+            </div>
+            <div class="job-map-wrap ${selectedJobLocation ? "" : "d-none"}" data-job-map-wrap>
+              <div class="job-map" data-job-map></div>
+              <div class="k-map-zoom" aria-label="Map zoom controls">
+                <button type="button" data-map-zoom-in aria-label="Zoom in"><i class="fa-solid fa-plus"></i></button>
+                <button type="button" data-map-zoom-out aria-label="Zoom out"><i class="fa-solid fa-minus"></i></button>
+              </div>
+              <div class="map-hint"><i class="fa-solid fa-hand-pointer"></i> Tap map to move pin. Drag pin for finer placement.</div>
+            </div>
+            <small class="location-note">Satellite photos and labels may be older or incomplete in some areas. The pin is what KAILA uses for provider distance.</small>
           </div>
-          <small class="location-note">Satellite photos and labels may be older or incomplete in some areas. The pin is what KAILA uses for provider distance.</small>
-          <small class="location-note">If the request is for your house but you are somewhere else, pick the house/job site on the map instead of using current location.</small>
-        </div>
-        <label class="wide"><span>Details</span><textarea id="request-details" class="form-control" rows="3">${escapeHtml(existing?.details || "")}</textarea></label>
-        ${editing ? `<div class="wide offer"><strong>Existing media</strong><div>Existing request media stays attached. Add a new request if you need to replace photos or videos.</div></div>` : `
-          <label class="wide"><span>Photos or videos (optional, up to 3 files)</span><input id="request-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
-          <div class="wide upload-preview" data-request-attachment-preview></div>
-        `}
-        <label class="wide consent-line"><input id="request-forward-consent" type="checkbox" ${existing?.permissionToForward === false ? "" : "checked"}> Permission to forward request details to matching providers.</label>
-        <label class="wide consent-line"><input id="request-rate-consent" type="checkbox" ${existing?.consentToRate === false ? "" : "checked"}> I agree to rate after completion.</label>
+        </section>
+        <section class="request-flow-section">
+          <div class="request-flow-head"><b>6</b><div><strong>Budget</strong><span>Leave open or add your expected range for faster matching.</span></div></div>
+          <label><span>Budget</span><input id="request-budget" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Open / ₱1,500.00" value="${escapeAttribute(currencyNumber(existing?.budget) || "")}"></label>
+        </section>
+        <section class="request-flow-section request-review-section">
+          <div class="request-flow-head"><b>7</b><div><strong>Review & Post</strong><span>These permissions keep the job flow moving after providers reply.</span></div></div>
+          <label class="consent-line"><input id="request-forward-consent" type="checkbox" ${existing?.permissionToForward === false ? "" : "checked"}> Permission to forward request details to matching providers.</label>
+          <label class="consent-line"><input id="request-rate-consent" type="checkbox" ${existing?.consentToRate === false ? "" : "checked"}> I agree to rate after completion.</label>
+        </section>
       </div>
     `,
     confirmButtonText: editing ? "Save Changes" : "Post",
