@@ -844,6 +844,7 @@ function bindEvents() {
   });
   document.addEventListener("click", (event) => {
     if (!event.target.closest("[data-feed-audience]")) closeFeedAudienceMenus();
+    if (!event.target.closest(".feed-post-more")) closeFeedPostMoreMenus();
     if (!event.target.closest(".feed-comment-more, [data-feed-comment-floating-menu]")) closeFeedCommentMoreMenus();
   });
 }
@@ -1807,6 +1808,7 @@ function renderFeedPost(post = {}, options = {}) {
   const publicOnly = Boolean(options.publicOnly);
   const shareUrl = feedShareUrl(post);
   const visibilityIcon = post.visibility === "private" ? "fa-lock" : "fa-globe";
+  const canManage = !publicOnly && Boolean(post.canManage);
   return `
     <article class="feed-card ${post.official ? "official" : ""}" data-feed-post="${escapeAttribute(post.id)}" data-home-search-item="feed" data-home-search-text="${escapeAttribute(homeSearchText([post.authorName, post.body, post.visibility, ...(post.comments || []).map((comment) => comment.body)]))}">
       <div class="feed-card-head">
@@ -1815,6 +1817,7 @@ function renderFeedPost(post = {}, options = {}) {
           <strong>${escapeHtml(post.authorName || "KAILA user")} ${post.official ? `<span class="verified-badge" title="Official KAILA"><i class="fa-solid fa-circle-check"></i></span>` : ""}</strong>
           <span>${escapeHtml(formatDateTime(post.createdAt))} · <i class="fa-solid ${visibilityIcon}"></i> ${escapeHtml(capitalize(post.visibility || "public"))}</span>
         </div>
+        ${canManage ? renderFeedPostMoreMenu() : ""}
       </div>
       ${post.body ? `<p class="feed-body">${escapeHtml(post.body)}</p>` : ""}
       ${renderFeedMedia(post.media)}
@@ -1972,6 +1975,48 @@ function bindFeedPostActions(scope, options = {}) {
   $$("[data-feed-share]", scope).forEach((button) => {
     button.addEventListener("click", () => shareFeedPost(button.closest("[data-feed-post]")?.dataset.feedPost, button.dataset.feedShare));
   });
+  $$("[data-feed-post-more]", scope).forEach((button) => {
+    if (options.publicOnly) return;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const menu = button.closest(".feed-post-more")?.querySelector("[data-feed-post-more-menu]");
+      const opening = button.getAttribute("aria-expanded") !== "true";
+      closeFeedPostMoreMenus();
+      if (!menu || !opening) return;
+      menu.hidden = false;
+      button.setAttribute("aria-expanded", "true");
+    });
+  });
+  $$("[data-feed-post-action]", scope).forEach((button) => {
+    if (options.publicOnly) return;
+    button.addEventListener("click", () => {
+      const postId = button.closest("[data-feed-post]")?.dataset.feedPost;
+      closeFeedPostMoreMenus();
+      if (button.dataset.feedPostAction === "edit") editFeedPost(postId);
+      if (button.dataset.feedPostAction === "delete") deleteFeedPost(postId);
+    });
+  });
+}
+
+function renderFeedPostMoreMenu() {
+  return `
+    <span class="feed-post-more">
+      <button type="button" data-feed-post-more title="Post options" aria-label="Post options" aria-haspopup="menu" aria-expanded="false">
+        <i class="fa-solid fa-ellipsis-vertical"></i>
+      </button>
+      <span class="feed-post-more-menu" data-feed-post-more-menu role="menu" hidden>
+        <button type="button" data-feed-post-action="edit" role="menuitem"><i class="fa-solid fa-pen"></i><span>Edit post</span></button>
+        <button type="button" data-feed-post-action="delete" role="menuitem"><i class="fa-solid fa-trash"></i><span>Delete post</span></button>
+      </span>
+    </span>
+  `;
+}
+
+function closeFeedPostMoreMenus() {
+  $$("[data-feed-post-more-menu]").forEach((menu) => {
+    menu.hidden = true;
+  });
+  $$("[data-feed-post-more]").forEach((button) => button.setAttribute("aria-expanded", "false"));
 }
 
 function closeFeedCommentMoreMenus() {
@@ -2224,6 +2269,72 @@ async function moderateFeedComment(postId, commentId, action) {
     notify(copy.done, "Feed moderation updated.", "success");
   } catch (error) {
     notify("Moderation failed", error.message || "Try again.", "error");
+  }
+}
+
+async function editFeedPost(postId) {
+  const post = state.feedPosts.find((item) => item.id === postId);
+  if (!post?.id) return;
+  const result = await modal({
+    icon: "question",
+    title: "Edit post",
+    html: `
+      <div class="swal-form">
+        <label class="wide">Post
+          <textarea class="form-control" data-edit-feed-body rows="5" maxlength="2000">${escapeHtml(post.body || "")}</textarea>
+        </label>
+        <label>Visibility
+          <select class="form-select" data-edit-feed-visibility>
+            <option value="public" ${post.visibility === "private" ? "" : "selected"}>Public</option>
+            <option value="private" ${post.visibility === "private" ? "selected" : ""}>Private</option>
+          </select>
+        </label>
+      </div>
+    `,
+    confirmButtonText: "Save",
+    preConfirm: () => {
+      const popup = window.Swal.getPopup();
+      const body = $("[data-edit-feed-body]", popup)?.value.trim() || "";
+      const visibility = $("[data-edit-feed-visibility]", popup)?.value || "public";
+      if (!body && !(post.media || []).length) {
+        window.Swal.showValidationMessage("Write something or keep a photo/video on the post.");
+        return false;
+      }
+      return { body, visibility };
+    },
+  });
+  if (!result.isConfirmed) return;
+  try {
+    const response = await apiFetch(`/api/feed/${encodeURIComponent(post.id)}`, {
+      method: "PUT",
+      body: JSON.stringify(result.value),
+    });
+    state.feedPosts = response.posts || state.feedPosts;
+    renderFeed();
+    notify("Post updated", "Your feed post was saved.", "success");
+  } catch (error) {
+    notify("Edit failed", feedActionErrorMessage(error, "post edit"), "error");
+  }
+}
+
+async function deleteFeedPost(postId) {
+  const post = state.feedPosts.find((item) => item.id === postId);
+  if (!post?.id) return;
+  const result = await modal({
+    icon: "warning",
+    title: "Delete post?",
+    text: "This removes the post, reactions, comments, and attached media from the feed.",
+    confirmButtonText: "Delete",
+    confirmButtonColor: "#dc3545",
+  });
+  if (!result.isConfirmed) return;
+  try {
+    const response = await apiFetch(`/api/feed/${encodeURIComponent(post.id)}`, { method: "DELETE" });
+    state.feedPosts = response.posts || state.feedPosts.filter((item) => item.id !== post.id);
+    renderFeed();
+    notify("Post deleted", "The feed post was removed.", "success");
+  } catch (error) {
+    notify("Delete failed", feedActionErrorMessage(error, "post delete"), "error");
   }
 }
 

@@ -1396,6 +1396,11 @@ function canModerateFeedComment(row = {}, post = {}, viewer = null) {
   return row.author_id === viewer.id || post.author_id === viewer.id || canPostOfficial(viewer);
 }
 
+function canManageFeedPost(row = {}, viewer = null) {
+  if (!viewer?.id) return false;
+  return row.author_id === viewer.id;
+}
+
 function mapFeedComment(row, { post = {}, reactions = [], viewer = null, replies = [] } = {}) {
   const official = Boolean(row.author_official);
   const hidden = Boolean(row.hidden_at);
@@ -1423,13 +1428,13 @@ function mapFeedComment(row, { post = {}, reactions = [], viewer = null, replies
   };
 }
 
-function mapFeedPost(row, { media = [], reactions = [], comments = [], viewerId = "" } = {}) {
+function mapFeedPost(row, { media = [], reactions = [], comments = [], viewer = null } = {}) {
   const official = Boolean(row.post_as_official);
   const reactionCounts = { like: 0, helpful: 0, interested: 0 };
   const viewerReactions = [];
   reactions.forEach((reaction) => {
     if (reactionCounts[reaction.reaction] !== undefined) reactionCounts[reaction.reaction] += 1;
-    if (reaction.user_id === viewerId) viewerReactions.push(reaction.reaction);
+    if (reaction.user_id === viewer?.id) viewerReactions.push(reaction.reaction);
   });
   return {
     id: row.id,
@@ -1443,6 +1448,7 @@ function mapFeedPost(row, { media = [], reactions = [], comments = [], viewerId 
     media,
     reactions: reactionCounts,
     viewerReactions,
+    canManage: canManageFeedPost(row, viewer),
     comments,
     commentCount: comments.reduce((total, comment) => total + 1 + (comment.replies?.length || 0), 0),
     shareCount: Number(row.share_count || 0),
@@ -1566,7 +1572,7 @@ async function feedPostsFor(viewer = null, options = {}) {
     media: mediaByPost.get(row.id) || [],
     reactions: reactionsByPost.get(row.id) || [],
     comments: commentsByPost.get(row.id) || [],
-    viewerId: viewer?.id || "",
+    viewer,
   }));
 }
 
@@ -1600,6 +1606,11 @@ function canViewFeedPost(post = {}, user = {}) {
 function canModerateFeedCommentAction(comment = {}, user = {}) {
   if (!comment?.id || !user?.id) return false;
   return comment.author_id === user.id || comment.post_author_id === user.id || canPostOfficial(user);
+}
+
+function canManageFeedPostAction(post = {}, user = {}) {
+  if (!post?.id || !user?.id) return false;
+  return post.author_id === user.id;
 }
 
 async function createFeedNotification({ recipientId, actor, postId, commentId = null, type, title, body } = {}) {
@@ -3104,6 +3115,40 @@ app.post("/api/feed", requireUser, async (req, res) => {
   const posts = await feedPostsFor(req.user);
   broadcast("kaila.feed.updated", { postId: post.id, action: "created" });
   res.status(201).json({ post: posts.find((item) => item.id === post.id), posts });
+});
+
+app.put("/api/feed/:id", requireUser, async (req, res) => {
+  const post = await loadFeedPostForAction(req.params.id);
+  if (!post) return res.status(404).json({ error: "Post not found" });
+  if (!canManageFeedPostAction(post, req.user)) return res.status(403).json({ error: "Only the post owner can edit this post" });
+  const body = String(req.body?.body || "").trim();
+  const visibility = String(req.body?.visibility || post.visibility || "public").toLowerCase() === "private" ? "private" : "public";
+  if (body.length > 2000) return res.status(400).json({ error: "Post text must be 2,000 characters or less" });
+  if (!body) {
+    const [[mediaCount]] = await pool.query("SELECT COUNT(*) AS count FROM feed_post_media WHERE post_id = ?", [post.id]);
+    if (!Number(mediaCount?.count || 0)) return res.status(400).json({ error: "Write something or keep a photo/video on the post" });
+  }
+  await pool.query(
+    "UPDATE feed_posts SET body = ?, visibility = ?, updated_at = ? WHERE id = ?",
+    [body, visibility, nowMysql(), post.id]
+  );
+  await addActivity("Feed post edited", `${displayNameForUser(req.user)} edited a ${visibility} feed post`);
+  const posts = await feedPostsFor(req.user);
+  broadcast("kaila.feed.updated", { postId: post.id, action: "edited" });
+  res.json({ post: posts.find((item) => item.id === post.id), posts });
+});
+
+app.delete("/api/feed/:id", requireUser, async (req, res) => {
+  const post = await loadFeedPostForAction(req.params.id);
+  if (!post) return res.status(404).json({ error: "Post not found" });
+  if (!canManageFeedPostAction(post, req.user)) return res.status(403).json({ error: "Only the post owner can delete this post" });
+  const [mediaRows] = await pool.query("SELECT file_name FROM feed_post_media WHERE post_id = ?", [post.id]);
+  await pool.query("DELETE FROM feed_posts WHERE id = ?", [post.id]);
+  await Promise.all(mediaRows.map((row) => fs.promises.unlink(path.join(UPLOAD_DIR, row.file_name)).catch(() => {})));
+  await addActivity("Feed post deleted", `${displayNameForUser(req.user)} deleted a feed post`);
+  const posts = await feedPostsFor(req.user);
+  broadcast("kaila.feed.updated", { postId: post.id, action: "deleted" });
+  res.json({ ok: true, posts });
 });
 
 app.get("/api/public-post/:id", async (req, res) => {

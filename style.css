@@ -1809,7 +1809,7 @@ select[multiple].form-select {
 
 .feed-card-head {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto 1fr auto;
   gap: 0.65rem;
   align-items: center;
 }
@@ -1884,6 +1884,71 @@ select[multiple].form-select {
 
 .feed-actions b {
   font-size: 0.72rem;
+}
+
+.feed-post-more {
+  position: relative;
+  display: inline-flex;
+  justify-self: end;
+}
+
+.feed-post-more > button {
+  width: 2rem;
+  height: 2rem;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.feed-post-more > button:hover,
+.feed-post-more > button:focus-visible,
+.feed-post-more > button[aria-expanded="true"] {
+  color: var(--brand);
+  background: var(--surface-2);
+}
+
+.feed-post-more-menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 30;
+  min-width: 8.5rem;
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 14px 32px var(--shadow);
+}
+
+.feed-post-more-menu[hidden] {
+  display: none;
+}
+
+.feed-post-more-menu button {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  width: 100%;
+  min-height: 2rem;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink);
+  background: transparent;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-align: left;
+}
+
+.feed-post-more-menu button:hover,
+.feed-post-more-menu button:focus-visible {
+  color: var(--brand);
+  background: var(--surface-2);
 }
 
 .feed-comments {
@@ -8029,10 +8094,6 @@ body.app-mode .app-view.active {
 }
 
 .home-feed-title span {
-  display: none;
-}
-
-.feed-composer {
   display: none;
 }
 
