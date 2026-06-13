@@ -859,7 +859,7 @@ function applyTheme(theme = "system") {
   document.documentElement.dataset.theme = resolved;
   document.documentElement.dataset.themeMode = state.theme;
   document.documentElement.dataset.bsTheme = resolved;
-  document.querySelector("meta[name='theme-color']")?.setAttribute("content", resolved === "dark" ? "#10191d" : "#0f3e46");
+  document.querySelector("meta[name='theme-color']")?.setAttribute("content", resolved === "dark" ? "#020617" : "#2563EB");
 }
 
 function initializeSocketUrl() {
@@ -2966,7 +2966,7 @@ function renderProviders() {
     return;
   }
   host.innerHTML = `${adminPanel}${providers.map((provider) => `
-    <article class="k-card">
+    <article class="k-card provider-card">
       <div class="d-flex justify-content-between gap-2">
         <div>
           ${renderIdentity(provider.displayName || provider.name, provider.photoUrl, "Provider reputation", providerReputation(provider))}
@@ -3598,6 +3598,7 @@ function renderSettings() {
     ${renderSafetySettings()}
   `;
     $("[data-settings-form]")?.addEventListener("submit", saveSettings);
+    $("#settings-theme")?.addEventListener("change", (event) => applyTheme(event.currentTarget.value.toLowerCase()));
     $("[data-delete-account]")?.addEventListener("click", deleteAccount);
     $("[data-enable-notifications]")?.addEventListener("click", enableNotificationsFromSettings);
     $("[data-settings-panel] [data-reconnect]")?.addEventListener("click", () => connectSocket(true));
