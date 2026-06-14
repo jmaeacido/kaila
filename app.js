@@ -19,7 +19,7 @@ const STORAGE = {
 const SOCIAL_AUTH_PENDING_PREFIX = "kaila.socialAuth.";
 const SOCIAL_AUTH_GOOGLE_PROFILE_TOKEN = "kaila.socialAuth.googleProfileToken";
 const SOCIAL_AUTH_FACEBOOK_PENDING_PREFIX = "kaila.socialAuth.facebook.";
-const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Cellphone repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Cleaning", "AirCon Cleaning", "Graphic / digital services", "General odd jobs"];
+const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Cellphone repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Cleaning", "AirCon Cleaning", "Beauty, makeup, and events", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
 const CONTACT_CHANNELS = ["Messenger", "SMS", "Call", "Email", "Other"];
 const PROVIDER_TYPES = ["Individual", "Freelancer", "Shop", "Small team", "Business"];
@@ -1916,7 +1916,7 @@ function renderActions() {
 
   $$("[data-active-role]", row).forEach((button) => button.addEventListener("click", () => setActiveRole(button.dataset.activeRole)));
   $$("[data-new-request]", row).forEach((button) => button.addEventListener("click", openRequestModal));
-  $("[data-provider-profile]")?.addEventListener("click", openProviderModal);
+  $$("[data-provider-profile]", row).forEach((button) => button.addEventListener("click", openProviderModal));
   $("[data-admin-create-account]")?.addEventListener("click", openAdminCreateAccountModal);
   $("[data-client-survey]")?.addEventListener("click", openClientSurveyModal);
   $("[data-provider-interview]")?.addEventListener("click", openProviderInterviewModal);
@@ -3989,7 +3989,11 @@ function renderProviders() {
   if (state.session?.role === "admin") providers = adminMetricProviders(providers);
   const adminPanel = state.session?.role === "admin" ? adminProviderMetricPanel() : "";
   if (!providers.length) {
-    host.innerHTML = emptyCard("No providers yet", "Registered providers will appear here.");
+    const setupAction = canActAsMarketplace()
+      ? `<div class="card-actions mt-2"><button class="btn btn-primary" type="button" data-provider-profile><i class="fa-solid fa-briefcase"></i> Add a Provider Profile</button></div>`
+      : "";
+    host.innerHTML = `${adminPanel}${emptyCard("No providers yet", "Registered providers will appear here.")}${setupAction}`;
+    $$("[data-provider-profile]", host).forEach((button) => button.addEventListener("click", openProviderModal));
     return;
   }
   host.innerHTML = `${adminPanel}${providers.map((provider) => `
@@ -4658,6 +4662,7 @@ function renderSettings() {
       <button class="btn btn-primary" type="submit">Save Settings</button>
     </form>
     ${isAdmin ? renderAdminAccountSettings() : ""}
+    ${renderProviderAccountSettings()}
     ${renderNotificationSettings()}
     ${renderSafetySettings()}
   `;
@@ -4669,6 +4674,7 @@ function renderSettings() {
     $("[data-settings-panel] [data-reconnect]")?.addEventListener("click", () => connectSocket(true));
     $("[data-settings-support]")?.addEventListener("click", openCustomerServicePlatform);
     $("[data-settings-panel] [data-admin-create-account]")?.addEventListener("click", openAdminCreateAccountModal);
+    $$("[data-provider-profile]", host).forEach((button) => button.addEventListener("click", openProviderModal));
     $$("[data-route]", host).forEach((button) => button.addEventListener("click", () => route(button.dataset.route)));
     $$("[data-home-tab]", host).forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.homeTab)));
     $$("[data-unblock-settings]").forEach((button) => button.addEventListener("click", () => unblockUser(button.dataset.unblockSettings)));
@@ -4705,6 +4711,26 @@ function renderAdminAccountSettings() {
         <button class="btn btn-sm btn-outline-primary" type="button" data-home-tab="#customer-service-pane"><i class="fa-solid fa-headset"></i> Support Desk</button>
         <button class="btn btn-sm btn-outline-primary" type="button" data-home-tab="#validation-pane"><i class="fa-solid fa-clipboard-check"></i> Validation</button>
         <button class="btn btn-sm btn-outline-primary" type="button" data-home-tab="#activity-pane"><i class="fa-solid fa-chart-line"></i> Activity</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderProviderAccountSettings() {
+  if (!canActAsMarketplace()) return "";
+  const provider = ownProviderProfile();
+  return `
+    <section class="settings-card">
+      <div class="settings-head">
+        <div class="profile-photo safety-icon"><i class="fa-solid fa-briefcase"></i></div>
+        <div>
+          <h3>${provider ? "Provider profile" : "Offer services"}</h3>
+          <p>${provider ? "Update your categories, service area, availability, and provider rules." : "Create a provider profile when you want to accept local service requests."}</p>
+        </div>
+      </div>
+      <div class="card-actions mt-2">
+        <button class="btn btn-sm ${provider ? "btn-outline-primary" : "btn-primary"}" type="button" data-provider-profile><i class="fa-solid fa-briefcase"></i> ${provider ? "Update Provider Profile" : "Add a Provider Profile"}</button>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-home-tab="#providers-pane"><i class="fa-solid fa-users-gear"></i> Providers</button>
       </div>
     </section>
   `;
