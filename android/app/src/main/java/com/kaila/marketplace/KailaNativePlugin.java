@@ -159,8 +159,14 @@ public class KailaNativePlugin extends Plugin {
         }
         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        getContext().startActivity(intent);
-        call.resolve();
+        try {
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (ActivityNotFoundException error) {
+            call.reject("No app can open this URL", error);
+        } catch (Exception error) {
+            call.reject("Could not open URL", error);
+        }
     }
 
     @PluginMethod

@@ -57,7 +57,7 @@ const UPLOAD_DIR = path.resolve(__dirname, "..", "uploads");
 const PROFILE_UPLOAD_DIR = path.resolve(__dirname, "..", "profile-photos");
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024;
-const MAX_ATTACHMENTS_PER_STAGE = 3;
+const MAX_ATTACHMENTS_PER_STAGE = 20;
 const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
 const ALLOWED_MEDIA_TYPES = new Map([
   ["image/jpeg", ".jpg"],
@@ -369,12 +369,13 @@ function createId() {
 }
 
 function decodeAttachment(attachment) {
-  const match = String(attachment?.dataUrl || "").match(/^data:([^;,]+);base64,([a-z0-9+/=\r\n]+)$/i);
-  if (!match || !ALLOWED_MEDIA_TYPES.has(match[1])) throw new Error("Only JPG, PNG, WebP, MP4, or WebM files are allowed");
+  const match = String(attachment?.dataUrl || "").match(/^data:(.+);base64,([a-z0-9+/=\r\n]+)$/i);
+  const mimeType = String(match?.[1] || "").split(";")[0].trim().toLowerCase();
+  if (!match || !ALLOWED_MEDIA_TYPES.has(mimeType)) throw new Error("Only JPG, PNG, WebP, MP4, or WebM files are allowed");
   const buffer = Buffer.from(match[2], "base64");
   if (!buffer.length || buffer.length > MAX_ATTACHMENT_BYTES) throw new Error("Each attachment must be between 1 byte and 10 MB");
-  if (!matchesMediaSignature(match[1], buffer)) throw new Error("Attachment content does not match its media type");
-  return { buffer, mimeType: match[1], extension: ALLOWED_MEDIA_TYPES.get(match[1]) };
+  if (!matchesMediaSignature(mimeType, buffer)) throw new Error("Attachment content does not match its media type");
+  return { buffer, mimeType, extension: ALLOWED_MEDIA_TYPES.get(mimeType) };
 }
 
 function matchesMediaSignature(mimeType, buffer) {
@@ -1708,7 +1709,7 @@ function mapFeedPost(row, { media = [], reactions = [], comments = [], viewer = 
 
 async function saveFeedMedia(postId, attachments = []) {
   if (!Array.isArray(attachments)) throw new Error("Attachments must be a list");
-  if (attachments.length > 1) throw new Error("Upload one photo or video per post");
+  if (attachments.length > MAX_ATTACHMENTS_PER_STAGE) throw new Error(`Upload up to ${MAX_ATTACHMENTS_PER_STAGE} attachments`);
   const decodedAttachments = attachments.map((attachment) => ({ attachment, decoded: decodeAttachment(attachment) }));
   const saved = [];
   try {

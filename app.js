@@ -63,7 +63,9 @@ const NAVIGATION_MIN_MOVE_METERS = 12;
 const NAVIGATION_STALE_MS = 45000;
 const NAVIGATION_SPEED_KMH = 22;
 const MOBILE_UPDATE_PROMPT_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const MEDIA_ATTACHMENT_LIMIT = 20;
 const MEDIA_ATTACHMENT_ACCEPT = "image/jpeg,image/png,image/webp,video/mp4,video/webm";
+const CAMERA_ATTACHMENT_ACCEPT = "image/*,video/*";
 const FALLBACK_GEOGRAPHY = {
   region: "Region X (Northern Mindanao)",
   province: "Misamis Oriental",
@@ -79,6 +81,8 @@ const FALLBACK_GEOGRAPHY = {
   barangays: ["Agay-ayan", "Alagatan", "Anakan", "Bagubad", "Bakidbakid", "Bal-ason", "Bantaawan", "Binakalan", "Capitulangan", "Daan-Lungsod", "Hindangon", "Kalagonoy", "Kibuging", "Kipuntos", "Lawaan", "Lawit", "Libertad", "Libon", "Lunao", "Lunotan", "Malibud", "Malinao", "Maribucao", "Mimbuntong", "Mimbalagon", "Mimbunga", "Minsapinit", "Murallon", "Odiongan", "Pangasihan", "Pigsaluhan", "Barangay 1", "Barangay 10", "Barangay 11", "Barangay 12", "Barangay 13", "Barangay 14", "Barangay 15", "Barangay 16", "Barangay 17", "Barangay 18-A", "Barangay 19", "Barangay 2", "Barangay 20", "Barangay 21", "Barangay 22-A", "Barangay 23", "Barangay 24", "Barangay 25", "Barangay 26", "Barangay 3", "Barangay 4", "Barangay 5", "Barangay 6", "Barangay 7", "Barangay 8", "Barangay 9", "Punong", "Ricoro", "Samay", "San Juan", "San Luis", "San Miguel", "Santiago", "Talisay", "Talon", "Tinabalan", "Tinulongan", "Barangay 18", "Barangay 22", "Barangay 24-A", "Dinawehan", "Eureka", "Kalipay", "Kamanikan", "Kianlagan", "San Jose", "Sangalan", "Tagpako"],
 };
 FALLBACK_GEOGRAPHY.cityBarangays[FALLBACK_GEOGRAPHY.city] = FALLBACK_GEOGRAPHY.barangays;
+
+const cameraCapturedFiles = new WeakMap();
 
 const state = {
   session: readJson(STORAGE.session, null),
@@ -457,18 +461,33 @@ async function nativeAppInfo() {
   }
 }
 
-async function openExternalUrl(url) {
+async function openExternalUrl(url, options = {}) {
   if (!url) return;
+  const fallback = () => {
+    if (isNativeApp()) {
+      if (window.location.href !== url) window.location.assign(url);
+      return;
+    }
+    const opened = window.open(url, "_blank", "noopener");
+    if (!opened && window.location.href !== url) window.location.assign(url);
+  };
   const bridge = nativeKailaBridge();
   if (bridge?.openUrl) {
+    const fallbackTimer = options.fallbackAfterMs
+      ? setTimeout(() => {
+        if (document.visibilityState === "visible") fallback();
+      }, options.fallbackAfterMs)
+      : null;
     try {
       await bridge.openUrl({ url });
+      if (fallbackTimer) return;
       return;
     } catch (error) {
+      if (fallbackTimer) clearTimeout(fallbackTimer);
       console.warn("KAILA native URL open failed:", error);
     }
   }
-  window.open(url, "_blank", "noopener");
+  fallback();
 }
 
 function mobileUpdateMemory() {
@@ -560,7 +579,7 @@ async function promptMobileUpdate(update = {}) {
     confirmButtonText: "Download Update",
     cancelButtonText: "Later",
   });
-  if (result.isConfirmed) openExternalUrl(mobileUpdateDownloadUrl(update));
+  if (result.isConfirmed) await openExternalUrl(mobileUpdateDownloadUrl(update), { fallbackAfterMs: 900 });
 }
 
 function isNativeApp() {
@@ -836,12 +855,13 @@ function registerServiceWorker() {
 }
 
 function bindEvents() {
+  document.addEventListener("click", handleCameraAttachmentClick, true);
   $$("[data-route]").forEach((el) => el.addEventListener("click", () => route(el.dataset.route)));
   $("[data-register-form]").addEventListener("submit", register);
   $("[data-register-form] [name='role']").addEventListener("change", toggleProviderCategory);
   $("[data-login-form]").addEventListener("submit", login);
   $("[data-feed-form]")?.addEventListener("submit", createFeedPost);
-  bindAttachmentPreview("[data-feed-media]", "[data-feed-media-preview]", 1);
+  bindAttachmentPreview("[data-feed-media]", "[data-feed-media-preview]", MEDIA_ATTACHMENT_LIMIT);
   bindFeedAudienceSelector();
   $$("[data-password-toggle]").forEach((button) => button.addEventListener("click", togglePasswordVisibility));
   $("[data-forgot-password]")?.addEventListener("click", openForgotPasswordModal);
@@ -2276,11 +2296,16 @@ function renderFeedCommentMoreMenu(comment = {}) {
 
 function renderFeedMedia(media = []) {
   if (!media.length) return "";
-  const item = media[0];
-  const url = resolveMediaUrl(item.url);
-  return item.mimeType?.startsWith("video/")
-    ? `<video class="feed-media" src="${escapeAttribute(url)}" controls playsinline preload="metadata"></video>`
-    : `<img class="feed-media" src="${escapeAttribute(url)}" alt="${escapeAttribute(item.originalName || "Feed media")}">`;
+  return `
+    <div class="feed-media-grid ${media.length > 1 ? "multi" : ""}">
+      ${media.map((item, index) => {
+        const url = resolveMediaUrl(item.url);
+        return item.mimeType?.startsWith("video/")
+          ? `<button class="feed-media-button" type="button" data-feed-media-open="${index}" aria-label="Open video ${index + 1}"><video class="feed-media" src="${escapeAttribute(url)}" muted playsinline preload="metadata"></video><span class="media-type">Video</span></button>`
+          : `<button class="feed-media-button" type="button" data-feed-media-open="${index}" aria-label="Open photo ${index + 1}"><img class="feed-media" src="${escapeAttribute(url)}" alt="${escapeAttribute(item.originalName || "Feed media")}"><span class="media-type">Photo</span></button>`;
+      }).join("")}
+    </div>
+  `;
 }
 
 function bindFeedPostActions(scope, options = {}) {
@@ -2293,6 +2318,13 @@ function bindFeedPostActions(scope, options = {}) {
   $$("[data-feed-reaction]", scope).forEach((button) => {
     if (options.publicOnly) return;
     button.addEventListener("click", () => toggleFeedReaction(button.closest("[data-feed-post]")?.dataset.feedPost, button.dataset.feedReaction));
+  });
+  $$("[data-feed-media-open]", scope).forEach((button) => {
+    button.addEventListener("click", () => {
+      const postId = button.closest("[data-feed-post]")?.dataset.feedPost || "";
+      const post = state.feedPosts.find((item) => item.id === postId);
+      openFeedMediaViewer(post, Number(button.dataset.feedMediaOpen || 0));
+    });
   });
   $$("[data-feed-comment-form]", scope).forEach((form) => {
     if (options.publicOnly) return;
@@ -3778,30 +3810,56 @@ async function openMediaViewer(requestId, stage, startIndex = 0) {
   const request = state.requests.find((item) => item.id === requestId);
   const attachments = attachmentListForStage(request, stage);
   if (!attachments?.length) return;
-  let index = Math.max(0, Math.min(startIndex, attachments.length - 1));
+  await openMediaGallery(
+    attachments.map((attachment) => ({
+      url: `${apiBase()}${attachment.url}`,
+      mimeType: attachment.mimeType,
+      name: attachment.originalName,
+    })),
+    startIndex,
+    stage === "completion" ? "Completion media" : stage === "dispute" ? "Dispute media" : "Request media",
+  );
+}
 
-  while (index >= 0 && index < attachments.length) {
-    const attachment = attachments[index];
-    const url = `${apiBase()}${attachment.url}`;
-    const isVideo = attachment.mimeType.startsWith("video/");
+async function openFeedMediaViewer(post = {}, startIndex = 0) {
+  const media = post?.media || [];
+  if (!media.length) return;
+  await openMediaGallery(
+    media.map((item) => ({
+      url: resolveMediaUrl(item.url),
+      mimeType: item.mimeType,
+      name: item.originalName,
+    })),
+    startIndex,
+    "Feed media",
+  );
+}
+
+async function openMediaGallery(items = [], startIndex = 0, title = "Media") {
+  if (!items.length) return;
+  let index = Math.max(0, Math.min(Number(startIndex) || 0, items.length - 1));
+
+  while (index >= 0 && index < items.length) {
+    const item = items[index];
+    const isVideo = item.mimeType?.startsWith("video/");
     const result = await window.Swal.fire({
       customClass: { popup: "kaila-popup media-popup" },
-      title: stage === "completion" ? "Completion media" : stage === "dispute" ? "Dispute media" : "Request media",
+      title,
       html: `
         <div class="media-viewer">
           ${isVideo
-            ? `<video controls autoplay preload="metadata" src="${escapeAttribute(url)}"></video>`
-            : `<img src="${escapeAttribute(url)}" alt="${escapeAttribute(attachment.originalName)}">`}
+            ? `<video controls autoplay playsinline preload="metadata" src="${escapeAttribute(item.url)}"></video>`
+            : `<img src="${escapeAttribute(item.url)}" alt="${escapeAttribute(item.name || "Media")}">`}
           <div class="media-viewer-meta">
-            <strong>${isVideo ? "Video" : "Photo"}</strong>
-            <span>${index + 1} of ${attachments.length}</span>
+            <strong>${escapeHtml(item.name || (isVideo ? "Video" : "Photo"))}</strong>
+            <span>${index + 1} of ${items.length}</span>
           </div>
         </div>
       `,
       showCloseButton: true,
       showCancelButton: index > 0,
       cancelButtonText: "Previous",
-      showConfirmButton: index < attachments.length - 1,
+      showConfirmButton: index < items.length - 1,
       confirmButtonText: "Next",
       reverseButtons: false,
     });
@@ -5934,10 +5992,10 @@ async function openRequestModal(existing = null) {
           <label><span>Details</span><textarea id="request-details" class="form-control" rows="5" placeholder="What happened? What should the provider inspect or bring?">${escapeHtml(existing?.details || "")}</textarea></label>
           ${editing ? `<div class="offer"><strong>Existing media</strong><div>Existing request media stays attached. Add a new request if you need to replace photos or videos.</div></div>` : `
             <div class="media-input-group">
-              <span>Photos or videos (up to 3 files)</span>
+              <span>Photos or videos (up to 20 files)</span>
               <div class="media-input-actions">
                 <label class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-image"></i> Upload<input id="request-attachments" class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" multiple data-request-attachments></label>
-                <label class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-camera"></i> Camera<input class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" capture="environment" data-request-attachments></label>
+                <label class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-camera"></i> Camera<input class="visually-hidden" type="file" accept="${CAMERA_ATTACHMENT_ACCEPT}" capture="environment" data-camera-input data-request-attachments></label>
               </div>
             </div>
             <div class="upload-preview" data-request-attachment-preview></div>
@@ -5972,7 +6030,7 @@ async function openRequestModal(existing = null) {
           selectedLocationSource = selectedJobLocation ? source : "";
         },
       });
-      if (!editing) bindAttachmentPreview("[data-request-attachments]", "[data-request-attachment-preview]", 3, requestFormRoot);
+      if (!editing) bindAttachmentPreview("[data-request-attachments]", "[data-request-attachment-preview]", MEDIA_ATTACHMENT_LIMIT, requestFormRoot);
     },
     preConfirm: async () => {
       const scope = requestFormRoot || document;
@@ -6422,7 +6480,7 @@ function chatComposerHtml(kind) {
           </label>
           <label>
             <i class="fa-solid fa-camera"></i> Camera
-            <input type="file" ${attachmentAttr} accept="${MEDIA_ATTACHMENT_ACCEPT}" capture="environment" hidden>
+            <input type="file" ${attachmentAttr} accept="${CAMERA_ATTACHMENT_ACCEPT}" capture="environment" data-camera-input hidden>
           </label>
           <button type="button" data-chat-emoji-toggle><i class="fa-regular fa-face-smile"></i> Emoji</button>
         </div>
@@ -6585,7 +6643,7 @@ function bindConversationInput(requestId, writable) {
   if (!writable) return;
   const input = $("[data-chat-input]", popup);
   $("[data-chat-send]", popup)?.addEventListener("click", () => sendConversationMessage(requestId));
-  bindAttachmentPreview("[data-chat-attachments]", "[data-chat-attachment-preview]", 3);
+  bindAttachmentPreview("[data-chat-attachments]", "[data-chat-attachment-preview]", MEDIA_ATTACHMENT_LIMIT);
   $$("[data-chat-react]", popup).forEach((button) => button.addEventListener("click", () => toggleMessageReaction(requestId, button.dataset.chatReact)));
   input?.addEventListener("input", () => handleConversationKeystroke(requestId));
   input?.addEventListener("keydown", (event) => {
@@ -6788,7 +6846,7 @@ function bindDirectConversationInput(userId, writable, requestId = "") {
   if (!writable) return;
   const input = $("[data-direct-chat-input]", popup);
   $("[data-direct-chat-send]", popup)?.addEventListener("click", () => sendDirectConversationMessage(userId, requestId));
-  bindAttachmentPreview("[data-direct-chat-attachments]", "[data-direct-chat-attachment-preview]", 3);
+  bindAttachmentPreview("[data-direct-chat-attachments]", "[data-direct-chat-attachment-preview]", MEDIA_ATTACHMENT_LIMIT);
   input?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey) return;
     event.preventDefault();
@@ -8140,17 +8198,17 @@ async function completionPrompt() {
       <div class="swal-form">
         <label><span>Proof notes (optional)</span><textarea id="completion-note" class="form-control" rows="3" placeholder="Receipt, before/after details, time log, etc."></textarea></label>
         <div class="media-input-group">
-          <span>Photos or videos (optional, up to 3 files)</span>
+          <span>Photos or videos (optional, up to 20 files)</span>
           <div class="media-input-actions">
             <label class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-image"></i> Upload<input class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" multiple data-completion-attachments></label>
-            <label class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-camera"></i> Camera<input class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" capture="environment" data-completion-attachments></label>
+            <label class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-camera"></i> Camera<input class="visually-hidden" type="file" accept="${CAMERA_ATTACHMENT_ACCEPT}" capture="environment" data-camera-input data-completion-attachments></label>
           </div>
         </div>
         <div class="upload-preview" data-completion-attachment-preview></div>
       </div>
     `,
     confirmButtonText: "Mark Done",
-    didOpen: () => bindAttachmentPreview("[data-completion-attachments]", "[data-completion-attachment-preview]", 3),
+    didOpen: () => bindAttachmentPreview("[data-completion-attachments]", "[data-completion-attachment-preview]", MEDIA_ATTACHMENT_LIMIT),
     preConfirm: async () => {
       const attachments = await readMediaAttachments("[data-completion-attachments]");
       return attachments ? { note: $("#completion-note").value.trim(), attachments } : false;
@@ -8166,17 +8224,17 @@ async function disputePrompt() {
       <div class="swal-form">
         <label><span>Issue</span><textarea id="dispute-note" class="form-control" rows="3" placeholder="Explain the issue"></textarea></label>
         <div class="media-input-group">
-          <span>Photos or videos (optional, up to 3 files)</span>
+          <span>Photos or videos (optional, up to 20 files)</span>
           <div class="media-input-actions">
             <label class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-image"></i> Upload<input class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" multiple data-dispute-attachments></label>
-            <label class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-camera"></i> Camera<input class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" capture="environment" data-dispute-attachments></label>
+            <label class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-camera"></i> Camera<input class="visually-hidden" type="file" accept="${CAMERA_ATTACHMENT_ACCEPT}" capture="environment" data-camera-input data-dispute-attachments></label>
           </div>
         </div>
         <div class="upload-preview" data-dispute-attachment-preview></div>
       </div>
     `,
     confirmButtonText: "Submit Dispute",
-    didOpen: () => bindAttachmentPreview("[data-dispute-attachments]", "[data-dispute-attachment-preview]", 3),
+    didOpen: () => bindAttachmentPreview("[data-dispute-attachments]", "[data-dispute-attachment-preview]", MEDIA_ATTACHMENT_LIMIT),
     preConfirm: async () => {
       const note = $("#dispute-note").value.trim();
       if (!note) {
@@ -8192,8 +8250,8 @@ async function disputePrompt() {
 
 async function readMediaAttachments(selector, scope = document) {
   const files = mediaAttachmentFiles(selector, scope);
-  if (files.length > 3) {
-    window.Swal.showValidationMessage("Upload up to 3 attachments.");
+  if (files.length > MEDIA_ATTACHMENT_LIMIT) {
+    window.Swal.showValidationMessage(`Upload up to ${MEDIA_ATTACHMENT_LIMIT} attachments.`);
     return null;
   }
   for (const file of files) {
@@ -8204,10 +8262,14 @@ async function readMediaAttachments(selector, scope = document) {
   }
   return Promise.all(files.map((file) => new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve({ name: file.name, dataUrl: reader.result });
+    reader.onload = () => resolve({ name: file.name, dataUrl: normalizeMediaDataUrl(reader.result) });
     reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
     reader.readAsDataURL(file);
   })));
+}
+
+function normalizeMediaDataUrl(dataUrl) {
+  return String(dataUrl || "").replace(/^data:(video\/(?:webm|mp4));.*;base64,/i, (_match, type) => `data:${type.toLowerCase()};base64,`);
 }
 
 function mediaAttachmentInputs(selector, scope = document) {
@@ -8215,12 +8277,21 @@ function mediaAttachmentInputs(selector, scope = document) {
 }
 
 function mediaAttachmentFiles(selector, scope = document) {
-  return mediaAttachmentInputs(selector, scope).flatMap((input) => Array.from(input.files || []));
+  return mediaAttachmentEntries(selector, scope).map((entry) => entry.file);
+}
+
+function mediaAttachmentEntries(selector, scope = document) {
+  return mediaAttachmentInputs(selector, scope).flatMap((input) => {
+    const uploaded = Array.from(input.files || []).map((file, index) => ({ input, file, source: "input", index }));
+    const captured = (cameraCapturedFiles.get(input) || []).map((file, index) => ({ input, file, source: "camera", index }));
+    return [...uploaded, ...captured];
+  });
 }
 
 function clearMediaAttachmentInputs(selector, scope = document) {
   mediaAttachmentInputs(selector, scope).forEach((input) => {
     input.value = "";
+    cameraCapturedFiles.delete(input);
   });
 }
 
@@ -8270,7 +8341,7 @@ function loadImageFile(file) {
   });
 }
 
-function bindAttachmentPreview(inputSelector, previewSelector, limit = 3, scope = document) {
+function bindAttachmentPreview(inputSelector, previewSelector, limit = MEDIA_ATTACHMENT_LIMIT, scope = document) {
   const inputs = mediaAttachmentInputs(inputSelector, scope);
   const preview = $(previewSelector, scope);
   if (!inputs.length || !preview) return;
@@ -8281,20 +8352,281 @@ function bindAttachmentPreview(inputSelector, previewSelector, limit = 3, scope 
   };
   const renderPreview = () => {
     clearUrls();
-    const files = mediaAttachmentFiles(inputSelector, scope).slice(0, limit);
-    preview.innerHTML = files.map((file) => {
+    const entries = mediaAttachmentEntries(inputSelector, scope).slice(0, limit);
+    preview.innerHTML = entries.map((entry, index) => {
+      const file = entry.file;
       const url = URL.createObjectURL(file);
       urls.push(url);
       const isVideo = file.type.startsWith("video/");
       return `
         <div class="upload-thumb">
+          <button class="upload-thumb-remove" type="button" data-remove-media-index="${index}" aria-label="Remove ${escapeAttribute(file.name)}"><i class="fa-solid fa-xmark"></i></button>
           ${isVideo ? `<video muted preload="metadata" src="${escapeAttribute(url)}"></video>` : `<img src="${escapeAttribute(url)}" alt="${escapeAttribute(file.name)}">`}
           <span>${escapeHtml(file.name)}</span>
         </div>
       `;
     }).join("");
   };
+  preview.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-media-index]");
+    if (button && preview.contains(button)) {
+      removeMediaAttachment(inputSelector, Number(button.dataset.removeMediaIndex), scope);
+      renderPreview();
+      return;
+    }
+    const thumb = event.target.closest(".upload-thumb");
+    if (!thumb || !preview.contains(thumb)) return;
+    openAttachmentPreviewGallery(inputSelector, Array.from(preview.querySelectorAll(".upload-thumb")).indexOf(thumb), scope);
+  });
   inputs.forEach((input) => input.addEventListener("change", renderPreview));
+}
+
+async function openAttachmentPreviewGallery(selector, startIndex = 0, scope = document) {
+  const urls = [];
+  const items = mediaAttachmentEntries(selector, scope).map((entry) => {
+    const url = URL.createObjectURL(entry.file);
+    urls.push(url);
+    return { url, mimeType: entry.file.type, name: entry.file.name };
+  });
+  try {
+    await openMediaGallery(items, startIndex, "Selected media");
+  } finally {
+    urls.forEach((url) => URL.revokeObjectURL(url));
+  }
+}
+
+function removeMediaAttachment(selector, removeIndex, scope = document) {
+  if (!Number.isInteger(removeIndex) || removeIndex < 0) return;
+  const entries = mediaAttachmentEntries(selector, scope);
+  const entry = entries[removeIndex];
+  if (!entry) return;
+  if (entry.source === "camera") {
+    const files = cameraCapturedFiles.get(entry.input) || [];
+    files.splice(entry.index, 1);
+    if (files.length) cameraCapturedFiles.set(entry.input, files);
+    else cameraCapturedFiles.delete(entry.input);
+  } else {
+    const files = Array.from(entry.input.files || []);
+    files.splice(entry.index, 1);
+    try {
+      const transfer = new DataTransfer();
+      files.forEach((file) => transfer.items.add(file));
+      entry.input.files = transfer.files;
+    } catch {
+      entry.input.value = "";
+    }
+  }
+  entry.input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function handleCameraAttachmentClick(event) {
+  const input = event.target?.closest?.("input[data-camera-input]");
+  if (!input) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation?.();
+  openCameraCapture(input);
+}
+
+async function openCameraCapture(input) {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    notify("Camera unavailable", "This browser cannot open the camera from the app.", "warning");
+    return;
+  }
+  let facingMode = "environment";
+  let stream;
+  try {
+    stream = await getCameraCaptureStream(facingMode);
+  } catch (error) {
+    notify("Camera unavailable", cameraErrorText(error), "warning");
+    return;
+  }
+
+  const overlay = document.createElement("div");
+  overlay.className = "camera-capture-overlay";
+  overlay.innerHTML = `
+    <section class="camera-capture-panel" role="dialog" aria-modal="true" aria-label="Camera capture">
+      <header>
+        <strong>Camera</strong>
+        <div class="camera-capture-header-actions">
+          <button type="button" class="camera-capture-flip" data-camera-flip aria-label="Switch camera"><i class="fa-solid fa-camera-rotate"></i></button>
+          <button type="button" class="camera-capture-close" data-camera-close aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </header>
+      <video data-camera-preview autoplay muted playsinline></video>
+      <div class="camera-capture-status" data-camera-status>Ready</div>
+      <div class="camera-capture-actions">
+        <button class="btn btn-light" type="button" data-camera-photo><i class="fa-solid fa-camera"></i> Photo</button>
+        <button class="btn btn-primary" type="button" data-camera-record><i class="fa-solid fa-video"></i> Record</button>
+        <button class="btn btn-danger" type="button" data-camera-stop hidden><i class="fa-solid fa-stop"></i> Stop</button>
+      </div>
+    </section>
+  `;
+  document.body.appendChild(overlay);
+
+  const video = $("[data-camera-preview]", overlay);
+  const status = $("[data-camera-status]", overlay);
+  const recordButton = $("[data-camera-record]", overlay);
+  const stopButton = $("[data-camera-stop]", overlay);
+  const photoButton = $("[data-camera-photo]", overlay);
+  let recorder = null;
+  let chunks = [];
+  let settled = false;
+
+  const currentCount = () => mediaAttachmentFiles(input.matches("[data-feed-media]")
+    ? "[data-feed-media]"
+    : input.matches("[data-request-attachments]")
+      ? "[data-request-attachments]"
+      : input.matches("[data-completion-attachments]")
+        ? "[data-completion-attachments]"
+        : input.matches("[data-dispute-attachments]")
+          ? "[data-dispute-attachments]"
+          : input.matches("[data-chat-attachments]")
+            ? "[data-chat-attachments]"
+            : input.matches("[data-direct-chat-attachments]")
+              ? "[data-direct-chat-attachments]"
+              : "input[type='file']").length;
+  const stopStream = () => {
+    stream?.getTracks?.().forEach((track) => track.stop());
+  };
+  const close = () => {
+    if (settled) return;
+    settled = true;
+    try {
+      if (recorder?.state === "recording") recorder.stop();
+    } catch {}
+    stopStream();
+    overlay.remove();
+  };
+  const attachAndContinue = (file) => {
+    if (currentCount() >= MEDIA_ATTACHMENT_LIMIT) {
+      status.textContent = `Maximum of ${MEDIA_ATTACHMENT_LIMIT} attachments reached.`;
+      return;
+    }
+    appendCameraInputFile(input, file);
+    status.textContent = `Added ${currentCount()} of ${MEDIA_ATTACHMENT_LIMIT}.`;
+  };
+
+  video.srcObject = stream;
+  video.play?.().catch(() => {});
+
+  $("[data-camera-close]", overlay)?.addEventListener("click", close);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) close();
+  });
+
+  photoButton?.addEventListener("click", async () => {
+    try {
+      attachAndContinue(await captureCameraPhoto(video));
+    } catch (error) {
+      status.textContent = error.message || "Could not take photo.";
+    }
+  });
+
+  $("[data-camera-flip]", overlay)?.addEventListener("click", async () => {
+    if (recorder?.state === "recording") {
+      status.textContent = "Stop recording before switching cameras.";
+      return;
+    }
+    const nextFacingMode = facingMode === "environment" ? "user" : "environment";
+    status.textContent = nextFacingMode === "environment" ? "Switching to rear camera..." : "Switching to front camera...";
+    try {
+      const nextStream = await getCameraCaptureStream(nextFacingMode);
+      stopStream();
+      stream = nextStream;
+      facingMode = nextFacingMode;
+      video.srcObject = stream;
+      await video.play?.();
+      status.textContent = facingMode === "environment" ? "Rear camera ready." : "Front camera ready.";
+    } catch (error) {
+      status.textContent = "Camera switch unavailable.";
+    }
+  });
+
+  recordButton?.addEventListener("click", () => {
+    if (currentCount() >= MEDIA_ATTACHMENT_LIMIT) {
+      status.textContent = `Maximum of ${MEDIA_ATTACHMENT_LIMIT} attachments reached.`;
+      return;
+    }
+    try {
+      const mimeType = preferredVideoMimeType();
+      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      chunks = [];
+      recorder.addEventListener("dataavailable", (event) => {
+        if (event.data?.size) chunks.push(event.data);
+      });
+      recorder.addEventListener("stop", () => {
+        if (settled) return;
+        const type = recorder.mimeType || mimeType || "video/webm";
+        const extension = type.includes("mp4") ? "mp4" : "webm";
+        attachAndContinue(new File(chunks, `kaila-video-${Date.now()}.${extension}`, { type }));
+        recordButton.hidden = false;
+        stopButton.hidden = true;
+        photoButton.disabled = false;
+      });
+      recorder.start();
+      status.textContent = "Recording...";
+      recordButton.hidden = true;
+      stopButton.hidden = false;
+      photoButton.disabled = true;
+    } catch (error) {
+      status.textContent = error.message || "Could not start video recording.";
+    }
+  });
+
+  stopButton?.addEventListener("click", () => {
+    if (recorder?.state === "recording") recorder.stop();
+  });
+}
+
+async function getCameraCaptureStream(facingMode = "environment") {
+  const video = { facingMode: { ideal: facingMode } };
+  try {
+    return await navigator.mediaDevices.getUserMedia({ video, audio: true });
+  } catch (error) {
+    return navigator.mediaDevices.getUserMedia({ video, audio: false });
+  }
+}
+
+function captureCameraPhoto(video) {
+  return new Promise((resolve, reject) => {
+    const width = video.videoWidth || 1280;
+    const height = video.videoHeight || 720;
+    if (!video.videoWidth && !video.videoHeight) {
+      reject(new Error("Camera preview is not ready yet."));
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    context.drawImage(video, 0, 0, width, height);
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("Could not take photo."));
+        return;
+      }
+      resolve(new File([blob], `kaila-photo-${Date.now()}.jpg`, { type: "image/jpeg" }));
+    }, "image/jpeg", 0.9);
+  });
+}
+
+function preferredVideoMimeType() {
+  const types = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+    "video/mp4",
+  ];
+  return types.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || "";
+}
+
+function appendCameraInputFile(input, file) {
+  const files = cameraCapturedFiles.get(input) || [];
+  if (files.length >= MEDIA_ATTACHMENT_LIMIT) return;
+  files.push(file);
+  cameraCapturedFiles.set(input, files);
+  input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 async function saveSettings(event) {

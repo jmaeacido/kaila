@@ -1685,7 +1685,7 @@ select[multiple].form-select {
 }
 
 .feed-upload-preview {
-  grid-template-columns: minmax(0, 7rem);
+  grid-template-columns: repeat(auto-fill, minmax(4.75rem, 7rem));
 }
 
 .feed-composer-actions {
@@ -1834,6 +1834,33 @@ select[multiple].form-select {
 .feed-body {
   margin: 0;
   white-space: pre-wrap;
+}
+
+.feed-media-grid {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.feed-media-grid.multi {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+}
+
+.feed-media-button {
+  position: relative;
+  min-width: 0;
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 8px;
+  background: #0b1618;
+  color: inherit;
+  cursor: zoom-in;
+}
+
+.feed-media-button:focus-visible {
+  outline: 3px solid rgba(13, 110, 253, 0.28);
+  outline-offset: 2px;
 }
 
 .feed-media {
@@ -3194,11 +3221,33 @@ select[multiple].form-select {
 }
 
 .upload-thumb {
+  position: relative;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
+  cursor: zoom-in;
+}
+
+.upload-thumb-remove {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  z-index: 2;
+  width: 1.55rem;
+  height: 1.55rem;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(5, 20, 27, 0.82);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.upload-thumb-remove:active {
+  transform: scale(0.96);
 }
 
 .upload-thumb img,
@@ -3218,6 +3267,80 @@ select[multiple].form-select {
   font-size: 0.68rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.camera-capture-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(5, 20, 27, 0.78);
+}
+
+.camera-capture-panel {
+  width: min(100%, 720px);
+  max-height: calc(100dvh - 2rem);
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border-radius: 8px;
+  background: #0b1720;
+  color: #fff;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.camera-capture-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.camera-capture-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.camera-capture-close,
+.camera-capture-flip {
+  width: 2.25rem;
+  height: 2.25rem;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.camera-capture-panel video {
+  width: 100%;
+  max-height: min(62dvh, 560px);
+  aspect-ratio: 4 / 3;
+  display: block;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #000;
+}
+
+.camera-capture-status {
+  min-height: 1.25rem;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.88rem;
+}
+
+.camera-capture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: center;
+}
+
+.camera-capture-actions .btn {
+  min-width: 8.5rem;
 }
 
 .status-dot {
@@ -10545,5 +10668,37 @@ body.app-mode .app-view.active,
   .register-form > button[type="submit"] {
     width: min(100%, 28rem) !important;
     justify-self: end;
+  }
+}
+
+@media (min-width: 768px) {
+  .app-header {
+    max-width: min(100%, 1120px);
+  }
+
+  .app-tabs {
+    position: relative !important;
+    top: auto !important;
+    right: auto !important;
+    bottom: auto !important;
+    left: auto !important;
+    z-index: 1;
+    margin: 0 0 1.25rem !important;
+  }
+
+  .app-tab-content {
+    margin-top: 0;
+  }
+
+  .app-title > div {
+    min-width: 0;
+    max-width: none;
+  }
+
+  .app-title span {
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
   }
 }
