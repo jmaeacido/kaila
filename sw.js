@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v210-facebook-email-rerequest";
+const CACHE_NAME = "kaila-pwa-v211-facebook-browser-email";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"
