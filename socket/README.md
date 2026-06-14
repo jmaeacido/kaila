@@ -100,14 +100,18 @@ KAILA_ANDROID_RELEASE_NOTES=
 ```
 
 Keep the stable Google Drive APK URL in tracked `socket/mobile-update.json`.
-Each Android Gradle build auto-generates a fresh `versionCode` and `versionName`
-using the greater of the current epoch seconds or the previous
-`latestVersionCode + 1`, then rewrites that manifest while preserving the
-existing URL when `.env` does not define one. Every `./gradlew assembleDebug`
-run therefore moves the published version upward. `/api/mobile-update` reads the
-manifest on every request, so a server without the Android SDK only needs the
-committed manifest from `git pull`. If the manifest is missing, the endpoint
-falls back to optional `KAILA_ANDROID_*` values from `socket/.env`.
+The update prompt opens `/api/mobile-update/apk`, which redirects to a fresh
+direct Google Drive download for that configured file. Each Android Gradle build
+auto-generates a fresh `versionCode` and `versionName` using the greater of the
+current epoch seconds or the previous `latestVersionCode + 1`, then rewrites
+that manifest while preserving the existing URL when `.env` does not define
+one. Every `./gradlew assembleDebug` run therefore moves the published version
+upward. `/api/mobile-update` reads the manifest on every request, so a server
+without the Android SDK only needs the committed manifest from `git pull` and a
+Node service restart. Replace the APK by updating the same Google Drive file
+version; if you upload a separate Drive file, update `apkUrl` to that new file
+link. If the manifest is missing, the endpoint falls back to optional
+`KAILA_ANDROID_*` values from `socket/.env`.
 
 ## Events
 

@@ -1,8 +1,8 @@
 {
-    "latestVersionCode": 1781403375,
-    "latestVersionName": "1.0.1781403375",
+    "latestVersionCode": 1781403703,
+    "latestVersionName": "1.0.1781403703",
     "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
-    "releaseNotes": "Added a Beauty, makeup, and events service category for requests and provider profiles.",
-    "generatedAt": "2026-06-14T10:16:26+08:00",
+    "releaseNotes": "Fixed Android update downloads so the app opens a fresh direct APK download instead of the cached Drive preview page.",
+    "generatedAt": "2026-06-14T10:21:43+08:00",
     "source": "auto"
 }

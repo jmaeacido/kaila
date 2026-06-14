@@ -126,10 +126,53 @@ function readMobileUpdateMetadata() {
     latestVersionCode,
     latestVersionName,
     apkUrl,
+    downloadUrl: latestVersionCode > 0 && Boolean(apkUrl)
+      ? `/api/mobile-update/apk?versionCode=${encodeURIComponent(String(latestVersionCode))}`
+      : "",
     releaseNotes,
     generatedAt: sanitizeToken(metadata.generatedAt || ""),
     source: sanitizeToken(metadata.source || (hasMetadataFile ? "metadata" : "env")),
   };
+}
+
+function cacheBustedUrl(rawUrl, versionCode = "") {
+  const url = new URL(rawUrl);
+  if (versionCode) url.searchParams.set("versionCode", String(versionCode));
+  url.searchParams.set("_", String(Date.now()));
+  return url.toString();
+}
+
+function googleDriveDirectDownloadUrl(rawUrl, versionCode = "") {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return "";
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (!hostname.endsWith("drive.google.com") && !hostname.endsWith("googleusercontent.com")) return "";
+
+  const filePathMatch = parsed.pathname.match(/\/file\/d\/([^/]+)/);
+  const id = parsed.searchParams.get("id") || (filePathMatch ? filePathMatch[1] : "");
+  if (!id) return cacheBustedUrl(rawUrl, versionCode);
+
+  const direct = new URL("https://drive.google.com/uc");
+  direct.searchParams.set("export", "download");
+  direct.searchParams.set("id", id);
+  direct.searchParams.set("confirm", "t");
+  if (versionCode) direct.searchParams.set("versionCode", String(versionCode));
+  direct.searchParams.set("_", String(Date.now()));
+  return direct.toString();
+}
+
+function mobileUpdateApkRedirectUrl(metadata) {
+  const rawUrl = sanitizeToken(metadata.apkUrl || "");
+  if (!rawUrl) return "";
+  try {
+    return googleDriveDirectDownloadUrl(rawUrl, metadata.latestVersionCode) || cacheBustedUrl(rawUrl, metadata.latestVersionCode);
+  } catch {
+    return rawUrl;
+  }
 }
 
 function parseMessageEncryptionKey(value) {
@@ -3618,6 +3661,16 @@ app.get("/api/mobile-update", (req, res) => {
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
   res.json(readMobileUpdateMetadata());
+});
+
+app.get("/api/mobile-update/apk", (req, res) => {
+  const metadata = readMobileUpdateMetadata();
+  const redirectUrl = metadata.enabled ? mobileUpdateApkRedirectUrl(metadata) : "";
+  if (!redirectUrl) return res.status(404).json({ error: "Android update APK is not available" });
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+  res.redirect(302, redirectUrl);
 });
 
 app.get("/api/route-distance", requireUser, async (req, res) => {

@@ -489,6 +489,19 @@ function mobileUpdateUrl() {
   return `${apiBase()}/api/mobile-update?_=${Date.now()}`;
 }
 
+function mobileUpdateDownloadUrl(update = {}) {
+  const target = String(update.downloadUrl || update.apkUrl || "").trim();
+  if (!target) return "";
+  try {
+    const url = new URL(target, target.startsWith("/") ? `${apiBase()}/` : window.location.href);
+    if (update.latestVersionCode) url.searchParams.set("versionCode", String(update.latestVersionCode));
+    url.searchParams.set("_", String(Date.now()));
+    return url.toString();
+  } catch {
+    return target;
+  }
+}
+
 function setupMobileUpdateChecks() {
   if (!isNativeApp() || state.mobileUpdateChecksBound) return;
   state.mobileUpdateChecksBound = true;
@@ -546,7 +559,7 @@ async function promptMobileUpdate(update = {}) {
     confirmButtonText: "Download Update",
     cancelButtonText: "Later",
   });
-  if (result.isConfirmed) openExternalUrl(update.apkUrl);
+  if (result.isConfirmed) openExternalUrl(mobileUpdateDownloadUrl(update));
 }
 
 function isNativeApp() {
