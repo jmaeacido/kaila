@@ -170,6 +170,11 @@ public class KailaNativePlugin extends Plugin {
             call.reject("Facebook login URL is required");
             return;
         }
+        boolean preferBrowser = Boolean.TRUE.equals(call.getBoolean("preferBrowser", false));
+        if (preferBrowser) {
+            openFacebookBrowserLogin(call, url);
+            return;
+        }
 
         Intent appIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("fb://facewebmodal/f?href=" + Uri.encode(url)));
         appIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -194,16 +199,20 @@ public class KailaNativePlugin extends Plugin {
         }
 
         try {
-            Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-            browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            getContext().startActivity(browserIntent);
-            JSObject result = new JSObject();
-            result.put("opened", true);
-            result.put("target", "browser");
-            call.resolve(result);
+            openFacebookBrowserLogin(call, url);
         } catch (ActivityNotFoundException error) {
             call.reject("No app can open Facebook login");
         }
+    }
+
+    private void openFacebookBrowserLogin(PluginCall call, String url) {
+        Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(browserIntent);
+        JSObject result = new JSObject();
+        result.put("opened", true);
+        result.put("target", "browser");
+        call.resolve(result);
     }
 
     private void createCallChannel() {

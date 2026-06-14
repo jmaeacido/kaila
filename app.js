@@ -1513,7 +1513,7 @@ async function startNativeFacebookRedirectAuth(mode = "login") {
   url.searchParams.set("auth_type", "rerequest");
   url.searchParams.set("return_scopes", "true");
   url.searchParams.set("state", marker);
-  await bridge.openFacebookLogin({ url: url.toString() });
+  await bridge.openFacebookLogin({ url: url.toString(), preferBrowser: true });
 }
 
 async function handleNativeOAuthLaunchUrl(url = "") {
