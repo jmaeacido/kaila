@@ -1141,6 +1141,7 @@ function route(name) {
   if (state.session && ["landing", "login", "register", "public-post"].includes(name)) name = "app";
   $$("[data-view]").forEach((view) => view.classList.toggle("active", view.dataset.view === name));
   document.body.classList.toggle("app-mode", name === "app");
+  window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   toggleProviderCategory();
   if (name === "login") hydrateSavedLoginCredentials();
   if (name === "app" && state.session) loadFeed({ silent: true }).catch(() => {});
@@ -1784,6 +1785,9 @@ function renderNav() {
   $("[data-current-user]").classList.toggle("d-none", !signedIn);
   $("[data-app-link]").classList.toggle("d-none", !signedIn);
   $$("[data-notification-bell], [data-message-bell]").forEach((button) => button.classList.toggle("d-none", !signedIn));
+  const showSocketDebug = signedIn && STAFF_ROLES.includes(state.session?.role);
+  const socketButton = $("[data-socket-button]");
+  if (socketButton) socketButton.hidden = !showSocketDebug;
   if (signedIn) $("[data-current-user]").textContent = `${displayUserName(state.session)} (${roleLabel(state.session.role)})`;
   const summary = $("[data-current-user-summary]");
   if (summary && signedIn) summary.textContent = `${displayUserName(state.session)} - ${state.session.area || roleLabel(state.session.role)}`;
@@ -1846,7 +1850,13 @@ function renderTabs() {
   if (opsTab) opsTab.hidden = state.session?.role !== "admin";
   if (activityTab) activityTab.hidden = !canViewActivity;
   if (validationTab) validationTab.hidden = !["admin", "ops"].includes(state.session?.role);
-  if (hideProviders && providersTab.querySelector(".nav-link")?.classList.contains("active")) {
+  const tabBar = $(".app-tabs");
+  if (tabBar) {
+    const visibleTabCount = $$(".app-tabs .nav-link").filter((tab) => !tab.hidden).length;
+    tabBar.dataset.tabDensity = visibleTabCount > 6 ? "compact" : "default";
+    tabBar.dataset.accountRole = state.session?.role || "";
+  }
+  if (hideProviders && providersTab?.classList.contains("active")) {
     activateTab("#feed-pane");
   }
   if (!["admin", SUPPORT_ROLE].includes(state.session?.role) && clientsTab?.classList.contains("active")) activateTab("#feed-pane");
@@ -1856,6 +1866,7 @@ function renderTabs() {
   if (!canViewActivity && activityTab?.classList.contains("active")) activateTab("#feed-pane");
   if (!["admin", "ops"].includes(state.session?.role) && validationTab?.classList.contains("active")) activateTab("#feed-pane");
   if (isSupport && !["#feed-pane", "#requests-pane", "#clients-pane", "#providers-pane", "#customer-service-pane", "#inbox-pane", "#activity-pane", "#settings-pane"].includes(state.lastDashboardTabTarget)) activateTab("#feed-pane");
+  renderJobTabBadge();
 }
 
 function activateTab(target) {
@@ -1865,6 +1876,7 @@ function activateTab(target) {
     pane.classList.toggle("active", active);
     pane.classList.toggle("show", active);
   });
+  window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   rememberDashboardTab(target);
   if (target === "#activity-pane") clearUnreadNotifications();
   if (target === "#requests-pane") clearVisibleProviderJobNotifications();
@@ -2082,6 +2094,7 @@ function renderFeed() {
   }
   const officialWrap = $("[data-feed-official-wrap]");
   if (officialWrap) officialWrap.hidden = !canPostOfficialFeed();
+  renderHomeWorkspace();
   if (!state.session) {
     list.innerHTML = "";
     return;
@@ -2095,6 +2108,17 @@ function renderFeed() {
     : `<div class="empty-card"><strong>No posts yet</strong><p>Share the first service update or community note.</p></div>`;
   bindFeedPostActions(list);
   applyHomeSearch();
+}
+
+function renderHomeWorkspace() {
+  const isAdmin = state.session?.role === "admin";
+  $(".home-hero")?.toggleAttribute("hidden", isAdmin);
+  $(".home-categories")?.toggleAttribute("hidden", isAdmin);
+  $("[data-home-search-empty]")?.toggleAttribute("hidden", true);
+  const feedTitle = $(".home-feed-title strong");
+  const feedSubtitle = $(".home-feed-title span");
+  if (feedTitle) feedTitle.textContent = isAdmin ? "Admin activity" : "Recent activity";
+  if (feedSubtitle) feedSubtitle.textContent = isAdmin ? "Team notes, official posts, and marketplace updates" : "Updates, tips, and community posts";
 }
 
 function bindFeedAudienceSelector(scope = document) {
@@ -2294,15 +2318,72 @@ function renderFeedCommentMoreMenu(comment = {}) {
   `;
 }
 
+function renderMediaFeedComment(comment = {}, options = {}) {
+  const isReply = Boolean(options.isReply);
+  const stateClass = comment.deleted ? "deleted" : comment.hidden ? "hidden" : "";
+  return `
+    <div class="feed-comment-wrap ${stateClass}" data-media-feed-comment-wrap data-media-feed-comment="${escapeAttribute(comment.id)}">
+      <div class="feed-comment">
+        <img src="${escapeAttribute(resolveMediaUrl(comment.authorPhotoUrl))}" alt="">
+        <div>
+          <strong>${escapeHtml(comment.authorName || "KAILA user")} ${comment.official ? `<span class="verified-badge"><i class="fa-solid fa-circle-check"></i></span>` : ""}</strong>
+          <p>${escapeHtml(comment.body || "")}</p>
+          <div class="feed-comment-actions">
+            ${renderMediaFeedCommentReactionButtons(comment)}
+            ${isReply || comment.hidden || comment.deleted ? "" : `<button type="button" data-media-feed-reply-toggle title="Reply" aria-label="Reply"><span aria-hidden="true">💬</span></button>`}
+            ${renderMediaFeedCommentMoreMenu(comment)}
+          </div>
+        </div>
+      </div>
+      ${isReply ? "" : `<form class="feed-comment-form feed-reply-form" data-media-feed-reply-form hidden>
+        <input class="form-control form-control-sm" name="body" maxlength="800" placeholder="Write a reply">
+        <button class="btn btn-sm btn-primary" type="submit" aria-label="Send reply"><i class="fa-solid fa-paper-plane"></i></button>
+      </form>`}
+      ${(comment.replies || []).length ? `<div class="feed-replies">${comment.replies.map((reply) => renderMediaFeedComment(reply, { isReply: true })).join("")}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderMediaFeedCommentReactionButtons(comment = {}) {
+  if (comment.hidden || comment.deleted) return "";
+  const labels = { like: "Like", helpful: "Helpful", interested: "Interested" };
+  const icons = { like: "👍", helpful: "🙌", interested: "⭐" };
+  return ["like", "helpful", "interested"].map((reaction) => `
+    <button class="${comment.viewerReactions?.includes(reaction) ? "active" : ""}" type="button" data-media-feed-comment-reaction="${reaction}" title="${escapeAttribute(labels[reaction])}" aria-label="${escapeAttribute(labels[reaction])}">
+      <span aria-hidden="true">${escapeHtml(icons[reaction])}</span>
+      <b>${Number(comment.reactions?.[reaction] || 0)}</b>
+    </button>
+  `).join("");
+}
+
+function renderMediaFeedCommentMoreMenu(comment = {}) {
+  if (!comment.canModerate || comment.deleted) return "";
+  const actions = [
+    comment.hidden && !comment.deleted ? `<button type="button" data-media-feed-comment-moderate="unhide" role="menuitem">Unhide</button>` : "",
+    !comment.hidden && !comment.deleted ? `<button type="button" data-media-feed-comment-moderate="hide" role="menuitem">Hide</button>` : "",
+    !comment.deleted ? `<button type="button" data-media-feed-comment-moderate="delete" role="menuitem">Delete</button>` : "",
+  ].filter(Boolean).join("");
+  if (!actions) return "";
+  return `
+    <span class="feed-comment-more">
+      <button type="button" data-media-feed-comment-more title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true">⋮</span></button>
+      <span class="feed-comment-more-menu" data-feed-comment-more-menu role="menu" hidden>${actions}</span>
+    </span>
+  `;
+}
+
 function renderFeedMedia(media = []) {
   if (!media.length) return "";
+  const visibleMedia = media.slice(0, 4);
+  const remaining = Math.max(0, media.length - visibleMedia.length);
   return `
-    <div class="feed-media-grid ${media.length > 1 ? "multi" : ""}">
-      ${media.map((item, index) => {
+    <div class="feed-media-grid ${media.length > 1 ? "multi" : ""} count-${visibleMedia.length}">
+      ${visibleMedia.map((item, index) => {
         const url = resolveMediaUrl(item.url);
+        const extraOverlay = remaining && index === visibleMedia.length - 1 ? `<span class="feed-media-more">+${remaining}</span>` : "";
         return item.mimeType?.startsWith("video/")
-          ? `<button class="feed-media-button" type="button" data-feed-media-open="${index}" aria-label="Open video ${index + 1}"><video class="feed-media" src="${escapeAttribute(url)}" muted playsinline preload="metadata"></video><span class="media-type">Video</span></button>`
-          : `<button class="feed-media-button" type="button" data-feed-media-open="${index}" aria-label="Open photo ${index + 1}"><img class="feed-media" src="${escapeAttribute(url)}" alt="${escapeAttribute(item.originalName || "Feed media")}"><span class="media-type">Photo</span></button>`;
+          ? `<button class="feed-media-button" type="button" data-feed-media-open="${index}" aria-label="Open video ${index + 1}"><video class="feed-media" src="${escapeAttribute(url)}" muted playsinline preload="metadata"></video><span class="media-type">Video</span>${extraOverlay}</button>`
+          : `<button class="feed-media-button" type="button" data-feed-media-open="${index}" aria-label="Open photo ${index + 1}"><img class="feed-media" src="${escapeAttribute(url)}" alt="${escapeAttribute(item.originalName || "Feed media")}"><span class="media-type">Photo</span>${extraOverlay}</button>`;
       }).join("")}
     </div>
   `;
@@ -2322,7 +2403,7 @@ function bindFeedPostActions(scope, options = {}) {
   $$("[data-feed-media-open]", scope).forEach((button) => {
     button.addEventListener("click", () => {
       const postId = button.closest("[data-feed-post]")?.dataset.feedPost || "";
-      const post = state.feedPosts.find((item) => item.id === postId);
+      const post = state.feedPosts.find((item) => item.id === postId) || (state.publicPost?.id === postId ? state.publicPost : null);
       openFeedMediaViewer(post, Number(button.dataset.feedMediaOpen || 0));
     });
   });
@@ -2430,7 +2511,7 @@ function closeFeedCommentMoreMenus() {
     floatingMenu.hidden = true;
     floatingMenu.innerHTML = "";
   }
-  $$("[data-feed-comment-more]").forEach((button) => button.setAttribute("aria-expanded", "false"));
+  $$("[data-feed-comment-more], [data-media-feed-comment-more]").forEach((button) => button.setAttribute("aria-expanded", "false"));
 }
 
 function feedCommentFloatingMenu() {
@@ -2567,8 +2648,10 @@ async function toggleFeedReaction(postId, reaction) {
     });
     state.feedPosts = result.posts || state.feedPosts;
     renderFeed();
+    return result.posts;
   } catch (error) {
     notify("Reaction failed", feedActionErrorMessage(error, "post reaction"), "error");
+    return null;
   }
 }
 
@@ -2789,6 +2872,21 @@ function promptFeedAuth() {
   });
 }
 
+function visibleJobRequestsForSession() {
+  if (state.session?.role === "ops") return [];
+  if (state.session?.role === "admin" || state.session?.role === SUPPORT_ROLE) return state.requests;
+  if (canActAsProvider()) return state.requests.filter(isVisibleToProvider);
+  return state.requests.filter((request) => request.clientId === state.session?.id);
+}
+
+function activeJobRequestsForBadge(requests = visibleJobRequestsForSession()) {
+  return requests.filter((request) => !["Cancelled", "Payment Released", "Rated", "Rated / Closed", "Resolved"].includes(request.status));
+}
+
+function renderJobTabBadge() {
+  setBellCount($("[data-jobs-count]"), state.session ? activeJobRequestsForBadge().length : 0);
+}
+
 function renderRequests() {
   const host = $("[data-request-list]");
   if (!host) return;
@@ -2796,11 +2894,7 @@ function renderRequests() {
     host.innerHTML = "";
     return;
   }
-  let visible = state.session?.role === "admin" || state.session?.role === SUPPORT_ROLE
-    ? state.requests
-    : canActAsProvider()
-      ? state.requests.filter(isVisibleToProvider)
-      : state.requests.filter((request) => request.clientId === state.session?.id);
+  let visible = visibleJobRequestsForSession();
   const adminPanel = state.session?.role === "admin" ? adminRequestMetricPanel() : "";
   if (state.session?.role === "admin") visible = adminMetricRequests(visible);
   const jobsHeader = renderJobsHeader(visible);
@@ -2855,6 +2949,7 @@ function renderJobsHeader(requests = []) {
   const counts = Object.fromEntries(filters.map(([key]) => [key, filterJobRequests(requests, key).length]));
   const activeFilter = filters.some(([key]) => key === state.jobFilter) ? state.jobFilter : "all";
   if (activeFilter !== state.jobFilter) state.jobFilter = activeFilter;
+  const roleToggle = renderJobsRoleToggle();
   return `
     <section class="jobs-toolbar" aria-label="Jobs">
       <div class="jobs-toolbar-head">
@@ -2866,15 +2961,31 @@ function renderJobsHeader(requests = []) {
           <i class="fa-solid fa-magnifying-glass"></i>
         </button>
       </div>
+      ${roleToggle}
       <div class="jobs-filter-tabs" role="tablist" aria-label="Filter jobs">
         ${filters.map(([key, label]) => `
           <button type="button" class="${key === activeFilter ? "active" : ""}" data-job-filter="${key}" role="tab" aria-selected="${key === activeFilter ? "true" : "false"}">
             <span>${escapeHtml(label)}</span>
-            <b>${counts[key] || 0}</b>
+            ${key !== "all" && counts[key] ? `<b aria-label="${counts[key]} ${escapeAttribute(label)} job${counts[key] === 1 ? "" : "s"}">${counts[key]}</b>` : ""}
           </button>
         `).join("")}
       </div>
     </section>
+  `;
+}
+
+function renderJobsRoleToggle() {
+  if (!canActAsMarketplace() || !ownProviderProfile()) return "";
+  ensureActiveRole();
+  return `
+    <div class="jobs-role-toggle" role="group" aria-label="Choose active marketplace role">
+      <button type="button" class="${state.activeRole === "client" ? "active" : ""}" data-active-role="client" aria-pressed="${state.activeRole === "client" ? "true" : "false"}">
+        <i class="fa-solid fa-user"></i><span>Client</span>
+      </button>
+      <button type="button" class="${state.activeRole === "provider" ? "active" : ""}" data-active-role="provider" aria-pressed="${state.activeRole === "provider" ? "true" : "false"}">
+        <i class="fa-solid fa-screwdriver-wrench"></i><span>Provider</span>
+      </button>
+    </div>
   `;
 }
 
@@ -2883,6 +2994,7 @@ function bindJobsHeaderActions(host = document) {
     state.jobFilter = button.dataset.jobFilter || "all";
     renderRequests();
   }));
+  $$("[data-active-role]", host).forEach((button) => button.addEventListener("click", () => setActiveRole(button.dataset.activeRole)));
   $$("[data-home-tab]", host).forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.homeTab)));
 }
 
@@ -3825,48 +3937,360 @@ async function openFeedMediaViewer(post = {}, startIndex = 0) {
   const media = post?.media || [];
   if (!media.length) return;
   await openMediaGallery(
-    media.map((item) => ({
-      url: resolveMediaUrl(item.url),
-      mimeType: item.mimeType,
-      name: item.originalName,
-    })),
+    mediaGalleryItemsFromPost(post),
     startIndex,
     "Feed media",
+    { feedPost: post },
   );
 }
 
-async function openMediaGallery(items = [], startIndex = 0, title = "Media") {
+function mediaGalleryItemsFromPost(post = {}) {
+  return (post.media || []).map((item) => ({
+    id: item.id,
+    postId: post.id,
+    url: resolveMediaUrl(item.url),
+    mimeType: item.mimeType,
+    name: item.originalName,
+    media: item,
+  }));
+}
+
+function feedMediaShareUrl(post = {}, media = {}) {
+  const url = new URL(feedShareUrl(post));
+  if (media?.id) url.searchParams.set("media", media.id);
+  return url.toString();
+}
+
+function mediaViewerFeedActions(post = {}, item = {}) {
+  const media = item.media || {};
+  if (!post?.id || !media?.id) return "";
+  const shareUrl = feedMediaShareUrl(post, media);
+  return `
+    <div class="media-viewer-actions" data-media-feed-actions data-feed-post="${escapeAttribute(post.id)}" data-feed-media="${escapeAttribute(media.id)}">
+      ${["like", "helpful", "interested"].map((reaction) => `
+        <button class="${media.viewerReactions?.includes(reaction) ? "active" : ""}" type="button" data-media-feed-reaction="${reaction}">
+          <i class="fa-solid ${reaction === "like" ? "fa-thumbs-up" : reaction === "helpful" ? "fa-hand-holding-heart" : "fa-star"}"></i>
+          <span>${escapeHtml(capitalize(reaction))}</span>
+          <b>${Number(media.reactions?.[reaction] || 0)}</b>
+        </button>
+      `).join("")}
+      ${post.visibility === "public" ? `<button type="button" data-media-feed-share="${escapeAttribute(shareUrl)}"><i class="fa-solid fa-share-nodes"></i><span>Share</span><b>${Number(media.shareCount || 0)}</b></button>` : ""}
+      <div class="media-viewer-comments">
+        <div class="feed-comments media-viewer-comment-list">
+          ${(media.comments || []).slice(-4).map((comment) => renderMediaFeedComment(comment)).join("") || `<span>No media comments yet</span>`}
+        </div>
+        <form class="feed-comment-form" data-media-feed-comment-form>
+          <input class="form-control form-control-sm" name="body" maxlength="800" placeholder="Comment on this media">
+          <button class="btn btn-sm btn-primary" type="submit" aria-label="Send media comment"><i class="fa-solid fa-paper-plane"></i></button>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+function refreshFeedPostFromPosts(posts = [], postId = "") {
+  if (!Array.isArray(posts) || !posts.length || !postId) return null;
+  state.feedPosts = posts;
+  const refreshed = posts.find((item) => item.id === postId) || null;
+  if (state.publicPost?.id === postId && refreshed) state.publicPost = refreshed;
+  renderFeed();
+  return refreshed;
+}
+
+async function toggleFeedMediaReaction(postId, mediaId, reaction) {
+  if (!postId || !mediaId || !state.session) return promptFeedAuth();
+  try {
+    const result = await apiFetch(`/api/feed/${encodeURIComponent(postId)}/media/${encodeURIComponent(mediaId)}/reactions`, {
+      method: "POST",
+      body: JSON.stringify({ reaction }),
+    });
+    return refreshFeedPostFromPosts(result.posts || [], postId);
+  } catch (error) {
+    notify("Reaction failed", feedActionErrorMessage(error, "media reaction"), "error");
+    return null;
+  }
+}
+
+async function submitFeedMediaComment(postId, mediaId, body) {
+  if (!postId || !mediaId || !state.session) return promptFeedAuth();
+  try {
+    const result = await apiFetch(`/api/feed/${encodeURIComponent(postId)}/media/${encodeURIComponent(mediaId)}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    });
+    return refreshFeedPostFromPosts(result.posts || [], postId);
+  } catch (error) {
+    notify("Comment failed", feedActionErrorMessage(error, "media comment"), "error");
+    return null;
+  }
+}
+
+async function submitFeedMediaCommentReply(postId, mediaId, commentId, body) {
+  if (!postId || !mediaId || !commentId || !state.session) return promptFeedAuth();
+  try {
+    const result = await apiFetch(`/api/feed/${encodeURIComponent(postId)}/media/${encodeURIComponent(mediaId)}/comments/${encodeURIComponent(commentId)}/replies`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    });
+    return refreshFeedPostFromPosts(result.posts || [], postId);
+  } catch (error) {
+    notify("Reply failed", feedActionErrorMessage(error, "media comment reply"), "error");
+    return null;
+  }
+}
+
+async function toggleFeedMediaCommentReaction(postId, mediaId, commentId, reaction) {
+  if (!postId || !mediaId || !commentId || !state.session) return promptFeedAuth();
+  try {
+    const result = await apiFetch(`/api/feed/${encodeURIComponent(postId)}/media/${encodeURIComponent(mediaId)}/comments/${encodeURIComponent(commentId)}/reactions`, {
+      method: "POST",
+      body: JSON.stringify({ reaction }),
+    });
+    return refreshFeedPostFromPosts(result.posts || [], postId);
+  } catch (error) {
+    notify("Reaction failed", feedActionErrorMessage(error, "media comment reaction"), "error");
+    return null;
+  }
+}
+
+async function moderateFeedMediaComment(postId, mediaId, commentId, action) {
+  if (!postId || !mediaId || !commentId || !["hide", "unhide", "delete"].includes(action)) return null;
+  const copy = {
+    hide: {
+      icon: "question",
+      title: "Hide comment?",
+      text: "The comment will be hidden from normal media view.",
+      confirm: "Hide",
+      done: "Comment hidden",
+    },
+    unhide: {
+      icon: "question",
+      title: "Unhide comment?",
+      text: "The comment will appear normally on this media again.",
+      confirm: "Unhide",
+      done: "Comment unhidden",
+    },
+    delete: {
+      icon: "warning",
+      title: "Delete comment?",
+      text: "The comment will be removed from normal media view.",
+      confirm: "Delete",
+      done: "Comment deleted",
+    },
+  }[action];
+  void copy.icon;
+  if (!window.confirm(`${copy.title}\n\n${copy.text}`)) return null;
+  try {
+    const response = await apiFetch(`/api/feed/${encodeURIComponent(postId)}/media/${encodeURIComponent(mediaId)}/comments/${encodeURIComponent(commentId)}/moderation`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+    notify(copy.done, "Media comment moderation updated.", "success");
+    return refreshFeedPostFromPosts(response.posts || [], postId);
+  } catch (error) {
+    notify("Moderation failed", error.message || "Try again.", "error");
+    return null;
+  }
+}
+
+async function shareFeedMedia(postId, mediaId, url) {
+  if (!url) return null;
+  const post = state.feedPosts.find((item) => item.id === postId) || state.publicPost || {};
+  const shareData = { title: "KAILA Service Feed", text: post.body || "KAILA media", url };
+  try {
+    if (navigator.share) await navigator.share(shareData);
+    else {
+      await navigator.clipboard?.writeText?.(url);
+      notify("Link copied", "Media link copied to clipboard.", "success");
+    }
+    await apiFetch(`/api/feed/${encodeURIComponent(postId)}/media/${encodeURIComponent(mediaId)}/share`, { method: "POST", body: JSON.stringify({}) });
+    const payload = await apiFetch("/api/feed", { method: "GET", silentError: true });
+    return refreshFeedPostFromPosts(payload.posts || [], postId);
+  } catch (error) {
+    if (error.name !== "AbortError") notify("Share failed", "Copy the media link or try again.", "warning");
+    return null;
+  }
+}
+
+async function openMediaGallery(items = [], startIndex = 0, title = "Media", options = {}) {
   if (!items.length) return;
   let index = Math.max(0, Math.min(Number(startIndex) || 0, items.length - 1));
-
-  while (index >= 0 && index < items.length) {
-    const item = items[index];
+  let feedPost = options.feedPost || null;
+  const currentItem = () => items[index] || {};
+  const syncFeedMediaItems = (refreshedPost, activeMediaId = currentItem().media?.id) => {
+    if (!refreshedPost?.id) return;
+    feedPost = refreshedPost;
+    const nextItems = mediaGalleryItemsFromPost(refreshedPost);
+    items.splice(0, items.length, ...nextItems);
+    const nextIndex = items.findIndex((item) => item.media?.id === activeMediaId);
+    index = nextIndex >= 0 ? nextIndex : Math.max(0, Math.min(index, items.length - 1));
+  };
+  const renderItem = () => {
+    const item = currentItem();
     const isVideo = item.mimeType?.startsWith("video/");
-    const result = await window.Swal.fire({
-      customClass: { popup: "kaila-popup media-popup" },
-      title,
-      html: `
-        <div class="media-viewer">
-          ${isVideo
-            ? `<video controls autoplay playsinline preload="metadata" src="${escapeAttribute(item.url)}"></video>`
-            : `<img src="${escapeAttribute(item.url)}" alt="${escapeAttribute(item.name || "Media")}">`}
-          <div class="media-viewer-meta">
-            <strong>${escapeHtml(item.name || (isVideo ? "Video" : "Photo"))}</strong>
-            <span>${index + 1} of ${items.length}</span>
-          </div>
-        </div>
-      `,
-      showCloseButton: true,
-      showCancelButton: index > 0,
-      cancelButtonText: "Previous",
-      showConfirmButton: index < items.length - 1,
-      confirmButtonText: "Next",
-      reverseButtons: false,
+    return isVideo
+      ? `<video controls autoplay playsinline preload="metadata" src="${escapeAttribute(item.url)}"></video>`
+      : `<img src="${escapeAttribute(item.url)}" alt="${escapeAttribute(item.name || "Media")}">`;
+  };
+  const updateStage = (popup) => {
+    const frame = popup.querySelector("[data-media-frame]");
+    if (!frame) return;
+    frame.classList.remove("is-ready");
+    requestAnimationFrame(() => {
+      frame.innerHTML = renderItem();
+      requestAnimationFrame(() => frame.classList.add("is-ready"));
     });
-    if (result.isConfirmed) index += 1;
-    else if (result.dismiss === window.Swal.DismissReason.cancel) index -= 1;
-    else break;
-  }
+  };
+  const updateActions = (popup) => {
+    const host = popup.querySelector("[data-media-actions-host]");
+    if (host) host.innerHTML = mediaViewerFeedActions(feedPost, currentItem());
+  };
+
+  await window.Swal.fire({
+    customClass: { popup: "kaila-popup media-popup" },
+    html: `
+      <div class="media-viewer">
+        <div class="media-viewer-stage" data-media-swipe>
+          <button type="button" class="media-viewer-close" data-media-close aria-label="Close media"><i class="fa-solid fa-xmark"></i></button>
+          <div class="media-viewer-frame is-ready" data-media-frame>${renderItem()}</div>
+          ${feedPost?.id ? `<div data-media-actions-host>${mediaViewerFeedActions(feedPost, currentItem())}</div>` : ""}
+        </div>
+      </div>
+    `,
+    showCloseButton: false,
+    showCancelButton: false,
+    showConfirmButton: false,
+    didOpen: (popup) => {
+      const go = (direction) => {
+        if (items.length <= 1) return;
+        const nextIndex = direction === "next" ? index + 1 : index - 1;
+        if (nextIndex < 0 || nextIndex >= items.length) return;
+        index = nextIndex;
+        updateStage(popup);
+        updateActions(popup);
+      };
+      popup.querySelector("[data-media-close]")?.addEventListener("click", () => window.Swal.close());
+      popup.addEventListener("click", async (event) => {
+        const reactionButton = event.target.closest("[data-media-feed-reaction]");
+        if (reactionButton && popup.contains(reactionButton)) {
+          const activeMediaId = currentItem().media?.id;
+          const refreshed = await toggleFeedMediaReaction(feedPost?.id, activeMediaId, reactionButton.dataset.mediaFeedReaction);
+          if (refreshed) {
+            syncFeedMediaItems(refreshed, activeMediaId);
+          }
+          updateActions(popup);
+          return;
+        }
+        const commentReactionButton = event.target.closest("[data-media-feed-comment-reaction]");
+        if (commentReactionButton && popup.contains(commentReactionButton)) {
+          const activeMediaId = currentItem().media?.id;
+          const commentId = commentReactionButton.closest("[data-media-feed-comment-wrap]")?.dataset.mediaFeedComment;
+          const refreshed = await toggleFeedMediaCommentReaction(feedPost?.id, activeMediaId, commentId, commentReactionButton.dataset.mediaFeedCommentReaction);
+          if (refreshed) syncFeedMediaItems(refreshed, activeMediaId);
+          updateActions(popup);
+          return;
+        }
+        const replyToggle = event.target.closest("[data-media-feed-reply-toggle]");
+        if (replyToggle && popup.contains(replyToggle)) {
+          const form = replyToggle.closest("[data-media-feed-comment-wrap]")?.querySelector("[data-media-feed-reply-form]");
+          if (!form) return;
+          form.hidden = !form.hidden;
+          if (!form.hidden) form.elements.body?.focus();
+          return;
+        }
+        const moreButton = event.target.closest("[data-media-feed-comment-more]");
+        if (moreButton && popup.contains(moreButton)) {
+          event.stopPropagation();
+          const menu = moreButton.closest(".feed-comment-more")?.querySelector("[data-feed-comment-more-menu]");
+          const opening = moreButton.getAttribute("aria-expanded") !== "true";
+          closeFeedCommentMoreMenus();
+          if (!menu || !opening) return;
+          menu.hidden = false;
+          moreButton.setAttribute("aria-expanded", "true");
+          return;
+        }
+        const moderationButton = event.target.closest("[data-media-feed-comment-moderate]");
+        if (moderationButton && popup.contains(moderationButton)) {
+          const activeMediaId = currentItem().media?.id;
+          const commentId = moderationButton.closest("[data-media-feed-comment-wrap]")?.dataset.mediaFeedComment;
+          const refreshed = await moderateFeedMediaComment(feedPost?.id, activeMediaId, commentId, moderationButton.dataset.mediaFeedCommentModerate);
+          if (refreshed) syncFeedMediaItems(refreshed, activeMediaId);
+          updateActions(popup);
+          return;
+        }
+        const shareButton = event.target.closest("[data-media-feed-share]");
+        if (shareButton && popup.contains(shareButton)) {
+          const activeMediaId = currentItem().media?.id;
+          const refreshed = await shareFeedMedia(feedPost?.id, activeMediaId, shareButton.dataset.mediaFeedShare);
+          if (refreshed) {
+            syncFeedMediaItems(refreshed, activeMediaId);
+          }
+          updateActions(popup);
+        }
+      });
+      popup.addEventListener("submit", async (event) => {
+        const form = event.target.closest("[data-media-feed-comment-form]");
+        if (!form || !popup.contains(form)) return;
+        event.preventDefault();
+        const body = form.elements.body?.value.trim() || "";
+        if (!body) return;
+        const activeMediaId = currentItem().media?.id;
+        const refreshed = await submitFeedMediaComment(feedPost?.id, activeMediaId, body);
+        if (refreshed) {
+          syncFeedMediaItems(refreshed, activeMediaId);
+          updateActions(popup);
+        }
+      });
+      popup.addEventListener("submit", async (event) => {
+        const form = event.target.closest("[data-media-feed-reply-form]");
+        if (!form || !popup.contains(form)) return;
+        event.preventDefault();
+        const body = form.elements.body?.value.trim() || "";
+        if (!body) return;
+        const activeMediaId = currentItem().media?.id;
+        const commentId = form.closest("[data-media-feed-comment-wrap]")?.dataset.mediaFeedComment;
+        const refreshed = await submitFeedMediaCommentReply(feedPost?.id, activeMediaId, commentId, body);
+        if (refreshed) {
+          syncFeedMediaItems(refreshed, activeMediaId);
+          updateActions(popup);
+        }
+      });
+      const onKeyDown = (event) => {
+        if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(event.key)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        go(event.key === "ArrowRight" || event.key === "ArrowDown" ? "next" : "prev");
+      };
+      let touchStartX = 0;
+      let touchStartY = 0;
+      const swipeTarget = popup.querySelector("[data-media-swipe]");
+      const onTouchStart = (event) => {
+        touchStartX = event.changedTouches?.[0]?.clientX || 0;
+        touchStartY = event.changedTouches?.[0]?.clientY || 0;
+      };
+      const onTouchEnd = (event) => {
+        const touch = event.changedTouches?.[0];
+        if (!touch) return;
+        const deltaX = touch.clientX - touchStartX;
+        const deltaY = touch.clientY - touchStartY;
+        const dominant = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+        if (Math.abs(dominant) < 44) return;
+        go(dominant < 0 ? "next" : "prev");
+      };
+      document.addEventListener("keydown", onKeyDown, true);
+      swipeTarget?.addEventListener("touchstart", onTouchStart, { passive: true });
+      swipeTarget?.addEventListener("touchend", onTouchEnd, { passive: true });
+      popup._kailaMediaCleanup = () => {
+        document.removeEventListener("keydown", onKeyDown, true);
+        swipeTarget?.removeEventListener("touchstart", onTouchStart);
+        swipeTarget?.removeEventListener("touchend", onTouchEnd);
+      };
+    },
+    willClose: (popup) => {
+      popup?._kailaMediaCleanup?.();
+    },
+  });
+  void title;
 }
 
 function renderRatings(request) {
@@ -6071,7 +6495,14 @@ async function openRequestModal(existing = null) {
     const payload = editing
       ? await apiFetch(`/api/requests/${existing.id}`, { method: "PUT", body: JSON.stringify(result.value) })
       : await apiFetch("/api/requests", { method: "POST", body: JSON.stringify(result.value) });
+    if (!editing) {
+      state.jobFilter = "all";
+    }
     applyServerState(payload.state);
+    if (!editing) {
+      activateTab("#requests-pane");
+      if (payload.request?.id) focusRequestCard(payload.request.id);
+    }
     notify(editing ? "Request updated" : "Request posted", "", "success");
   } catch (error) {
     notify("Request failed", error.message, "error");
@@ -8367,18 +8798,25 @@ function bindAttachmentPreview(inputSelector, previewSelector, limit = MEDIA_ATT
       `;
     }).join("");
   };
-  preview.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-remove-media-index]");
-    if (button && preview.contains(button)) {
-      removeMediaAttachment(inputSelector, Number(button.dataset.removeMediaIndex), scope);
-      renderPreview();
-      return;
-    }
-    const thumb = event.target.closest(".upload-thumb");
-    if (!thumb || !preview.contains(thumb)) return;
-    openAttachmentPreviewGallery(inputSelector, Array.from(preview.querySelectorAll(".upload-thumb")).indexOf(thumb), scope);
+  if (!preview.dataset.kailaPreviewBound) {
+    preview.dataset.kailaPreviewBound = "true";
+    preview.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-remove-media-index]");
+      if (button && preview.contains(button)) {
+        removeMediaAttachment(inputSelector, Number(button.dataset.removeMediaIndex), scope);
+        renderPreview();
+        return;
+      }
+      const thumb = event.target.closest(".upload-thumb");
+      if (!thumb || !preview.contains(thumb)) return;
+      openAttachmentPreviewGallery(inputSelector, Array.from(preview.querySelectorAll(".upload-thumb")).indexOf(thumb), scope);
+    });
+  }
+  inputs.forEach((input) => {
+    if (input.dataset.kailaPreviewInputBound) return;
+    input.dataset.kailaPreviewInputBound = "true";
+    input.addEventListener("change", renderPreview);
   });
-  inputs.forEach((input) => input.addEventListener("change", renderPreview));
 }
 
 async function openAttachmentPreviewGallery(selector, startIndex = 0, scope = document) {

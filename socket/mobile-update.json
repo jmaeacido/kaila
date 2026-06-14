@@ -1,8 +1,8 @@
 {
-    "latestVersionCode": 1781408771,
-    "latestVersionName": "1.0.1781408771",
+    "latestVersionCode": 1781426633,
+    "latestVersionName": "1.0.1781426633",
     "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
-    "releaseNotes": "Added media viewer/player and fixed desktop tab spacing.",
-    "generatedAt": "2026-06-14T11:46:40+08:00",
+    "releaseNotes": "Feed update: media comments now support reactions, replies, hide/delete actions, and single-column feed posts.",
+    "generatedAt": "2026-06-14T16:43:53+08:00",
     "source": "auto"
 }
