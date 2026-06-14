@@ -1,8 +1,8 @@
 {
-  "latestVersionCode": 1781400988,
-  "latestVersionName": "1.0.1781400988",
-  "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
-  "releaseNotes": "Native Facebook login now uses the external browser OAuth surface while still requesting profile photo and email.",
-  "generatedAt": "2026-06-14T01:36:28Z",
-  "source": "tracked"
+    "latestVersionCode": 1781401316,
+    "latestVersionName": "1.0.1781401316",
+    "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
+    "releaseNotes": "Native Facebook login now uses the external browser OAuth surface while still requesting profile photo and email.",
+    "generatedAt": "2026-06-14T09:42:12+08:00",
+    "source": "auto"
 }
