@@ -620,6 +620,7 @@ async function initializeDatabase() {
       best_contact_time VARCHAR(120) NULL,
       auth_provider VARCHAR(40) NULL,
       auth_subject VARCHAR(255) NULL,
+      social_photo_url VARCHAR(1024) NULL,
       data_privacy_consent TINYINT(1) NOT NULL DEFAULT 0,
       deleted_at DATETIME NULL,
       created_at DATETIME NOT NULL
@@ -634,6 +635,7 @@ async function initializeDatabase() {
   await ensureColumn("users", "best_contact_time", "VARCHAR(120) NULL");
   await ensureColumn("users", "auth_provider", "VARCHAR(40) NULL");
   await ensureColumn("users", "auth_subject", "VARCHAR(255) NULL");
+  await ensureColumn("users", "social_photo_url", "VARCHAR(1024) NULL");
   await ensureColumn("users", "data_privacy_consent", "TINYINT(1) NOT NULL DEFAULT 0");
   await ensureColumn("users", "deleted_at", "DATETIME NULL");
   await pool.query("ALTER TABLE users MODIFY COLUMN role ENUM('client','provider','admin','ops','customer_service') NOT NULL");
@@ -1203,6 +1205,21 @@ function authSubject(provider, subject) {
   return cleanProvider && cleanSubject ? `${cleanProvider}:${cleanSubject}` : "";
 }
 
+function socialPhotoUrl(value = "") {
+  const cleanUrl = String(value || "").trim();
+  if (!cleanUrl || cleanUrl.length > 1024 || !/^https?:\/\//i.test(cleanUrl)) return "";
+  return cleanUrl;
+}
+
+async function fillMissingSocialPhoto(userId, profile = {}) {
+  const photoUrl = socialPhotoUrl(profile.photoUrl);
+  if (!userId || !photoUrl) return;
+  await pool.query(
+    "UPDATE users SET social_photo_url = ? WHERE id = ? AND photo_file IS NULL AND (social_photo_url IS NULL OR social_photo_url = '')",
+    [photoUrl, userId]
+  );
+}
+
 function looksLikeJwt(value = "") {
   const parts = String(value || "").split(".");
   if (parts.length !== 3) return false;
@@ -1352,6 +1369,7 @@ function mapUser(row, reputation = emptyReputation()) {
   if (!row) return null;
   const photoVersion = row.photo_file ? encodeURIComponent(row.photo_file) : "";
   const staffRole = isStaffRole(row.role);
+  const fallbackPhotoUrl = socialPhotoUrl(row.social_photo_url);
   return {
     id: row.id,
     name: staffRole ? staffDisplayName(row.role) : row.name,
@@ -1368,7 +1386,7 @@ function mapUser(row, reputation = emptyReputation()) {
     authProvider: row.auth_provider || "",
     authSubject: row.auth_subject || "",
     dataPrivacyConsent: Boolean(row.data_privacy_consent),
-    photoUrl: row.photo_file ? `/profile-media/${encodeURIComponent(row.id)}?v=${photoVersion}` : "",
+    photoUrl: row.photo_file ? `/profile-media/${encodeURIComponent(row.id)}?v=${photoVersion}` : fallbackPhotoUrl,
     reputation: staffRole ? emptyReputation() : reputation,
     deletedAt: row.deleted_at || null,
     createdAt: row.created_at,
@@ -1603,7 +1621,7 @@ function mapFeedComment(row, { post = {}, reactions = [], viewer = null, replies
     authorId: row.author_id,
     authorName: official ? "KAILA" : (isStaffRole(row.author_role) ? staffDisplayName(row.author_role) : row.author_name),
     authorRole: row.author_role || "",
-    authorPhotoUrl: official ? "assets/android-chrome-192x192.png" : (row.author_photo_file ? `/profile-media/${encodeURIComponent(row.author_id)}?v=${encodeURIComponent(row.author_photo_file)}` : ""),
+    authorPhotoUrl: official ? "assets/android-chrome-192x192.png" : (row.author_photo_file ? `/profile-media/${encodeURIComponent(row.author_id)}?v=${encodeURIComponent(row.author_photo_file)}` : socialPhotoUrl(row.author_social_photo_url)),
     official,
     body: visibleBody,
     hidden,
@@ -1629,7 +1647,7 @@ function mapFeedPost(row, { media = [], reactions = [], comments = [], viewer = 
     authorId: row.author_id,
     authorName: official ? "KAILA" : (isStaffRole(row.author_role) ? staffDisplayName(row.author_role) : row.author_name),
     authorRole: row.author_role || "",
-    authorPhotoUrl: official ? "assets/android-chrome-192x192.png" : (row.author_photo_file ? `/profile-media/${encodeURIComponent(row.author_id)}?v=${encodeURIComponent(row.author_photo_file)}` : ""),
+    authorPhotoUrl: official ? "assets/android-chrome-192x192.png" : (row.author_photo_file ? `/profile-media/${encodeURIComponent(row.author_id)}?v=${encodeURIComponent(row.author_photo_file)}` : socialPhotoUrl(row.author_social_photo_url)),
     official,
     visibility: row.visibility || "public",
     body: row.body || "",
@@ -1685,7 +1703,7 @@ async function feedPostsFor(viewer = null, options = {}) {
     params.push(viewer.id);
   }
   const [postRows] = await pool.query(`
-    SELECT post.*, author.name AS author_name, author.role AS author_role, author.photo_file AS author_photo_file
+    SELECT post.*, author.name AS author_name, author.role AS author_role, author.photo_file AS author_photo_file, author.social_photo_url AS author_social_photo_url
     FROM feed_posts AS post
     JOIN users AS author ON author.id = post.author_id
     ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
@@ -1698,7 +1716,7 @@ async function feedPostsFor(viewer = null, options = {}) {
   const [mediaRows] = await pool.query(`SELECT * FROM feed_post_media WHERE post_id IN (${placeholders}) ORDER BY created_at ASC`, postIds);
   const [reactionRows] = await pool.query(`SELECT post_id, user_id, reaction FROM feed_post_reactions WHERE post_id IN (${placeholders})`, postIds);
   const [commentRows] = await pool.query(`
-    SELECT comment.*, author.name AS author_name, author.role AS author_role, author.photo_file AS author_photo_file,
+    SELECT comment.*, author.name AS author_name, author.role AS author_role, author.photo_file AS author_photo_file, author.social_photo_url AS author_social_photo_url,
       IF(author.role IN ('admin','ops','customer_service'), 1, 0) AS author_official
     FROM feed_post_comments AS comment
     JOIN users AS author ON author.id = comment.author_id
@@ -3220,6 +3238,39 @@ async function createAccount(input = {}, allowedRoles = ["client", "provider"]) 
   return user;
 }
 
+async function createSocialAccount(profile = {}, subject = "", input = {}) {
+  const requestedRole = normalizeAccountRole(input.role);
+  const role = ["client", "provider"].includes(requestedRole) ? requestedRole : "client";
+  const username = await uniqueUsernameFrom(profile.email || profile.name || `${profile.provider}_${profile.subject}`);
+  const createdAt = nowMysql();
+  const user = {
+    id: createId(),
+    name: String(input.name || "").trim() || profile.name || "KAILA user",
+    username,
+    email: String(profile.email || "").trim().toLowerCase() || null,
+    password_hash: passwordHash(crypto.randomBytes(32).toString("hex")),
+    role,
+    area: String(input.area || "").trim() || "Profile pending",
+    category: "",
+    contactNumber: "",
+    messengerLink: "",
+    preferredContactChannel: "",
+    bestContactTime: "",
+    authProvider: profile.provider,
+    authSubject: subject,
+    socialPhotoUrl: socialPhotoUrl(profile.photoUrl),
+    dataPrivacyConsent: boolField(input.dataPrivacyConsent),
+    createdAt,
+  };
+
+  await pool.query(
+    "INSERT INTO users (id, name, username, email, password_hash, role, area, category, contact_number, messenger_link, preferred_contact_channel, best_contact_time, auth_provider, auth_subject, social_photo_url, data_privacy_consent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [user.id, user.name, user.username, user.email, user.password_hash, user.role, user.area, user.category, user.contactNumber, user.messengerLink, user.preferredContactChannel, user.bestContactTime, user.authProvider || null, user.authSubject || null, user.socialPhotoUrl || null, user.dataPrivacyConsent ? 1 : 0, user.createdAt]
+  );
+
+  return user;
+}
+
 function broadcast(event, data) {
   socketServers.forEach((socketServer) => {
     socketServer.to(CHANNEL).emit(event, data);
@@ -3653,43 +3704,33 @@ app.post("/api/auth/social/profile", async (req, res) => {
 
 app.post("/api/auth/social", async (req, res) => {
   try {
-    const mode = String(req.body?.mode || "login").trim().toLowerCase();
     const profile = await verifySocialCredential(req.body?.provider, req.body?.token || req.body?.credential || req.body?.accessToken);
     const subject = authSubject(profile.provider, profile.subject);
     const [authRows] = await pool.query("SELECT * FROM users WHERE auth_subject = ? AND deleted_at IS NULL LIMIT 1", [subject]);
     let user = mapUser(authRows[0]);
+    if (user) {
+      await fillMissingSocialPhoto(user.id, profile);
+      user = await getUser(user.id);
+    }
     if (!user && profile.email) {
       const [emailRows] = await pool.query("SELECT * FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1", [profile.email]);
       user = mapUser(emailRows[0]);
       if (user && !user.authSubject) {
         await pool.query("UPDATE users SET auth_provider = ?, auth_subject = ? WHERE id = ?", [profile.provider, subject, user.id]);
+      }
+      if (user) {
+        await fillMissingSocialPhoto(user.id, profile);
         user = await getUser(user.id);
       }
     }
 
-    if (user) return res.json({ user: privateUser(user), state: await getStateFor(user) });
-    if (mode !== "signup") {
-      return res.json({
-        requiresSignup: true,
-        profile: publicSocialProfile(profile),
-        message: "No KAILA account is linked to this social account. Use signup first.",
-      });
-    }
+    if (user) return res.json({ user: privateUser(user), state: await getStateFor(user), created: false });
 
-    const username = await uniqueUsernameFrom(profile.email || profile.name || `${profile.provider}_${profile.subject}`);
-    user = await createAccount({
-      ...req.body,
-      name: String(req.body?.name || "").trim() || profile.name,
-      username,
-      email: profile.email || null,
-      authProvider: profile.provider,
-      authSubject: subject,
-      dataPrivacyConsent: boolField(req.body?.dataPrivacyConsent),
-    }, ["client", "provider"]);
+    user = await createSocialAccount(profile, subject, req.body);
     await addActivity("User registered", `${user.name} joined with ${profile.provider}`);
     const state = await getState();
     broadcast("kaila.state.updated", state);
-    res.status(201).json({ user: privateUser(user), state });
+    res.status(201).json({ user: privateUser(user), state, created: true });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message || "Social authentication failed" });
   }
@@ -3782,7 +3823,7 @@ app.delete("/api/account", requireUser, async (req, res) => {
     `UPDATE users
      SET name = ?, username = ?, email = NULL, password_hash = ?, area = 'Deleted account', category = NULL,
        contact_number = NULL, messenger_link = NULL, preferred_contact_channel = NULL, best_contact_time = NULL,
-       data_privacy_consent = 0, photo_file = NULL, photo_mime_type = NULL, deleted_at = ?
+       data_privacy_consent = 0, photo_file = NULL, photo_mime_type = NULL, social_photo_url = NULL, deleted_at = ?
      WHERE id = ?`,
     [deletedName, `deleted_${req.user.id.slice(0, 16)}`, passwordHash(crypto.randomBytes(24).toString("hex")), timestamp, req.user.id]
   );

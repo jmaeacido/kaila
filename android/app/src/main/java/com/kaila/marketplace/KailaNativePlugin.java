@@ -1,6 +1,7 @@
 package com.kaila.marketplace;
 
 import android.Manifest;
+import android.content.ActivityNotFoundException;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -31,6 +32,7 @@ public class KailaNativePlugin extends Plugin {
     private static final int INCOMING_CALL_NOTIFICATION_ID = 7001;
     private static String pendingLaunchAction = "";
     private static String pendingLaunchId = "";
+    private static String pendingLaunchUrl = "";
     private static long pendingLaunchAt = 0;
 
     @Override
@@ -111,9 +113,11 @@ public class KailaNativePlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("action", pendingLaunchAction);
         result.put("id", pendingLaunchId);
+        result.put("url", pendingLaunchUrl);
         result.put("createdAt", pendingLaunchAt);
         pendingLaunchAction = "";
         pendingLaunchId = "";
+        pendingLaunchUrl = "";
         pendingLaunchAt = 0;
         call.resolve(result);
     }
@@ -157,6 +161,49 @@ public class KailaNativePlugin extends Plugin {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         getContext().startActivity(intent);
         call.resolve();
+    }
+
+    @PluginMethod
+    public void openFacebookLogin(PluginCall call) {
+        String url = call.getString("url", "");
+        if (url.trim().isEmpty()) {
+            call.reject("Facebook login URL is required");
+            return;
+        }
+
+        Intent appIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("fb://facewebmodal/f?href=" + Uri.encode(url)));
+        appIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        String[] facebookPackages = new String[] {
+            "com.facebook.katana",
+            "com.facebook.lite",
+            "com.facebook.wakizashi"
+        };
+        for (String packageName : facebookPackages) {
+            try {
+                Intent packagedIntent = new Intent(appIntent);
+                packagedIntent.setPackage(packageName);
+                getContext().startActivity(packagedIntent);
+                JSObject result = new JSObject();
+                result.put("opened", true);
+                result.put("target", packageName);
+                call.resolve(result);
+                return;
+            } catch (ActivityNotFoundException | SecurityException ignored) {
+                // Try the next installed Facebook package, then the browser fallback.
+            }
+        }
+
+        try {
+            Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(browserIntent);
+            JSObject result = new JSObject();
+            result.put("opened", true);
+            result.put("target", "browser");
+            call.resolve(result);
+        } catch (ActivityNotFoundException error) {
+            call.reject("No app can open Facebook login");
+        }
     }
 
     private void createCallChannel() {
@@ -214,13 +261,15 @@ public class KailaNativePlugin extends Plugin {
         if (intent == null) return;
         String action = value(intent.getStringExtra("kailaAction"), "");
         String id = value(intent.getStringExtra("kailaCallId"), value(intent.getStringExtra("kailaId"), ""));
-        if (action.isEmpty() && id.isEmpty()) return;
+        String url = intent.getDataString() == null ? "" : intent.getDataString();
+        if (action.isEmpty() && id.isEmpty() && url.isEmpty()) return;
         if ("answer-call".equals(action) || "decline-call".equals(action)) {
             // Remove the native ringing notification immediately; the web call
             // surface will finish answer/reject once the WebView is active.
         }
         pendingLaunchAction = action;
         pendingLaunchId = id;
+        pendingLaunchUrl = url;
         pendingLaunchAt = System.currentTimeMillis();
     }
 

@@ -96,7 +96,10 @@ installed Android app can detect an available update on launch. Increment
 timestamp whenever frontend or backend behavior changes. Android Gradle builds
 must always publish a higher version; the normal auto-version path uses the
 greater of current epoch seconds or the previous `latestVersionCode + 1`, while
-manual `KAILA_VERSION_CODE` values must be higher than the tracked manifest. For
+manual `KAILA_VERSION_CODE` values must be higher than the tracked manifest. Keep
+`socket/.env` `KAILA_ANDROID_LATEST_VERSION_CODE` and
+`KAILA_ANDROID_LATEST_VERSION_NAME` synchronized with the tracked manifest values
+whenever the manifest version changes. For
 frontend shell changes, also bump `sw.js` `CACHE_NAME` and the `index.html`
 asset query strings as needed so the PWA and native web bundle fetch fresh
 assets.

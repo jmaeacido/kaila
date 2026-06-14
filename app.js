@@ -18,6 +18,7 @@ const STORAGE = {
 };
 const SOCIAL_AUTH_PENDING_PREFIX = "kaila.socialAuth.";
 const SOCIAL_AUTH_GOOGLE_PROFILE_TOKEN = "kaila.socialAuth.googleProfileToken";
+const SOCIAL_AUTH_FACEBOOK_PENDING_PREFIX = "kaila.socialAuth.facebook.";
 const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Cellphone repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Cleaning", "AirCon Cleaning", "Graphic / digital services", "General odd jobs"];
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
 const CONTACT_CHANNELS = ["Messenger", "SMS", "Call", "Email", "Other"];
@@ -582,6 +583,7 @@ async function consumeNativeLaunchAction() {
   if (!bridge?.consumeLaunchAction) return;
   try {
     const payload = await bridge.consumeLaunchAction();
+    if (payload?.url && await handleNativeOAuthLaunchUrl(payload.url)) return;
     if (payload?.action) handlePushAction({ action: payload.action, callId: payload.id || "", id: payload.id || "" });
   } catch (error) {
     console.warn("KAILA native launch action failed:", error);
@@ -1296,13 +1298,18 @@ function validateSocialSignup(data = {}) {
 
 async function handleSocialAuth(provider, mode = "login") {
   if (provider === "google") {
-    if (mode === "signup" && state.pendingGoogleSignupToken) {
-      return completeSocialAuthWithToken(provider, state.pendingGoogleSignupToken, mode);
-    }
     try {
-      startGoogleRedirectAuth(mode);
+      await startGoogleRedirectAuth(mode);
     } catch (error) {
       notify("Google sign-in failed", socialAuthErrorMessage(error), "error");
+    }
+    return;
+  }
+  if (provider === "facebook" && canUseNativeFacebookLogin()) {
+    try {
+      await startNativeFacebookRedirectAuth(mode);
+    } catch (error) {
+      notify("Facebook sign-in failed", socialAuthErrorMessage(error), "error");
     }
     return;
   }
@@ -1316,42 +1323,22 @@ async function handleSocialAuth(provider, mode = "login") {
 
 async function completeSocialAuthWithToken(provider, token, mode = "login") {
   try {
-    const profileResponse = await apiFetch("/api/auth/social/profile", {
-      method: "POST",
-      body: JSON.stringify({ provider, token }),
-    });
-    if (mode === "signup") {
-      applySocialProfileToRegister(profileResponse.profile);
-      if (provider === "google") rememberPendingGoogleSignup(token, profileResponse.profile);
-    }
     const body = { provider, token, mode };
     if (mode === "signup") {
-      Object.assign(body, socialAuthPayloadFromRegisterForm());
-      if (!validateSocialSignup(body)) {
-        route("register");
-        return;
-      }
+      const role = $("[data-register-form] [name='role']")?.value;
+      if (role) body.role = role;
     }
     const payload = await apiFetch("/api/auth/social", {
       method: "POST",
       body: JSON.stringify(body),
     });
-    if (payload.requiresSignup) {
-      if (provider === "google") rememberPendingGoogleSignup(token, payload.profile);
-      applySocialProfileToRegister(payload.profile);
-      notify("Social account not linked", "Complete signup with this Google or Facebook account first.", "warning");
-      route("register");
-      return;
+    if (!payload.user?.id) {
+      throw new Error(payload.message || "KAILA did not return an account session. Try again after the API update is running.");
     }
     if (provider === "google") forgetPendingGoogleSignup();
-    await completeAuthenticatedSession(payload, mode === "signup" ? "Account created" : "Logged in", mode === "signup" ? "Welcome to KAILA." : `Welcome back, ${displayUserName(payload.user)}.`);
+    const created = Boolean(payload.created);
+    await completeAuthenticatedSession(payload, created ? "Account created" : "Logged in", created ? "Welcome to KAILA. You can finish your profile in Settings." : `Welcome back, ${displayUserName(payload.user)}.`);
   } catch (error) {
-    if (mode === "login" && error.status === 404) {
-      if (provider === "google") await prepareGoogleSignupFromToken(token);
-      notify("Social account not linked", "Open Register and complete signup with the same Google or Facebook account first.", "warning");
-      route("register");
-      return;
-    }
     notify("Social sign-in failed", socialAuthErrorMessage(error), "error");
   }
 }
@@ -1362,6 +1349,7 @@ function socialAuthErrorMessage(error = {}) {
 }
 
 async function completeAuthenticatedSession(payload, title, message) {
+  if (!payload.user?.id) throw new Error("KAILA did not return an account session.");
   state.session = payload.user;
   state.activeRole = defaultActiveRole();
   state.lastDashboardTabTarget = "#feed-pane";
@@ -1369,8 +1357,9 @@ async function completeAuthenticatedSession(payload, title, message) {
   localStorage.setItem(STORAGE.activeRole, state.activeRole);
   loadAttentionBadgesForSession();
   syncSocketIdentity();
-  safeApplyState(payload.state);
   activateTab("#feed-pane");
+  route("app");
+  safeApplyState(payload.state);
   runPostAuthTasks("", "", payload.user);
   await successRedirect(title, message);
 }
@@ -1402,14 +1391,21 @@ function loadScriptOnce(src, globalName) {
 }
 
 function googleRedirectUri() {
-  return `${window.location.origin}${window.location.pathname}`;
+  return isNativeAppOrigin() ? `https://${PRODUCTION_HOST}/` : `${window.location.origin}${window.location.pathname}`;
 }
 
-function startGoogleRedirectAuth(mode = "login") {
+function facebookRedirectUri() {
+  return isNativeAppOrigin() ? `https://${PRODUCTION_HOST}/` : `${window.location.origin}${window.location.pathname}`;
+}
+
+async function startGoogleRedirectAuth(mode = "login") {
   const clientId = state.socialAuthConfig?.googleClientId;
   if (!clientId) throw new Error("Google login is not configured");
   const marker = window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  sessionStorage.setItem(`${SOCIAL_AUTH_PENDING_PREFIX}${marker}`, JSON.stringify({ provider: "google", mode, createdAt: Date.now() }));
+  const pendingKey = `${SOCIAL_AUTH_PENDING_PREFIX}${marker}`;
+  const pending = JSON.stringify({ provider: "google", mode, createdAt: Date.now() });
+  sessionStorage.setItem(pendingKey, pending);
+  if (isNativeAppOrigin()) localStorage.setItem(pendingKey, pending);
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("redirect_uri", googleRedirectUri());
@@ -1417,6 +1413,12 @@ function startGoogleRedirectAuth(mode = "login") {
   url.searchParams.set("scope", "openid email profile");
   url.searchParams.set("prompt", "select_account");
   url.searchParams.set("state", marker);
+  if (isNativeAppOrigin()) {
+    const bridge = nativeKailaBridge();
+    if (!bridge?.openUrl) throw new Error("Native browser login is unavailable");
+    await bridge.openUrl({ url: url.toString() });
+    return;
+  }
   window.location.assign(url.toString());
 }
 
@@ -1426,9 +1428,10 @@ async function handleGoogleRedirectResult() {
   const params = new URLSearchParams(hash);
   const marker = params.get("state") || "";
   const pendingKey = marker ? `${SOCIAL_AUTH_PENDING_PREFIX}${marker}` : "";
-  const pending = pendingKey ? readSessionJson(pendingKey, null) : null;
+  const pending = pendingKey ? (readSessionJson(pendingKey, null) || readJson(pendingKey, null)) : null;
   if (pending?.provider !== "google") return false;
   sessionStorage.removeItem(pendingKey);
+  localStorage.removeItem(pendingKey);
   history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
   if (params.get("error")) {
     notify("Google sign-in cancelled", params.get("error_description") || params.get("error") || "Google did not complete sign-in.", "warning");
@@ -1486,8 +1489,66 @@ async function facebookAccessToken() {
     window.FB.login((response) => {
       if (response.authResponse?.accessToken) resolve(response.authResponse.accessToken);
       else reject(new Error("Facebook sign-in was cancelled"));
-    }, { scope: "public_profile" });
+    }, { scope: "public_profile,email" });
   });
+}
+
+function canUseNativeFacebookLogin() {
+  return Boolean(isNativeApp() && nativeKailaBridge()?.openFacebookLogin && state.socialAuthConfig?.facebookAppId);
+}
+
+async function startNativeFacebookRedirectAuth(mode = "login") {
+  const appId = state.socialAuthConfig?.facebookAppId;
+  const bridge = nativeKailaBridge();
+  if (!appId || !bridge?.openFacebookLogin) throw new Error("Facebook login is not configured");
+  const marker = window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const pending = JSON.stringify({ provider: "facebook", mode, createdAt: Date.now() });
+  sessionStorage.setItem(`${SOCIAL_AUTH_FACEBOOK_PENDING_PREFIX}${marker}`, pending);
+  localStorage.setItem(`${SOCIAL_AUTH_FACEBOOK_PENDING_PREFIX}${marker}`, pending);
+  const url = new URL("https://www.facebook.com/v20.0/dialog/oauth");
+  url.searchParams.set("client_id", appId);
+  url.searchParams.set("redirect_uri", facebookRedirectUri());
+  url.searchParams.set("response_type", "token");
+  url.searchParams.set("scope", "public_profile,email");
+  url.searchParams.set("state", marker);
+  await bridge.openFacebookLogin({ url: url.toString() });
+}
+
+async function handleNativeOAuthLaunchUrl(url = "") {
+  if (!url || !/^https?:\/\//i.test(url)) return false;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.hostname !== PRODUCTION_HOST) return false;
+  const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ""));
+  const queryParams = parsed.searchParams;
+  const marker = hashParams.get("state") || queryParams.get("state") || "";
+  const pendingCandidates = marker
+    ? [`${SOCIAL_AUTH_PENDING_PREFIX}${marker}`, `${SOCIAL_AUTH_FACEBOOK_PENDING_PREFIX}${marker}`]
+    : [];
+  const pendingEntry = pendingCandidates
+    .map((key) => ({ key, value: readSessionJson(key, null) || readJson(key, null) }))
+    .find((entry) => entry.value?.provider === "google" || entry.value?.provider === "facebook");
+  if (!pendingEntry) return false;
+  const { key: pendingKey, value: pending } = pendingEntry;
+  sessionStorage.removeItem(pendingKey);
+  localStorage.removeItem(pendingKey);
+  const providerLabel = pending.provider === "google" ? "Google" : "Facebook";
+  const error = hashParams.get("error") || queryParams.get("error");
+  if (error) {
+    notify(`${providerLabel} sign-in cancelled`, hashParams.get("error_description") || queryParams.get("error_description") || error || `${providerLabel} did not complete sign-in.`, "warning");
+    return true;
+  }
+  const token = hashParams.get("access_token") || queryParams.get("access_token");
+  if (!token) {
+    notify(`${providerLabel} sign-in failed`, `${providerLabel} did not return an access token.`, "error");
+    return true;
+  }
+  await completeSocialAuthWithToken(pending.provider, token, pending.mode || "login");
+  return true;
 }
 
 async function ensureFacebookSdk(appId) {
