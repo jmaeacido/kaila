@@ -1,8 +1,8 @@
 {
-  "latestVersionCode": 1781399680,
-  "latestVersionName": "1.0.1781399680",
+  "latestVersionCode": 1781400331,
+  "latestVersionName": "1.0.1781400331",
   "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
-  "releaseNotes": "Facebook login now requests only the default public profile permission so MVP sign-in does not require email Login Review.",
-  "generatedAt": "2026-06-14T01:14:40Z",
+  "releaseNotes": "Facebook login requests profile photo and email again with permission re-request handling for users who previously declined access.",
+  "generatedAt": "2026-06-14T01:25:31Z",
   "source": "tracked"
 }

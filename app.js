@@ -1489,7 +1489,7 @@ async function facebookAccessToken() {
     window.FB.login((response) => {
       if (response.authResponse?.accessToken) resolve(response.authResponse.accessToken);
       else reject(new Error("Facebook sign-in was cancelled"));
-    }, { scope: "public_profile" });
+    }, { scope: "public_profile,email", auth_type: "rerequest", return_scopes: true });
   });
 }
 
@@ -1509,7 +1509,9 @@ async function startNativeFacebookRedirectAuth(mode = "login") {
   url.searchParams.set("client_id", appId);
   url.searchParams.set("redirect_uri", facebookRedirectUri());
   url.searchParams.set("response_type", "token");
-  url.searchParams.set("scope", "public_profile");
+  url.searchParams.set("scope", "public_profile,email");
+  url.searchParams.set("auth_type", "rerequest");
+  url.searchParams.set("return_scopes", "true");
   url.searchParams.set("state", marker);
   await bridge.openFacebookLogin({ url: url.toString() });
 }
