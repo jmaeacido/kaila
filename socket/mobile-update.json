@@ -1,8 +1,8 @@
 {
-  "latestVersionCode": 1781396920,
-  "latestVersionName": "1.0.1781396920",
+  "latestVersionCode": 1781399680,
+  "latestVersionName": "1.0.1781399680",
   "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
-  "releaseNotes": "Native Android Google login now uses the production KAILA app-link redirect instead of the WebView localhost redirect.",
-  "generatedAt": "2026-06-14T00:28:40Z",
+  "releaseNotes": "Facebook login now requests only the default public profile permission so MVP sign-in does not require email Login Review.",
+  "generatedAt": "2026-06-14T01:14:40Z",
   "source": "tracked"
 }
