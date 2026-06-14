@@ -3172,6 +3172,27 @@ select[multiple].form-select {
   gap: 0.45rem;
 }
 
+.media-input-group {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.media-input-group > span {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.media-input-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.media-input-actions .btn {
+  min-height: 2.35rem;
+}
+
 .upload-thumb {
   min-width: 0;
   overflow: hidden;

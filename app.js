@@ -63,6 +63,7 @@ const NAVIGATION_MIN_MOVE_METERS = 12;
 const NAVIGATION_STALE_MS = 45000;
 const NAVIGATION_SPEED_KMH = 22;
 const MOBILE_UPDATE_PROMPT_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const MEDIA_ATTACHMENT_ACCEPT = "image/jpeg,image/png,image/webp,video/mp4,video/webm";
 const FALLBACK_GEOGRAPHY = {
   region: "Region X (Northern Mindanao)",
   province: "Misamis Oriental",
@@ -2516,10 +2517,9 @@ function setFeedComposerPosting(form = $("[data-feed-form]"), posting = false) {
 function resetFeedComposer(form = $("[data-feed-form]")) {
   if (!form) return;
   const body = form.elements.body;
-  const media = $("[data-feed-media]", form);
   const preview = $("[data-feed-media-preview]", form);
   if (body) body.value = "";
-  if (media) media.value = "";
+  clearMediaAttachmentInputs("[data-feed-media]", form);
   if (preview) preview.innerHTML = "";
   if (form.elements.postAsOfficial) form.elements.postAsOfficial.checked = false;
   setFeedAudienceValue("public", $("[data-feed-audience]", form));
@@ -5933,7 +5933,13 @@ async function openRequestModal(existing = null) {
           <div class="request-flow-head"><b>4</b><div><strong>Details and photos</strong><span>Help providers estimate before they visit</span></div></div>
           <label><span>Details</span><textarea id="request-details" class="form-control" rows="5" placeholder="What happened? What should the provider inspect or bring?">${escapeHtml(existing?.details || "")}</textarea></label>
           ${editing ? `<div class="offer"><strong>Existing media</strong><div>Existing request media stays attached. Add a new request if you need to replace photos or videos.</div></div>` : `
-            <label><span>Photos or videos (up to 3 files)</span><input id="request-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
+            <div class="media-input-group">
+              <span>Photos or videos (up to 3 files)</span>
+              <div class="media-input-actions">
+                <label class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-image"></i> Upload<input id="request-attachments" class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" multiple data-request-attachments></label>
+                <label class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-camera"></i> Camera<input class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" capture="environment" data-request-attachments></label>
+              </div>
+            </div>
             <div class="upload-preview" data-request-attachment-preview></div>
           `}
         </section>
@@ -5966,11 +5972,11 @@ async function openRequestModal(existing = null) {
           selectedLocationSource = selectedJobLocation ? source : "";
         },
       });
-      if (!editing) bindAttachmentPreview("#request-attachments", "[data-request-attachment-preview]", 3, requestFormRoot);
+      if (!editing) bindAttachmentPreview("[data-request-attachments]", "[data-request-attachment-preview]", 3, requestFormRoot);
     },
     preConfirm: async () => {
       const scope = requestFormRoot || document;
-      const attachments = editing ? [] : await readMediaAttachments("#request-attachments", scope);
+      const attachments = editing ? [] : await readMediaAttachments("[data-request-attachments]", scope);
       if (!attachments) return false;
       const request = {
         category: $("#request-category", scope).value,
@@ -6412,7 +6418,11 @@ function chatComposerHtml(kind) {
         <div class="chat-popover chat-compose-popover" data-chat-compose-menu hidden>
           <label>
             <i class="fa-solid fa-image"></i> Photos or Videos
-            <input type="file" ${attachmentAttr} accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple hidden>
+            <input type="file" ${attachmentAttr} accept="${MEDIA_ATTACHMENT_ACCEPT}" multiple hidden>
+          </label>
+          <label>
+            <i class="fa-solid fa-camera"></i> Camera
+            <input type="file" ${attachmentAttr} accept="${MEDIA_ATTACHMENT_ACCEPT}" capture="environment" hidden>
           </label>
           <button type="button" data-chat-emoji-toggle><i class="fa-regular fa-face-smile"></i> Emoji</button>
         </div>
@@ -6587,14 +6597,13 @@ function bindConversationInput(requestId, writable) {
 
 async function sendConversationMessage(requestId) {
   const input = $("[data-chat-input]");
-  const attachmentInput = $("[data-chat-attachments]");
   const detail = input?.value.trim();
   const attachments = await readMediaAttachments("[data-chat-attachments]");
   if (!attachments) return;
   if (!detail && !attachments.length) return;
   state.conversationDraftVersion += 1;
   input.value = "";
-  if (attachmentInput) attachmentInput.value = "";
+  clearMediaAttachmentInputs("[data-chat-attachments]");
   stopConversationTyping(requestId);
   try {
     await apiFetch(`/api/requests/${requestId}/messages`, { method: "POST", body: JSON.stringify({ detail, attachments }) });
@@ -6823,14 +6832,13 @@ async function openDirectMediaViewer(attachments = [], startIndex = 0) {
 
 async function sendDirectConversationMessage(userId, requestId = "") {
   const input = $("[data-direct-chat-input]");
-  const attachmentInput = $("[data-direct-chat-attachments]");
   const detail = input?.value.trim();
   const attachments = await readMediaAttachments("[data-direct-chat-attachments]");
   if (!attachments) return;
   if (!detail && !attachments.length) return;
   state.directConversationDraftVersion += 1;
   input.value = "";
-  if (attachmentInput) attachmentInput.value = "";
+  clearMediaAttachmentInputs("[data-direct-chat-attachments]");
   try {
     const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
     await apiFetch(`/api/direct-conversations/${userId}/messages${query}`, { method: "POST", body: JSON.stringify({ detail, attachments }) });
@@ -6863,8 +6871,7 @@ async function refreshDirectConversation(userId, options = {}) {
 
 function hasComposerDraft(inputSelector, attachmentSelector) {
   const input = $(inputSelector);
-  const attachmentInput = $(attachmentSelector);
-  return Boolean(input?.value.trim() || attachmentInput?.files?.length);
+  return Boolean(input?.value.trim() || mediaAttachmentFiles(attachmentSelector).length);
 }
 
 async function setDirectConversationPresence(userId, active) {
@@ -8132,14 +8139,20 @@ async function completionPrompt() {
     html: `
       <div class="swal-form">
         <label><span>Proof notes (optional)</span><textarea id="completion-note" class="form-control" rows="3" placeholder="Receipt, before/after details, time log, etc."></textarea></label>
-        <label><span>Photos or videos (optional, up to 3 files)</span><input id="completion-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
+        <div class="media-input-group">
+          <span>Photos or videos (optional, up to 3 files)</span>
+          <div class="media-input-actions">
+            <label class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-image"></i> Upload<input class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" multiple data-completion-attachments></label>
+            <label class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-camera"></i> Camera<input class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" capture="environment" data-completion-attachments></label>
+          </div>
+        </div>
         <div class="upload-preview" data-completion-attachment-preview></div>
       </div>
     `,
     confirmButtonText: "Mark Done",
-    didOpen: () => bindAttachmentPreview("#completion-attachments", "[data-completion-attachment-preview]", 3),
+    didOpen: () => bindAttachmentPreview("[data-completion-attachments]", "[data-completion-attachment-preview]", 3),
     preConfirm: async () => {
-      const attachments = await readMediaAttachments("#completion-attachments");
+      const attachments = await readMediaAttachments("[data-completion-attachments]");
       return attachments ? { note: $("#completion-note").value.trim(), attachments } : false;
     },
   });
@@ -8152,19 +8165,25 @@ async function disputePrompt() {
     html: `
       <div class="swal-form">
         <label><span>Issue</span><textarea id="dispute-note" class="form-control" rows="3" placeholder="Explain the issue"></textarea></label>
-        <label><span>Photos or videos (optional, up to 3 files)</span><input id="dispute-attachments" class="form-control" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></label>
+        <div class="media-input-group">
+          <span>Photos or videos (optional, up to 3 files)</span>
+          <div class="media-input-actions">
+            <label class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-image"></i> Upload<input class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" multiple data-dispute-attachments></label>
+            <label class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-camera"></i> Camera<input class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" capture="environment" data-dispute-attachments></label>
+          </div>
+        </div>
         <div class="upload-preview" data-dispute-attachment-preview></div>
       </div>
     `,
     confirmButtonText: "Submit Dispute",
-    didOpen: () => bindAttachmentPreview("#dispute-attachments", "[data-dispute-attachment-preview]", 3),
+    didOpen: () => bindAttachmentPreview("[data-dispute-attachments]", "[data-dispute-attachment-preview]", 3),
     preConfirm: async () => {
       const note = $("#dispute-note").value.trim();
       if (!note) {
         window.Swal.showValidationMessage("Dispute note is required.");
         return false;
       }
-      const attachments = await readMediaAttachments("#dispute-attachments");
+      const attachments = await readMediaAttachments("[data-dispute-attachments]");
       return attachments ? { note, attachments } : false;
     },
   });
@@ -8172,7 +8191,7 @@ async function disputePrompt() {
 }
 
 async function readMediaAttachments(selector, scope = document) {
-  const files = Array.from($(selector, scope)?.files || []);
+  const files = mediaAttachmentFiles(selector, scope);
   if (files.length > 3) {
     window.Swal.showValidationMessage("Upload up to 3 attachments.");
     return null;
@@ -8189,6 +8208,20 @@ async function readMediaAttachments(selector, scope = document) {
     reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
     reader.readAsDataURL(file);
   })));
+}
+
+function mediaAttachmentInputs(selector, scope = document) {
+  return $$(selector, scope).filter((input) => input?.type === "file");
+}
+
+function mediaAttachmentFiles(selector, scope = document) {
+  return mediaAttachmentInputs(selector, scope).flatMap((input) => Array.from(input.files || []));
+}
+
+function clearMediaAttachmentInputs(selector, scope = document) {
+  mediaAttachmentInputs(selector, scope).forEach((input) => {
+    input.value = "";
+  });
 }
 
 async function readProfilePhoto(selector) {
@@ -8238,9 +8271,9 @@ function loadImageFile(file) {
 }
 
 function bindAttachmentPreview(inputSelector, previewSelector, limit = 3, scope = document) {
-  const input = $(inputSelector, scope);
+  const inputs = mediaAttachmentInputs(inputSelector, scope);
   const preview = $(previewSelector, scope);
-  if (!input || !preview) return;
+  if (!inputs.length || !preview) return;
   let urls = [];
   const clearUrls = () => {
     urls.forEach((url) => URL.revokeObjectURL(url));
@@ -8248,7 +8281,7 @@ function bindAttachmentPreview(inputSelector, previewSelector, limit = 3, scope 
   };
   const renderPreview = () => {
     clearUrls();
-    const files = Array.from(input.files || []).slice(0, limit);
+    const files = mediaAttachmentFiles(inputSelector, scope).slice(0, limit);
     preview.innerHTML = files.map((file) => {
       const url = URL.createObjectURL(file);
       urls.push(url);
@@ -8261,7 +8294,7 @@ function bindAttachmentPreview(inputSelector, previewSelector, limit = 3, scope 
       `;
     }).join("");
   };
-  input.addEventListener("change", renderPreview);
+  inputs.forEach((input) => input.addEventListener("change", renderPreview));
 }
 
 async function saveSettings(event) {
