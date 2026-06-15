@@ -89,10 +89,12 @@ incoming call alerts when Android permits full-screen intent.
 
 ## Android APK Update Prompt
 
-The API exposes `/api/mobile-update` for the native Android app. The app compares
-that response with its installed `versionCode` on launch and prompts users to
-download the new APK when the backend value is higher. If the user taps Later,
-the same update prompt is held back until the next day.
+The API exposes `/api/mobile-update` for the native Android app. Public update
+checks are metadata-only and do not expose APK URLs. The app sends
+`X-KAILA-Native-Update: 1`, compares that response with its installed
+`versionCode` on launch, and prompts users to download the new APK when the
+backend value is higher. If the user taps Later, the same update prompt is held
+back until the next day.
 
 ```env
 KAILA_ANDROID_APK_URL=https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link
@@ -100,8 +102,9 @@ KAILA_ANDROID_RELEASE_NOTES=
 ```
 
 Keep the stable Google Drive APK URL in tracked `socket/mobile-update.json`.
-The update prompt opens `/api/mobile-update/apk`, which redirects to a fresh
-direct Google Drive download for that configured file. Each Android Gradle build
+The update prompt opens the signed `/api/mobile-update/apk` link, which
+redirects to a fresh direct Google Drive download for that configured file.
+Each Android Gradle build
 auto-generates a fresh `versionCode` and `versionName` using the greater of the
 current epoch seconds or the previous `latestVersionCode + 1`, then rewrites
 that manifest while preserving the existing URL when `.env` does not define

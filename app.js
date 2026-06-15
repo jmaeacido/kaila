@@ -509,11 +509,22 @@ function mobileUpdateUrl() {
   return `${apiBase()}/api/mobile-update?_=${Date.now()}`;
 }
 
+function mobileUpdateFetchOptions() {
+  return {
+    cache: "no-store",
+    headers: {
+      "X-KAILA-Native-Update": "1",
+    },
+  };
+}
+
 function mobileUpdateDownloadUrl(update = {}) {
-  const target = String(update.downloadUrl || update.apkUrl || "").trim();
+  const target = String(update.downloadUrl || "").trim();
   if (!target) return "";
   try {
-    const url = new URL(target, target.startsWith("/") ? `${apiBase()}/` : window.location.href);
+    const url = target.startsWith("/")
+      ? new URL(`${apiBase()}${target}`)
+      : new URL(target, window.location.href);
     if (update.latestVersionCode) url.searchParams.set("versionCode", String(update.latestVersionCode));
     url.searchParams.set("_", String(Date.now()));
     return url.toString();
@@ -537,7 +548,7 @@ async function checkMobileUpdate({ force = false } = {}) {
   try {
     const [info, update] = await Promise.all([
       nativeAppInfo(),
-      fetch(mobileUpdateUrl(), { cache: "no-store" }).then((response) => response.ok ? response.json() : null),
+      fetch(mobileUpdateUrl(), mobileUpdateFetchOptions()).then((response) => response.ok ? response.json() : null),
     ]);
     const currentVersionCode = Number(info?.versionCode || 0);
     const currentVersionName = String(info?.versionName || "").trim();
@@ -548,7 +559,7 @@ async function checkMobileUpdate({ force = false } = {}) {
       && latestVersionName
       && currentVersionName
       && latestVersionName !== currentVersionName;
-    if (!update?.enabled || !update?.apkUrl || !currentVersionCode || (!versionCodeIsNewer && !publishedVersionDiffers)) return;
+    if (!update?.enabled || !update?.downloadUrl || !currentVersionCode || (!versionCodeIsNewer && !publishedVersionDiffers)) return;
     rememberMobileUpdateCheck({ latestVersionCode });
     if (!force && !shouldPromptMobileUpdate(latestVersionCode)) return;
     rememberMobileUpdateCheck({ promptedVersionCode: latestVersionCode, promptedAt: Date.now() });
@@ -566,20 +577,23 @@ async function promptMobileUpdate(update = {}) {
     ? `${update.latestVersionName} (${update.latestVersionCode})`
     : `Version ${update.latestVersionCode}`;
   const notes = update.releaseNotes ? `<p>${escapeHtml(update.releaseNotes)}</p>` : "";
+  const downloadUrl = mobileUpdateDownloadUrl(update);
+  if (!downloadUrl) return;
   const result = await modal({
     icon: "info",
     title: "KAILA update available",
     html: `
       <div class="text-start">
-        <p>A newer Android app is ready.</p>
+        <p>A newer KAILA Android app is ready from kaila-app.com.</p>
         <p><strong>Installed:</strong> ${escapeHtml(current)}<br><strong>Latest:</strong> ${escapeHtml(latest)}</p>
         ${notes}
+        <p class="small text-muted mb-0">Only continue if you expected a KAILA update. Android may ask you to confirm the app install after the download opens.</p>
       </div>
     `,
-    confirmButtonText: "Download Update",
+    confirmButtonText: "Open Update Download",
     cancelButtonText: "Later",
   });
-  if (result.isConfirmed) await openExternalUrl(mobileUpdateDownloadUrl(update), { fallbackAfterMs: 900 });
+  if (result.isConfirmed) await openExternalUrl(downloadUrl, { fallbackAfterMs: 900 });
 }
 
 function isNativeApp() {

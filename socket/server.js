@@ -53,6 +53,7 @@ const MOBILE_UPDATE_VERSION_CODE = Number(process.env.KAILA_ANDROID_LATEST_VERSI
 const MOBILE_UPDATE_VERSION_NAME = sanitizeToken(process.env.KAILA_ANDROID_LATEST_VERSION_NAME || "");
 const MOBILE_UPDATE_APK_URL = sanitizeToken(process.env.KAILA_ANDROID_APK_URL || "");
 const MOBILE_UPDATE_RELEASE_NOTES = sanitizeToken(process.env.KAILA_ANDROID_RELEASE_NOTES || "");
+const MOBILE_UPDATE_NATIVE_HEADER = "x-kaila-native-update";
 const UPLOAD_DIR = path.resolve(__dirname, "..", "uploads");
 const PROFILE_UPLOAD_DIR = path.resolve(__dirname, "..", "profile-photos");
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -104,7 +105,25 @@ function sanitizeToken(value) {
   return String(value || "").trim().replace(/^['"]|['"]$/g, "");
 }
 
-function readMobileUpdateMetadata() {
+function mobileUpdateDownloadToken(versionCode, apkUrl) {
+  return crypto
+    .createHmac("sha256", MESSAGE_ENCRYPTION_KEY)
+    .update(`${versionCode}:${apkUrl}`)
+    .digest("hex");
+}
+
+function isValidMobileUpdateDownloadToken(token, versionCode, apkUrl) {
+  const expected = mobileUpdateDownloadToken(versionCode, apkUrl);
+  const tokenBuffer = Buffer.from(String(token || ""), "hex");
+  const expectedBuffer = Buffer.from(expected, "hex");
+  return tokenBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(tokenBuffer, expectedBuffer);
+}
+
+function isNativeMobileUpdateRequest(req) {
+  return sanitizeToken(req.get(MOBILE_UPDATE_NATIVE_HEADER)).toLowerCase() === "1";
+}
+
+function readMobileUpdateMetadata({ includeDownload = false } = {}) {
   let metadata = {};
   let hasMetadataFile = false;
   try {
@@ -121,13 +140,15 @@ function readMobileUpdateMetadata() {
   const latestVersionName = sanitizeToken(metadata.latestVersionName || MOBILE_UPDATE_VERSION_NAME || "");
   const apkUrl = sanitizeToken(metadata.apkUrl || MOBILE_UPDATE_APK_URL || "");
   const releaseNotes = sanitizeToken(metadata.releaseNotes || MOBILE_UPDATE_RELEASE_NOTES || "");
+  const hasDownload = latestVersionCode > 0 && Boolean(apkUrl);
+  const token = includeDownload && hasDownload ? mobileUpdateDownloadToken(latestVersionCode, apkUrl) : "";
   return {
-    enabled: latestVersionCode > 0 && Boolean(apkUrl),
+    enabled: includeDownload && hasDownload,
     latestVersionCode,
     latestVersionName,
-    apkUrl,
-    downloadUrl: latestVersionCode > 0 && Boolean(apkUrl)
-      ? `/api/mobile-update/apk?versionCode=${encodeURIComponent(String(latestVersionCode))}`
+    apkUrl: includeDownload ? apkUrl : "",
+    downloadUrl: includeDownload && hasDownload
+      ? `/api/mobile-update/apk?versionCode=${encodeURIComponent(String(latestVersionCode))}&token=${encodeURIComponent(token)}`
       : "",
     releaseNotes,
     generatedAt: sanitizeToken(metadata.generatedAt || ""),
@@ -4003,13 +4024,16 @@ app.get("/api/mobile-update", (req, res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
-  res.json(readMobileUpdateMetadata());
+  res.json(readMobileUpdateMetadata({ includeDownload: isNativeMobileUpdateRequest(req) }));
 });
 
 app.get("/api/mobile-update/apk", (req, res) => {
-  const metadata = readMobileUpdateMetadata();
+  const metadata = readMobileUpdateMetadata({ includeDownload: true });
   const redirectUrl = metadata.enabled ? mobileUpdateApkRedirectUrl(metadata) : "";
   if (!redirectUrl) return res.status(404).json({ error: "Android update APK is not available" });
+  if (!isValidMobileUpdateDownloadToken(req.query.token, metadata.latestVersionCode, metadata.apkUrl)) {
+    return res.status(403).json({ error: "Android update link has expired. Reopen KAILA and try again." });
+  }
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");

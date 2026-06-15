@@ -104,8 +104,10 @@ when the backend reports a higher APK version code than the installed app. If a
 user taps Later, the same update prompt is held back until the next day.
 KAILA's current manual APK distribution link is stored in
 `socket/mobile-update.json`; keep it pointed at the stable Google Drive APK
-file. The app opens `/api/mobile-update/apk`, and the backend redirects that
-request to a fresh direct Google Drive download for the configured file. Every
+file. Public update checks are metadata-only and do not expose APK URLs. The
+native app sends `X-KAILA-Native-Update: 1`, receives a signed
+`/api/mobile-update/apk` link, and the backend redirects that request to a
+fresh direct Google Drive download for the configured file. Every
 Gradle build creates a fresh Android `versionCode` automatically by
 using the greater of the current epoch seconds or the previous
 `latestVersionCode + 1`, then rewrites that manifest. This means each
