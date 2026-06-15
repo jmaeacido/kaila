@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v238-security-update-download";
+const CACHE_NAME = "kaila-pwa-v239-instant-login-toast";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"

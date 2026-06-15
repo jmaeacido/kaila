@@ -1274,7 +1274,7 @@ async function login(event) {
   persistSavedLoginChoice(data);
   form.reset();
   runPostAuthTasks(data.username, data.password, payload.user);
-  await successRedirect("Logged in", `Welcome back, ${displayUserName(state.session)}.`);
+  await successRedirect("Logged in", `Welcome back, ${displayUserName(state.session)}.`, { timer: 1, timerProgressBar: false });
 }
 
 async function loadSocialAuthConfig() {
@@ -12177,7 +12177,8 @@ function workspaceForm(options) {
   });
 }
 
-async function successRedirect(title, text) {
+async function successRedirect(title, text, options = {}) {
+  const timer = Number.isFinite(options.timer) ? options.timer : 3500;
   route("app");
   window.Swal.fire({
     customClass: { popup: "kaila-popup" },
@@ -12187,8 +12188,8 @@ async function successRedirect(title, text) {
     showConfirmButton: false,
     toast: true,
     position: "top",
-    timer: 3500,
-    timerProgressBar: true,
+    timer,
+    timerProgressBar: options.timerProgressBar ?? true,
   });
 }
 
@@ -12236,7 +12237,7 @@ async function tryOfflineLogin(data = {}) {
   }
   syncQueuedValidationEntries();
   activateTab("#feed-pane");
-  await successRedirect("Offline login", `Welcome back, ${displayUserName(state.session)}. Saved entries will sync when online.`);
+  await successRedirect("Offline login", `Welcome back, ${displayUserName(state.session)}. Saved entries will sync when online.`, { timer: 1, timerProgressBar: false });
   return true;
 }
 
