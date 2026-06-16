@@ -31,6 +31,7 @@ const AVAILABLE_TIME_OPTIONS = ["Any time", "Morning", "Afternoon", "Evening", "
 const YES_NO_MAYBE_OPTIONS = ["Yes", "No", "Maybe"];
 const DECISION_SIGNAL_OPTIONS = ["Strong positive", "Positive", "Neutral", "Concern", "Blocker"];
 const APP_ROUTES = ["landing", "register", "login", "privacy", "terms", "support", "public-post", "app"];
+const DEFAULT_DASHBOARD_TAB = "#requests-pane";
 const SUPPORT_ROLE = "customer_service";
 const SUPPORT_LABEL = "Customer Service";
 const SUPPORT_AVATAR = "assets/kaila-customer-service-avatar.png";
@@ -117,7 +118,7 @@ const state = {
   attentionLoop: null,
   notificationClicksBound: false,
   activeOfferPromptRequestId: null,
-  lastDashboardTabTarget: "#feed-pane",
+  lastDashboardTabTarget: DEFAULT_DASHBOARD_TAB,
   activeConversationId: null,
   activeDirectConversationUserId: null,
   activeDirectConversationRequestId: "",
@@ -1230,13 +1231,13 @@ async function register(event) {
 
   state.session = payload.user;
   state.activeRole = defaultActiveRole();
-  state.lastDashboardTabTarget = "#feed-pane";
+  state.lastDashboardTabTarget = DEFAULT_DASHBOARD_TAB;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   localStorage.setItem(STORAGE.activeRole, state.activeRole);
   loadAttentionBadgesForSession();
   syncSocketIdentity();
   safeApplyState(payload.state);
-  activateTab("#feed-pane");
+  activateTab(DEFAULT_DASHBOARD_TAB);
   form.reset();
   runPostAuthTasks(data.username, data.password, payload.user);
   await successRedirect("Account created", "Welcome to KAILA.");
@@ -1264,13 +1265,13 @@ async function login(event) {
 
   state.session = payload.user;
   state.activeRole = defaultActiveRole();
-  state.lastDashboardTabTarget = "#feed-pane";
+  state.lastDashboardTabTarget = DEFAULT_DASHBOARD_TAB;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   localStorage.setItem(STORAGE.activeRole, state.activeRole);
   loadAttentionBadgesForSession();
   syncSocketIdentity();
   safeApplyState(payload.state);
-  activateTab("#feed-pane");
+  activateTab(DEFAULT_DASHBOARD_TAB);
   persistSavedLoginChoice(data);
   form.reset();
   runPostAuthTasks(data.username, data.password, payload.user);
@@ -1401,12 +1402,12 @@ async function completeAuthenticatedSession(payload, title, message) {
   if (!payload.user?.id) throw new Error("KAILA did not return an account session.");
   state.session = payload.user;
   state.activeRole = defaultActiveRole();
-  state.lastDashboardTabTarget = "#feed-pane";
+  state.lastDashboardTabTarget = DEFAULT_DASHBOARD_TAB;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   localStorage.setItem(STORAGE.activeRole, state.activeRole);
   loadAttentionBadgesForSession();
   syncSocketIdentity();
-  activateTab("#feed-pane");
+  activateTab(DEFAULT_DASHBOARD_TAB);
   route("app");
   safeApplyState(payload.state);
   runPostAuthTasks("", "", payload.user);
@@ -1758,7 +1759,7 @@ async function logout() {
   state.session = null;
   state.feedPosts = [];
   state.feedLoaded = false;
-  state.lastDashboardTabTarget = "#feed-pane";
+  state.lastDashboardTabTarget = DEFAULT_DASHBOARD_TAB;
   loadAttentionBadgesForSession();
   syncSocketIdentity();
   await window.Swal.fire({
@@ -1871,15 +1872,15 @@ function renderTabs() {
     tabBar.dataset.accountRole = state.session?.role || "";
   }
   if (hideProviders && providersTab?.classList.contains("active")) {
-    activateTab("#feed-pane");
+    activateTab(DEFAULT_DASHBOARD_TAB);
   }
-  if (!["admin", SUPPORT_ROLE].includes(state.session?.role) && clientsTab?.classList.contains("active")) activateTab("#feed-pane");
-  if (!["admin", "client", "provider", SUPPORT_ROLE].includes(state.session?.role) && customerServiceTab?.classList.contains("active")) activateTab("#feed-pane");
+  if (!["admin", SUPPORT_ROLE].includes(state.session?.role) && clientsTab?.classList.contains("active")) activateTab(DEFAULT_DASHBOARD_TAB);
+  if (!["admin", "client", "provider", SUPPORT_ROLE].includes(state.session?.role) && customerServiceTab?.classList.contains("active")) activateTab(DEFAULT_DASHBOARD_TAB);
   if (state.session?.role === "ops" && inboxTab?.classList.contains("active")) activateTab("#validation-pane");
-  if (state.session?.role !== "admin" && opsTab?.classList.contains("active")) activateTab("#feed-pane");
-  if (!canViewActivity && activityTab?.classList.contains("active")) activateTab("#feed-pane");
-  if (!["admin", "ops"].includes(state.session?.role) && validationTab?.classList.contains("active")) activateTab("#feed-pane");
-  if (isSupport && !["#feed-pane", "#requests-pane", "#clients-pane", "#providers-pane", "#customer-service-pane", "#inbox-pane", "#activity-pane", "#settings-pane"].includes(state.lastDashboardTabTarget)) activateTab("#feed-pane");
+  if (state.session?.role !== "admin" && opsTab?.classList.contains("active")) activateTab(DEFAULT_DASHBOARD_TAB);
+  if (!canViewActivity && activityTab?.classList.contains("active")) activateTab(DEFAULT_DASHBOARD_TAB);
+  if (!["admin", "ops"].includes(state.session?.role) && validationTab?.classList.contains("active")) activateTab(DEFAULT_DASHBOARD_TAB);
+  if (isSupport && !["#feed-pane", "#requests-pane", "#clients-pane", "#providers-pane", "#customer-service-pane", "#inbox-pane", "#activity-pane", "#settings-pane"].includes(state.lastDashboardTabTarget)) activateTab(DEFAULT_DASHBOARD_TAB);
   renderJobTabBadge();
 }
 
@@ -1905,7 +1906,7 @@ function fallbackDashboardTab() {
   const lastTab = $(`.app-tabs .nav-link[data-bs-target="${escapeAttribute(state.lastDashboardTabTarget)}"]`);
   if (lastTab && !lastTab.hidden) return state.lastDashboardTabTarget;
   const tab = $$(".app-tabs .nav-link").find((item) => !item.hidden && !["#activity-pane", "#settings-pane"].includes(item.dataset.bsTarget));
-  return tab?.dataset.bsTarget || "#feed-pane";
+  return tab?.dataset.bsTarget || DEFAULT_DASHBOARD_TAB;
 }
 
 function focusRequestCard(requestId, offerId = "") {
@@ -1918,6 +1919,7 @@ function focusRequestCard(requestId, offerId = "") {
       if (attempt < 5) setTimeout(() => focus(attempt + 1), 120);
       return;
     }
+    setJobCardExpanded(card, true);
     card.scrollIntoView({ behavior: "smooth", block: "center" });
     card.classList.add("request-card-focus");
     setTimeout(() => card.classList.remove("request-card-focus"), 2200);
@@ -2290,7 +2292,7 @@ function renderFeedComment(comment = {}, post = {}, options = {}) {
           <p>${escapeHtml(comment.body)}</p>
           <div class="feed-comment-actions">
             ${renderFeedCommentReactionButtons(comment, publicOnly)}
-            ${isReply || comment.hidden || comment.deleted ? "" : `<button type="button" data-feed-reply-toggle title="Reply" aria-label="Reply" ${publicOnly ? "data-auth-required" : ""}><span aria-hidden="true">💬</span></button>`}
+            ${isReply || comment.hidden || comment.deleted ? "" : `<button type="button" data-feed-reply-toggle title="Reply" aria-label="Reply" ${publicOnly ? "data-auth-required" : ""}><i class="fa-solid fa-reply"></i></button>`}
             ${renderFeedCommentMoreMenu(comment)}
           </div>
         </div>
@@ -2307,10 +2309,10 @@ function renderFeedComment(comment = {}, post = {}, options = {}) {
 function renderFeedCommentReactionButtons(comment = {}, publicOnly = false) {
   if (comment.hidden || comment.deleted) return "";
   const labels = { like: "Like", helpful: "Helpful", interested: "Interested" };
-  const icons = { like: "👍", helpful: "🙌", interested: "⭐" };
+  const icons = { like: "fa-thumbs-up", helpful: "fa-hand-holding-heart", interested: "fa-star" };
   return ["like", "helpful", "interested"].map((reaction) => `
     <button class="${comment.viewerReactions?.includes(reaction) ? "active" : ""}" type="button" data-feed-comment-reaction="${reaction}" title="${escapeAttribute(labels[reaction])}" aria-label="${escapeAttribute(labels[reaction])}" ${publicOnly ? "data-auth-required" : ""}>
-      <span aria-hidden="true">${escapeHtml(icons[reaction])}</span>
+      <i class="fa-solid ${icons[reaction]}" aria-hidden="true"></i>
       <b>${Number(comment.reactions?.[reaction] || 0)}</b>
     </button>
   `).join("");
@@ -2326,7 +2328,7 @@ function renderFeedCommentMoreMenu(comment = {}) {
   if (!actions) return "";
   return `
     <span class="feed-comment-more">
-      <button type="button" data-feed-comment-more title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true">⋮</span></button>
+      <button type="button" data-feed-comment-more title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><i class="fa-solid fa-ellipsis-vertical" aria-hidden="true"></i></button>
       <span class="feed-comment-more-menu" data-feed-comment-more-menu role="menu" hidden>${actions}</span>
     </span>
   `;
@@ -2344,7 +2346,7 @@ function renderMediaFeedComment(comment = {}, options = {}) {
           <p>${escapeHtml(comment.body || "")}</p>
           <div class="feed-comment-actions">
             ${renderMediaFeedCommentReactionButtons(comment)}
-            ${isReply || comment.hidden || comment.deleted ? "" : `<button type="button" data-media-feed-reply-toggle title="Reply" aria-label="Reply"><span aria-hidden="true">💬</span></button>`}
+            ${isReply || comment.hidden || comment.deleted ? "" : `<button type="button" data-media-feed-reply-toggle title="Reply" aria-label="Reply"><i class="fa-solid fa-reply"></i></button>`}
             ${renderMediaFeedCommentMoreMenu(comment)}
           </div>
         </div>
@@ -2361,10 +2363,10 @@ function renderMediaFeedComment(comment = {}, options = {}) {
 function renderMediaFeedCommentReactionButtons(comment = {}) {
   if (comment.hidden || comment.deleted) return "";
   const labels = { like: "Like", helpful: "Helpful", interested: "Interested" };
-  const icons = { like: "👍", helpful: "🙌", interested: "⭐" };
+  const icons = { like: "fa-thumbs-up", helpful: "fa-hand-holding-heart", interested: "fa-star" };
   return ["like", "helpful", "interested"].map((reaction) => `
     <button class="${comment.viewerReactions?.includes(reaction) ? "active" : ""}" type="button" data-media-feed-comment-reaction="${reaction}" title="${escapeAttribute(labels[reaction])}" aria-label="${escapeAttribute(labels[reaction])}">
-      <span aria-hidden="true">${escapeHtml(icons[reaction])}</span>
+      <i class="fa-solid ${icons[reaction]}" aria-hidden="true"></i>
       <b>${Number(comment.reactions?.[reaction] || 0)}</b>
     </button>
   `).join("");
@@ -2380,7 +2382,7 @@ function renderMediaFeedCommentMoreMenu(comment = {}) {
   if (!actions) return "";
   return `
     <span class="feed-comment-more">
-      <button type="button" data-media-feed-comment-more title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true">⋮</span></button>
+      <button type="button" data-media-feed-comment-more title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><i class="fa-solid fa-ellipsis-vertical" aria-hidden="true"></i></button>
       <span class="feed-comment-more-menu" data-feed-comment-more-menu role="menu" hidden>${actions}</span>
     </span>
   `;
@@ -2897,6 +2899,10 @@ function activeJobRequestsForBadge(requests = visibleJobRequestsForSession()) {
   return requests.filter((request) => !["Cancelled", "Payment Released", "Rated", "Rated / Closed", "Resolved"].includes(request.status));
 }
 
+function isOfferStageRequest(request = {}) {
+  return ["Offers Received", "Countered"].includes(request.status);
+}
+
 function renderJobTabBadge() {
   setBellCount($("[data-jobs-count]"), state.session ? activeJobRequestsForBadge().length : 0);
 }
@@ -2946,7 +2952,7 @@ function renderRequests() {
 
 function filterJobRequests(requests = [], filter = "all") {
   if (filter === "posted") return requests.filter((request) => ["Posted", "Open"].includes(request.status));
-  if (filter === "offers") return requests.filter((request) => ["Offers Received", "Countered"].includes(request.status) || visibleOffers(request).length);
+  if (filter === "offers") return requests.filter(isOfferStageRequest);
   if (filter === "active") return requests.filter((request) => ["Accepted", "In Progress", "Provider Marked Done", "Revision Requested", "Disputed"].includes(request.status));
   if (filter === "completed") return requests.filter((request) => ["Payment Released", "Rated", "Rated / Closed", "Resolved"].includes(request.status));
   return requests;
@@ -3088,6 +3094,28 @@ function renderJobSummary(request = {}) {
   `;
 }
 
+function renderCompactJobMeta(request = {}) {
+  const contactName = request.clientId === state.session?.id
+    ? (request.acceptedProviderContact?.name || acceptedOffer(request)?.providerName || "Provider not selected")
+    : (request.clientName || "Client");
+  return `
+    <div class="job-compact-meta">
+      <span><i class="fa-solid fa-user"></i>${escapeHtml(contactName)}</span>
+      ${request.preferredSchedule ? `<span><i class="fa-solid fa-calendar-check"></i>${escapeHtml(request.preferredSchedule)}</span>` : ""}
+      ${request.acceptedProviderId ? `<span><i class="fa-solid fa-circle-check"></i>Provider selected</span>` : ""}
+      ${request.disputeNote ? `<span><i class="fa-solid fa-triangle-exclamation"></i>Dispute noted</span>` : ""}
+    </div>
+  `;
+}
+
+function renderJobExpandButton(request = {}) {
+  return `
+    <button class="job-expand-button" type="button" data-toggle-job-card="${escapeAttribute(request.id)}" aria-expanded="false">
+      <span><i class="fa-solid fa-chevron-down"></i> View full details</span>
+    </button>
+  `;
+}
+
 function routeDistanceTextForOffer(request = {}, offer = {}) {
   const routeDistance = request?.jobLocation && offer?.providerLocation ? cachedRouteDistanceKm(request.jobLocation, offer.providerLocation) : null;
   if (routeDistance !== null) return `Route ${formatDistanceKm(routeDistance)} away`;
@@ -3107,6 +3135,7 @@ function renderJobPrimaryCta(request = {}) {
 }
 
 function renderRequestCard(request) {
+  const primaryCta = renderJobPrimaryCta(request);
   return `
     <article class="k-card request-card" data-request-card="${escapeAttribute(request.id)}" data-home-search-item="job" data-home-search-text="${escapeAttribute(homeSearchText([request.title, request.category, request.details, request.description, request.status, request.area, request.urgency, request.preferredSchedule]))}">
       <div class="request-card-head">
@@ -3118,44 +3147,51 @@ function renderRequestCard(request) {
         <span class="badge text-bg-${statusColor(request.status)} status-pill align-self-start">${escapeHtml(request.status)}</span>
       </div>
       ${renderJobSummary(request)}
-      ${renderJobStatusTracker(request)}
-      ${renderIdentity(request.clientName, request.clientPhotoUrl, "Client reputation", request.clientReputation)}
-      <div class="meta">
-        <span>${escapeHtml(request.area)}</span>
-        <span>${escapeHtml(request.urgency)}</span>
-        ${request.preferredSchedule ? `<span>${escapeHtml(request.preferredSchedule)}</span>` : ""}
-        <span>${escapeHtml(formatCurrency(request.budget))}</span>
-        ${renderRequestDistanceMeta(request)}
+      ${renderCompactJobMeta(request)}
+      <div class="job-compact-actions ${primaryCta ? "" : "single"}">
+        ${primaryCta || ""}
+        ${renderJobExpandButton(request)}
       </div>
-      ${["admin", "ops", SUPPORT_ROLE].includes(state.session?.role) ? `
-        <div class="offer">
-          <strong>Ops intake</strong>
-          <div>${escapeHtml(request.contactMethod || "No contact method")} ${request.exactLocationNotes ? `- ${escapeHtml(request.exactLocationNotes)}` : ""}</div>
-          <small>Forwarding: ${request.permissionToForward ? "Allowed" : "No"} | Rating consent: ${request.consentToRate ? "Yes" : "No"}</small>
+      <div class="request-card-full" data-job-card-full hidden>
+        ${renderJobStatusTracker(request)}
+        ${renderIdentity(request.clientName, request.clientPhotoUrl, "Client reputation", request.clientReputation)}
+        <div class="meta">
+          <span>${escapeHtml(request.area)}</span>
+          <span>${escapeHtml(request.urgency)}</span>
+          ${request.preferredSchedule ? `<span>${escapeHtml(request.preferredSchedule)}</span>` : ""}
+          <span>${escapeHtml(formatCurrency(request.budget))}</span>
+          ${renderRequestDistanceMeta(request)}
         </div>
-      ` : ""}
-      ${renderAdminRequestMetricDetail(request)}
-      ${renderAcceptedProviderContact(request)}
-      ${renderAcceptedClientContact(request)}
-      ${renderNavigationCard(request)}
-      ${renderOffers(request)}
-      ${renderAttachments("Request media", request.requestAttachments, request.id)}
-      ${renderCompletionPanel(request)}
-      ${renderRatings(request)}
-      ${request.disputeNote ? `<div class="offer"><strong>Dispute note</strong><div>${escapeHtml(request.disputeNote)}</div></div>` : ""}
-      ${renderAttachments("Dispute media", request.disputeAttachments, request.id)}
-      ${renderJobPrimaryCta(request) ? `<div class="job-primary-cta">${renderJobPrimaryCta(request)}</div>` : ""}
-      <div class="card-actions">
-        ${canEditRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-edit-request="${request.id}"><i class="fa-solid fa-pen"></i> Edit</button>` : ""}
-        ${canAcceptClientPrice(request) ? `<button class="btn btn-sm btn-outline-success" data-accept-client-price="${request.id}"><i class="fa-solid fa-circle-check"></i> Accept Price</button>` : ""}
-        ${canUpdateRequestDistance(request) ? `<button class="btn btn-sm btn-outline-secondary" data-update-request-distance="${request.id}"><i class="fa-solid fa-location-crosshairs"></i> Distance</button>` : ""}
-        ${canSelectOffer(request) ? `<button class="btn btn-sm btn-outline-primary" data-open-offers-screen="${request.id}"><i class="fa-solid fa-list-check"></i> Offers</button>` : ""}
-        ${navigationTargetForRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-open-active-job="${request.id}"><i class="fa-solid fa-diamond-turn-right"></i> Track</button>` : ""}
-        ${canOffer(request) ? `<button class="btn btn-sm btn-outline-primary" data-offer="${request.id}"><i class="fa-solid fa-hand-holding-dollar"></i> Offer</button>` : ""}
-        ${canPass(request) ? `<button class="btn btn-sm btn-outline-secondary" data-pass="${request.id}"><i class="fa-solid fa-forward-step"></i> Pass</button>` : ""}
-        ${canViewConversation(request) ? `<button class="btn btn-sm btn-outline-primary" data-conversation="${request.id}"><i class="fa-solid fa-message"></i> Messages</button>` : ""}
-        ${jobActionButtons(request)}
-        ${canReportJob(request) ? `<button class="btn btn-sm btn-outline-warning" data-report-job="${request.id}"><i class="fa-solid fa-flag"></i> Report Job</button>` : ""}
+        ${["admin", "ops", SUPPORT_ROLE].includes(state.session?.role) ? `
+          <div class="offer">
+            <strong>Ops intake</strong>
+            <div>${escapeHtml(request.contactMethod || "No contact method")} ${request.exactLocationNotes ? `- ${escapeHtml(request.exactLocationNotes)}` : ""}</div>
+            <small>Forwarding: ${request.permissionToForward ? "Allowed" : "No"} | Rating consent: ${request.consentToRate ? "Yes" : "No"}</small>
+          </div>
+        ` : ""}
+        ${renderAdminRequestMetricDetail(request)}
+        ${renderAcceptedProviderContact(request)}
+        ${renderAcceptedClientContact(request)}
+        ${renderNavigationCard(request)}
+        ${renderOffers(request)}
+        ${renderAttachments("Request media", request.requestAttachments, request.id)}
+        ${renderCompletionPanel(request)}
+        ${renderRatings(request)}
+        ${request.disputeNote ? `<div class="offer"><strong>Dispute note</strong><div>${escapeHtml(request.disputeNote)}</div></div>` : ""}
+        ${renderAttachments("Dispute media", request.disputeAttachments, request.id)}
+        ${primaryCta ? `<div class="job-primary-cta">${primaryCta}</div>` : ""}
+        <div class="card-actions">
+          ${canEditRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-edit-request="${request.id}"><i class="fa-solid fa-pen"></i> Edit</button>` : ""}
+          ${canAcceptClientPrice(request) ? `<button class="btn btn-sm btn-outline-success" data-accept-client-price="${request.id}"><i class="fa-solid fa-circle-check"></i> Accept Price</button>` : ""}
+          ${canUpdateRequestDistance(request) ? `<button class="btn btn-sm btn-outline-secondary" data-update-request-distance="${request.id}"><i class="fa-solid fa-location-crosshairs"></i> Distance</button>` : ""}
+          ${canSelectOffer(request) ? `<button class="btn btn-sm btn-outline-primary" data-open-offers-screen="${request.id}"><i class="fa-solid fa-list-check"></i> Offers</button>` : ""}
+          ${navigationTargetForRequest(request) ? `<button class="btn btn-sm btn-outline-primary" data-open-active-job="${request.id}"><i class="fa-solid fa-diamond-turn-right"></i> Track</button>` : ""}
+          ${canOffer(request) ? `<button class="btn btn-sm btn-outline-primary" data-offer="${request.id}"><i class="fa-solid fa-hand-holding-dollar"></i> Offer</button>` : ""}
+          ${canPass(request) ? `<button class="btn btn-sm btn-outline-secondary" data-pass="${request.id}"><i class="fa-solid fa-forward-step"></i> Pass</button>` : ""}
+          ${canViewConversation(request) ? `<button class="btn btn-sm btn-outline-primary" data-conversation="${request.id}"><i class="fa-solid fa-message"></i> Messages</button>` : ""}
+          ${jobActionButtons(request)}
+          ${canReportJob(request) ? `<button class="btn btn-sm btn-outline-warning" data-report-job="${request.id}"><i class="fa-solid fa-flag"></i> Report Job</button>` : ""}
+        </div>
       </div>
     </article>
   `;
@@ -3426,6 +3462,10 @@ function renderCompletionPanel(request = {}) {
 }
 
 function bindRequestCardActions(host) {
+  $$("[data-toggle-job-card]", host).forEach((button) => button.addEventListener("click", () => {
+    const card = button.closest("[data-request-card]");
+    setJobCardExpanded(card, button.getAttribute("aria-expanded") !== "true");
+  }));
   $$("[data-scroll-offers]", host).forEach((button) => button.addEventListener("click", () => {
     $(`[data-offers-for="${escapeCssIdentifier(button.dataset.scrollOffers)}"]`, host)?.scrollIntoView({ behavior: "smooth", block: "center" });
   }));
@@ -3443,6 +3483,25 @@ function bindRequestCardActions(host) {
   $$("[data-conversation]", host).forEach((button) => button.addEventListener("click", () => openConversation(button.dataset.conversation)));
   $$("[data-job-action]", host).forEach((button) => button.addEventListener("click", () => openJobAction(button.dataset.requestId, button.dataset.jobAction)));
   $$("[data-report-job]", host).forEach((button) => button.addEventListener("click", () => openReportJobModal(button.dataset.reportJob)));
+}
+
+function setJobCardExpanded(card, expanded) {
+  if (!card) return;
+  const isExpanded = Boolean(expanded);
+  const body = $("[data-job-card-full]", card);
+  const button = $("[data-toggle-job-card]", card);
+  card.classList.toggle("expanded", isExpanded);
+  if (body) body.hidden = !isExpanded;
+  if (button) {
+    button.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+    button.innerHTML = isExpanded
+      ? `<span><i class="fa-solid fa-chevron-up"></i> Hide full details</span>`
+      : `<span><i class="fa-solid fa-chevron-down"></i> View full details</span>`;
+  }
+  if (isExpanded) {
+    hydrateRequestRouteDistances(card);
+    hydrateOfferRouteDistances(card);
+  }
 }
 
 function renderOffers(request) {
@@ -9595,10 +9654,7 @@ function handleRequestCreated({ request } = {}) {
   if (!providerMatchesRequest(request)) return;
   upsertRequest(request);
   loadState({ silent: true }).catch(() => {});
-  if (canActAsProvider() && $("#requests-pane")?.classList.contains("active")) {
-    clearJobRequestNotification(request.id);
-    return;
-  }
+  if (canActAsProvider() && $("#requests-pane")?.classList.contains("active")) clearJobRequestNotification(request.id);
   const client = userProfile(request.clientId);
   announceJobRequestAttention(request);
 
@@ -9632,7 +9688,7 @@ function handleRequestCreated({ request } = {}) {
         </div>
       </div>
     `,
-  });
+  }, { immediate: true });
 }
 
 function announceJobRequestAttention(request = {}) {
@@ -9681,7 +9737,7 @@ async function handleOfferSaved({ requestId, offer } = {}) {
   announceAttentionEvent(isCounter ? "New counter-offer" : "New offer received", `${offer.providerName} sent ${formatCurrency(offer.amount)} for ${request.category}`, "offer");
   if (offers.length > 1) {
     if (updateActiveOfferPrompt(request, isCounter)) return;
-    queueAttentionModal(compactOfferAttentionOptions(request, isCounter));
+    queueAttentionModal(compactOfferAttentionOptions(request, isCounter), { immediate: true });
     return;
   }
   queueAttentionModal({
@@ -9707,7 +9763,7 @@ async function handleOfferSaved({ requestId, offer } = {}) {
         </div>
       </div>
     `,
-  });
+  }, { immediate: true });
 }
 
 async function handleRequestPassed({ requestId } = {}) {
@@ -9824,7 +9880,7 @@ async function openOfferDetailModal(requestId, offerId) {
   if (result.isConfirmed) {
     confirmRequest(requestId, offerId);
   } else if (result.isDenied) {
-    queueAttentionModal(compactOfferAttentionOptions(request));
+    queueAttentionModal(compactOfferAttentionOptions(request), { immediate: true });
   } else if (result.dismiss === window.Swal.DismissReason.cancel) {
     focusRequestCard(requestId, offerId);
   }
@@ -9867,7 +9923,7 @@ function handleMessageSaved({ requestId, message } = {}) {
         <p class="mb-0">${escapeHtml(message.detail)}</p>
       </div>
     `,
-  });
+  }, { immediate: true });
 }
 
 function handleDirectMessageSaved({ userIds = [], message } = {}) {
@@ -9927,6 +9983,18 @@ async function handleRequestConfirmed({ requestId, actorId } = {}) {
   const request = state.requests.find((item) => item.id === requestId);
   if (!request || !isRequestParty(request) || actorId === state.session?.id) return;
   announceAttentionEvent("Offer confirmed", `${request.category} is now confirmed. Messaging and audio calls are open.`, "confirmed");
+  queueAttentionModal({
+    icon: "success",
+    title: "Offer confirmed",
+    confirmButtonText: "Open job",
+    onConfirm: () => focusRequestCard(request.id),
+    html: `
+      <div class="text-start">
+        <strong>${escapeHtml(request.category || "Job confirmed")}</strong>
+        <p class="mb-0">Messaging and audio calls are open.</p>
+      </div>
+    `,
+  }, { immediate: true });
 }
 
 async function handleRequestAction({ requestId, action, status, actorId } = {}) {
@@ -9951,7 +10019,22 @@ async function handleRequestAction({ requestId, action, status, actorId } = {}) 
     auto_confirm: "Job auto-confirmed",
     rating_window_closed: "Rating window closed",
   };
-  announceAttentionEvent(titles[action] || "Job updated", `${request.category}: ${status || request.status}`, ["dispute", "cancel", "request_revision"].includes(action) ? "urgent" : "update");
+  const title = titles[action] || "Job updated";
+  const detail = `${request.category}: ${status || request.status}`;
+  const urgent = ["dispute", "cancel", "request_revision"].includes(action);
+  announceAttentionEvent(title, detail, urgent ? "urgent" : "update");
+  queueAttentionModal({
+    icon: urgent ? "warning" : "info",
+    title,
+    confirmButtonText: "Open job",
+    onConfirm: () => focusRequestCard(request.id),
+    html: `
+      <div class="text-start">
+        <strong>${escapeHtml(request.category || "Job")}</strong>
+        <p class="mb-0">${escapeHtml(status || request.status || "Updated")}</p>
+      </div>
+    `,
+  }, { immediate: true });
 }
 
 function isRequestParty(request = {}) {
@@ -10598,8 +10681,26 @@ function vibrateAfterInteraction(pattern) {
   navigator.vibrate(pattern);
 }
 
-function queueAttentionModal(options) {
+function queueAttentionModal(options, config = {}) {
+  if (config.immediate) {
+    state.attentionQueue.unshift(options);
+    interruptAttentionModal();
+    return;
+  }
   state.attentionQueue.push(options);
+  showNextAttentionModal();
+}
+
+function interruptAttentionModal() {
+  clearTimeout(state.attentionTimer);
+  const activePopup = $(".swal2-popup");
+  if (window.Swal.isVisible() && activePopup && !activePopup.classList.contains("swal2-toast")) {
+    state.attentionOpen = false;
+    window.Swal.close();
+    setTimeout(showNextAttentionModal, 120);
+    return;
+  }
+  state.attentionOpen = false;
   showNextAttentionModal();
 }
 
@@ -10780,7 +10881,7 @@ function clearVisibleProviderJobNotifications() {
 }
 
 function canSelectOffer(request) {
-  return request.clientId === state.session?.id && visibleOffers(request).length > 0 && ["Offers Received", "Countered"].includes(request.status);
+  return request.clientId === state.session?.id && visibleOffers(request).length > 0 && isOfferStageRequest(request);
 }
 
 function canEditRequest(request = {}) {
@@ -12238,7 +12339,7 @@ async function tryOfflineLogin(data = {}) {
   }
 
   state.session = stored.user;
-  state.lastDashboardTabTarget = "#feed-pane";
+  state.lastDashboardTabTarget = DEFAULT_DASHBOARD_TAB;
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   loadAttentionBadgesForSession();
   registerPushToken(state.pushToken).catch((error) => console.warn("KAILA push token registration failed:", error));
@@ -12250,7 +12351,7 @@ async function tryOfflineLogin(data = {}) {
     render();
   }
   syncQueuedValidationEntries();
-  activateTab("#feed-pane");
+  activateTab(DEFAULT_DASHBOARD_TAB);
   await successRedirect("Offline login", `Welcome back, ${displayUserName(state.session)}. Saved entries will sync when online.`, { timer: 1, timerProgressBar: false });
   return true;
 }

@@ -8035,6 +8035,88 @@ select:focus {
   color: var(--kaila-primary);
 }
 
+.job-compact-meta,
+.job-compact-actions,
+.request-card-full {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.job-compact-meta {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.job-compact-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.36rem;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--kaila-muted);
+  font-size: 0.7rem;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-compact-meta i {
+  color: var(--kaila-primary);
+}
+
+.job-compact-actions {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.job-compact-actions.single {
+  grid-template-columns: 1fr;
+}
+
+.job-compact-actions > .btn,
+.job-expand-button {
+  width: 100%;
+  min-height: 2.35rem;
+}
+
+.job-expand-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 0.78rem;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  font-size: 0.75rem;
+  font-weight: 900;
+}
+
+.job-expand-button span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.request-card-full[hidden] {
+  display: none !important;
+}
+
+.request-card.expanded {
+  gap: 0.82rem;
+}
+
+:root[data-theme="dark"] .job-expand-button {
+  background: rgba(15, 23, 42, 0.72);
+  color: var(--text);
+}
+
+@media (max-width: 420px) {
+  .job-compact-actions,
+  .job-compact-meta {
+    grid-template-columns: 1fr;
+  }
+}
+
 .job-status-tracker {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

@@ -38,7 +38,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
-  <link rel="stylesheet" href="style.css?v=20260616-modal-stack">
+  <link rel="stylesheet" href="style.css?v=20260616-collapsed-jobs">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -451,12 +451,12 @@
           </div>
 
           <nav class="nav nav-pills nav-fill compact-tabs app-tabs" role="tablist">
-            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#feed-pane" type="button" data-feed-tab>
-              <i class="fa-solid fa-house"></i><span>Home</span>
-            </button>
-            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#requests-pane" type="button" data-requests-tab>
+            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#requests-pane" type="button" data-requests-tab>
               <i class="fa-solid fa-clipboard-list"></i><span>Jobs</span>
               <b class="tab-count" data-jobs-count hidden>0</b>
+            </button>
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#feed-pane" type="button" data-feed-tab>
+              <i class="fa-solid fa-house"></i><span>Home</span>
             </button>
             <button class="nav-link" data-bs-toggle="pill" data-bs-target="#providers-pane" type="button" data-providers-tab>
               <i class="fa-solid fa-people-carry-box"></i><span>Services</span>
@@ -486,7 +486,10 @@
           </nav>
 
           <div class="tab-content app-tab-content">
-            <div class="tab-pane fade show active" id="feed-pane">
+            <div class="tab-pane fade show active" id="requests-pane">
+              <div class="stack" data-request-list></div>
+            </div>
+            <div class="tab-pane fade" id="feed-pane">
               <div class="feed-shell">
                 <section class="home-hero" aria-label="KAILA marketplace home">
                   <div class="home-greeting">
@@ -573,9 +576,6 @@
                 <div class="stack" data-feed-list></div>
               </div>
             </div>
-            <div class="tab-pane fade" id="requests-pane">
-              <div class="stack" data-request-list></div>
-            </div>
             <div class="tab-pane fade" id="providers-pane">
               <div class="stack" data-provider-list></div>
             </div>
@@ -626,6 +626,6 @@
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=20260616-modal-stack"></script>
+  <script src="app.js?v=20260616-collapsed-jobs"></script>
 </body>
 </html>
