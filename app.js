@@ -32,6 +32,8 @@ const YES_NO_MAYBE_OPTIONS = ["Yes", "No", "Maybe"];
 const DECISION_SIGNAL_OPTIONS = ["Strong positive", "Positive", "Neutral", "Concern", "Blocker"];
 const APP_ROUTES = ["landing", "register", "login", "privacy", "terms", "support", "public-post", "app"];
 const DEFAULT_DASHBOARD_TAB = "#requests-pane";
+const OPS_DASHBOARD_TAB = "#validation-pane";
+const SUPPORT_DASHBOARD_TAB = "#customer-service-pane";
 const SUPPORT_ROLE = "customer_service";
 const SUPPORT_LABEL = "Customer Service";
 const SUPPORT_AVATAR = "assets/kaila-customer-service-avatar.png";
@@ -107,6 +109,7 @@ const state = {
   pendingNativeCallAction: "",
   pendingNativeCallId: "",
   lastStateRefreshAt: 0,
+  appLoadingCount: 0,
   providerDistanceLocationRefreshing: false,
   userInteracted: false,
   attentionQueue: [],
@@ -174,29 +177,37 @@ const $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(sel
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
-  loadAttentionBadgesForSession();
-  registerServiceWorker();
-  setupAttentionNotifications();
-  setupNativeNotifications();
-  setupPushNotifications();
-  setupOfflineSync();
-  setupPullToRefresh();
-  initializeTheme();
-  bindEvents();
-  setupLoginCredentialFill();
-  initializeSocketUrl();
-  await loadSocialAuthConfig();
-  hydratePendingGoogleSignup();
-  await loadGeography();
-  renderRegisterAddress();
-  await loadState();
-  syncQueuedValidationEntries();
-  const handledSocialRedirect = await handleGoogleRedirectResult();
-  if (!handledSocialRedirect) route(initialRoute());
-  connectSocket();
-  setupMobileUpdateChecks();
-  checkMobileUpdate({ force: true });
-  consumeNativeLaunchAction();
+  const stopLoading = showAppLoading("Loading KAILA", "Preparing your workspace");
+  try {
+    loadAttentionBadgesForSession();
+    registerServiceWorker();
+    setupAttentionNotifications();
+    setupNativeNotifications();
+    setupPushNotifications();
+    setupOfflineSync();
+    setupPullToRefresh();
+    initializeTheme();
+    bindEvents();
+    setupLoginCredentialFill();
+    initializeSocketUrl();
+    updateAppLoading("Loading KAILA", "Checking sign-in options");
+    await loadSocialAuthConfig();
+    hydratePendingGoogleSignup();
+    updateAppLoading("Loading KAILA", "Loading service areas");
+    await loadGeography();
+    renderRegisterAddress();
+    updateAppLoading("Loading KAILA", "Syncing your workspace");
+    await loadState();
+    syncQueuedValidationEntries();
+    const handledSocialRedirect = await handleGoogleRedirectResult();
+    if (!handledSocialRedirect) route(initialRoute());
+    connectSocket();
+    setupMobileUpdateChecks();
+    checkMobileUpdate({ force: true });
+    consumeNativeLaunchAction();
+  } finally {
+    stopLoading();
+  }
 }
 
 function setupOfflineSync() {
@@ -1218,6 +1229,8 @@ async function register(event) {
     notify("Registration failed", "Provider category, services, coverage area, request consent, rating consent, and rules agreement are required.", "warning");
     return;
   }
+  const stopLoading = showAppLoading("Creating account", "Setting up your KAILA workspace");
+  setFormLoading(form, true, "Creating account");
   let payload;
   try {
     payload = await apiFetch("/api/register", {
@@ -1225,21 +1238,25 @@ async function register(event) {
       body: JSON.stringify(data),
     });
   } catch (error) {
+    stopLoading();
+    setFormLoading(form, false);
     notify("Registration failed", error.message, "error");
     return;
   }
 
   state.session = payload.user;
   state.activeRole = defaultActiveRole();
-  state.lastDashboardTabTarget = DEFAULT_DASHBOARD_TAB;
+  state.lastDashboardTabTarget = defaultDashboardTab(state.session.role);
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   localStorage.setItem(STORAGE.activeRole, state.activeRole);
   loadAttentionBadgesForSession();
   syncSocketIdentity();
   safeApplyState(payload.state);
-  activateTab(DEFAULT_DASHBOARD_TAB);
+  activateTab(defaultDashboardTab(state.session.role));
   form.reset();
   runPostAuthTasks(data.username, data.password, payload.user);
+  setFormLoading(form, false);
+  stopLoading();
   await successRedirect("Account created", "Welcome to KAILA.");
 }
 
@@ -1247,6 +1264,8 @@ async function login(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = Object.fromEntries(new FormData(form).entries());
+  const stopLoading = showAppLoading("Signing in", "Checking your account");
+  setFormLoading(form, true, "Signing in");
   let payload;
   try {
     payload = await apiFetch("/api/login", {
@@ -1254,28 +1273,38 @@ async function login(event) {
       body: JSON.stringify(data),
     });
   } catch (error) {
-    if (error.offline && await tryOfflineLogin(data)) {
-      persistSavedLoginChoice(data);
-      form.reset();
+    if (error.offline) {
+      stopLoading();
+      setFormLoading(form, false);
+      if (await tryOfflineLogin(data)) {
+        persistSavedLoginChoice(data);
+        form.reset();
+        return;
+      }
+      notify("Login failed", error.message, "error");
       return;
     }
+    stopLoading();
+    setFormLoading(form, false);
     notify("Login failed", error.message, "error");
     return;
   }
 
   state.session = payload.user;
   state.activeRole = defaultActiveRole();
-  state.lastDashboardTabTarget = DEFAULT_DASHBOARD_TAB;
+  state.lastDashboardTabTarget = defaultDashboardTab(state.session.role);
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   localStorage.setItem(STORAGE.activeRole, state.activeRole);
   loadAttentionBadgesForSession();
   syncSocketIdentity();
   safeApplyState(payload.state);
-  activateTab(DEFAULT_DASHBOARD_TAB);
+  activateTab(defaultDashboardTab(state.session.role));
   persistSavedLoginChoice(data);
   form.reset();
   runPostAuthTasks(data.username, data.password, payload.user);
-  await successRedirect("Logged in", `Welcome back, ${displayUserName(state.session)}.`, { timer: 1, timerProgressBar: false });
+  setFormLoading(form, false);
+  stopLoading();
+  await successRedirect("Logged in", `Welcome back, ${displayUserName(state.session)}.`, { timer: 2600, timerProgressBar: true });
 }
 
 async function loadSocialAuthConfig() {
@@ -1372,6 +1401,8 @@ async function handleSocialAuth(provider, mode = "login") {
 }
 
 async function completeSocialAuthWithToken(provider, token, mode = "login") {
+  const label = provider === "facebook" ? "Facebook" : provider === "google" ? "Google" : "Social";
+  const stopLoading = showAppLoading(`${label} sign-in`, "Verifying your KAILA account");
   try {
     const body = { provider, token, mode };
     if (mode === "signup") {
@@ -1387,8 +1418,10 @@ async function completeSocialAuthWithToken(provider, token, mode = "login") {
     }
     if (provider === "google") forgetPendingGoogleSignup();
     const created = Boolean(payload.created);
+    stopLoading();
     await completeAuthenticatedSession(payload, created ? "Account created" : "Logged in", created ? "Welcome to KAILA. You can finish your profile in Settings." : `Welcome back, ${displayUserName(payload.user)}.`);
   } catch (error) {
+    stopLoading();
     notify("Social sign-in failed", socialAuthErrorMessage(error), "error");
   }
 }
@@ -1402,12 +1435,12 @@ async function completeAuthenticatedSession(payload, title, message) {
   if (!payload.user?.id) throw new Error("KAILA did not return an account session.");
   state.session = payload.user;
   state.activeRole = defaultActiveRole();
-  state.lastDashboardTabTarget = DEFAULT_DASHBOARD_TAB;
+  state.lastDashboardTabTarget = defaultDashboardTab(state.session.role);
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   localStorage.setItem(STORAGE.activeRole, state.activeRole);
   loadAttentionBadgesForSession();
   syncSocketIdentity();
-  activateTab(DEFAULT_DASHBOARD_TAB);
+  activateTab(defaultDashboardTab(state.session.role));
   route("app");
   safeApplyState(payload.state);
   runPostAuthTasks("", "", payload.user);
@@ -1872,15 +1905,17 @@ function renderTabs() {
     tabBar.dataset.accountRole = state.session?.role || "";
   }
   if (hideProviders && providersTab?.classList.contains("active")) {
-    activateTab(DEFAULT_DASHBOARD_TAB);
+    activateTab(defaultDashboardTab());
   }
-  if (!["admin", SUPPORT_ROLE].includes(state.session?.role) && clientsTab?.classList.contains("active")) activateTab(DEFAULT_DASHBOARD_TAB);
-  if (!["admin", "client", "provider", SUPPORT_ROLE].includes(state.session?.role) && customerServiceTab?.classList.contains("active")) activateTab(DEFAULT_DASHBOARD_TAB);
-  if (state.session?.role === "ops" && inboxTab?.classList.contains("active")) activateTab("#validation-pane");
-  if (state.session?.role !== "admin" && opsTab?.classList.contains("active")) activateTab(DEFAULT_DASHBOARD_TAB);
-  if (!canViewActivity && activityTab?.classList.contains("active")) activateTab(DEFAULT_DASHBOARD_TAB);
-  if (!["admin", "ops"].includes(state.session?.role) && validationTab?.classList.contains("active")) activateTab(DEFAULT_DASHBOARD_TAB);
-  if (isSupport && !["#feed-pane", "#requests-pane", "#clients-pane", "#providers-pane", "#customer-service-pane", "#inbox-pane", "#activity-pane", "#settings-pane"].includes(state.lastDashboardTabTarget)) activateTab(DEFAULT_DASHBOARD_TAB);
+  if (isOps && requestsTab?.classList.contains("active")) activateTab(defaultDashboardTab());
+  if (isSupport && requestsTab?.classList.contains("active") && state.lastDashboardTabTarget === DEFAULT_DASHBOARD_TAB) activateTab(defaultDashboardTab());
+  if (!["admin", SUPPORT_ROLE].includes(state.session?.role) && clientsTab?.classList.contains("active")) activateTab(defaultDashboardTab());
+  if (!["admin", "client", "provider", SUPPORT_ROLE].includes(state.session?.role) && customerServiceTab?.classList.contains("active")) activateTab(defaultDashboardTab());
+  if (state.session?.role === "ops" && inboxTab?.classList.contains("active")) activateTab(defaultDashboardTab());
+  if (state.session?.role !== "admin" && opsTab?.classList.contains("active")) activateTab(defaultDashboardTab());
+  if (!canViewActivity && activityTab?.classList.contains("active")) activateTab(defaultDashboardTab());
+  if (!["admin", "ops"].includes(state.session?.role) && validationTab?.classList.contains("active")) activateTab(defaultDashboardTab());
+  if (isSupport && !["#feed-pane", "#requests-pane", "#clients-pane", "#providers-pane", "#customer-service-pane", "#inbox-pane", "#activity-pane", "#settings-pane"].includes(state.lastDashboardTabTarget)) activateTab(defaultDashboardTab());
   renderJobTabBadge();
 }
 
@@ -1906,7 +1941,7 @@ function fallbackDashboardTab() {
   const lastTab = $(`.app-tabs .nav-link[data-bs-target="${escapeAttribute(state.lastDashboardTabTarget)}"]`);
   if (lastTab && !lastTab.hidden) return state.lastDashboardTabTarget;
   const tab = $$(".app-tabs .nav-link").find((item) => !item.hidden && !["#activity-pane", "#settings-pane"].includes(item.dataset.bsTarget));
-  return tab?.dataset.bsTarget || DEFAULT_DASHBOARD_TAB;
+  return tab?.dataset.bsTarget || defaultDashboardTab();
 }
 
 function focusRequestCard(requestId, offerId = "") {
@@ -2116,7 +2151,7 @@ function renderFeed() {
     return;
   }
   if (state.feedSyncing && !state.feedLoaded) {
-    list.innerHTML = `<div class="empty-card"><strong>Loading feed...</strong><p>Fetching community posts.</p></div>`;
+    list.innerHTML = loadingCard("Loading feed", "Fetching community posts.");
     return;
   }
   list.innerHTML = state.feedPosts.length
@@ -2131,6 +2166,15 @@ function renderHomeWorkspace() {
   $(".home-hero")?.toggleAttribute("hidden", isAdmin);
   $(".home-categories")?.toggleAttribute("hidden", isAdmin);
   $("[data-home-search-empty]")?.toggleAttribute("hidden", true);
+  const jobsShortcut = $("[data-home-workspace-shortcut]");
+  const jobsLabel = $("[data-home-jobs-label]");
+  if (jobsShortcut) jobsShortcut.dataset.homeTab = defaultDashboardTab();
+  if (jobsLabel) {
+    if (state.session?.role === "admin") jobsLabel.textContent = "Job Operations";
+    else if (state.session?.role === "ops") jobsLabel.textContent = "Validation";
+    else if (state.session?.role === SUPPORT_ROLE) jobsLabel.textContent = "Support Desk";
+    else jobsLabel.textContent = "My Jobs";
+  }
   const feedTitle = $(".home-feed-title strong");
   const feedSubtitle = $(".home-feed-title span");
   if (feedTitle) feedTitle.textContent = isAdmin ? "Admin activity" : "Recent activity";
@@ -2224,7 +2268,7 @@ function renderPublicPost() {
   const host = $("[data-public-post]");
   if (!host) return;
   if (state.publicPostLoading) {
-    host.innerHTML = `<div class="empty-card"><strong>Loading post...</strong><p>Opening this public KAILA post.</p></div>`;
+    host.innerHTML = loadingCard("Loading post", "Opening this public KAILA post.");
     return;
   }
   host.innerHTML = state.publicPost
@@ -2970,14 +3014,18 @@ function renderJobsHeader(requests = []) {
   const activeFilter = filters.some(([key]) => key === state.jobFilter) ? state.jobFilter : "all";
   if (activeFilter !== state.jobFilter) state.jobFilter = activeFilter;
   const roleToggle = renderJobsRoleToggle();
+  const staffView = ["admin", SUPPORT_ROLE].includes(state.session?.role);
+  const eyebrow = staffView ? "Operations" : "Workspace";
+  const title = staffView ? "Job Operations" : "My Jobs";
+  const searchLabel = staffView ? "Open home" : "Search services";
   return `
     <section class="jobs-toolbar" aria-label="Jobs">
       <div class="jobs-toolbar-head">
         <div>
-          <span>Workspace</span>
-          <h2>My Jobs</h2>
+          <span>${escapeHtml(eyebrow)}</span>
+          <h2>${escapeHtml(title)}</h2>
         </div>
-        <button class="jobs-search-button" type="button" data-home-tab="#feed-pane" aria-label="Search services">
+        <button class="jobs-search-button" type="button" data-home-tab="#feed-pane" aria-label="${escapeAttribute(searchLabel)}">
           <i class="fa-solid fa-magnifying-glass"></i>
         </button>
       </div>
@@ -4577,33 +4625,89 @@ function renderProviders() {
     return;
   }
   host.innerHTML = `${adminPanel}${providers.map((provider) => `
-    <article class="k-card provider-card" data-home-search-item="provider" data-home-search-text="${escapeAttribute(homeSearchText([provider.displayName, provider.name, provider.specificServices, provider.skills, provider.category, provider.area, provider.trustLevel]))}">
-      <div class="d-flex justify-content-between gap-2">
+    <article class="k-card provider-card" data-provider-card="${escapeAttribute(provider.userId)}" data-home-search-item="provider" data-home-search-text="${escapeAttribute(homeSearchText([provider.displayName, provider.name, provider.specificServices, provider.skills, provider.category, provider.area, provider.trustLevel]))}">
+      <div class="provider-card-head">
         <div>
           ${renderIdentity(provider.displayName || provider.name, provider.photoUrl, "Provider reputation", providerReputation(provider))}
           <p>${escapeHtml(provider.specificServices || provider.skills || "No services added yet.")}</p>
         </div>
         <span class="badge text-bg-light align-self-start">${escapeHtml(provider.status || "Active")}</span>
       </div>
-      <div class="meta">
-        ${categoryList(provider.category).map((category) => `<span>${escapeHtml(category)}</span>`).join("") || "<span>General</span>"}
-        <span>${escapeHtml(provider.area)}</span>
-        <span>${escapeHtml(provider.trustLevel || "Listed")}</span>
-        ${provider.yearsExperience ? `<span>${escapeHtml(provider.yearsExperience)} yrs</span>` : ""}
-        ${provider.minimumFee ? `<span>${escapeHtml(provider.minimumFee)}</span>` : ""}
+      ${renderProviderSummary(provider)}
+      <div class="provider-compact-actions">
+        ${directContactButtons(provider.userId)}
+        ${renderProviderExpandButton(provider)}
       </div>
-      ${state.session?.role === "admin" ? `
-        <div class="offer">
-          <strong>Provider ops profile</strong>
-          <div>${escapeHtml(provider.coverageArea || "No coverage area")} ${provider.availableDays ? `- ${escapeHtml(provider.availableDays)}` : ""} ${provider.availableTime ? `- ${escapeHtml(provider.availableTime)}` : ""}</div>
-          <small>Requests: ${provider.consentRequests ? "Yes" : "No"} | Ratings: ${provider.consentRatings ? "Yes" : "No"} | Rules: ${provider.rulesAgreement ? "Yes" : "No"}</small>
+      <div class="provider-card-full" data-provider-card-full hidden>
+        <div class="meta">
+          ${categoryList(provider.category).map((category) => `<span>${escapeHtml(category)}</span>`).join("") || "<span>General</span>"}
+          <span>${escapeHtml(provider.area)}</span>
+          <span>${escapeHtml(provider.trustLevel || "Listed")}</span>
+          ${provider.yearsExperience ? `<span>${escapeHtml(provider.yearsExperience)} yrs</span>` : ""}
+          ${provider.minimumFee ? `<span>${escapeHtml(provider.minimumFee)}</span>` : ""}
         </div>
-      ` : ""}
-      ${renderAdminProviderMetricDetail(provider)}
-      ${directContactButtons(provider.userId)}
+        ${state.session?.role === "admin" ? `
+          <div class="offer">
+            <strong>Provider ops profile</strong>
+            <div>${escapeHtml(provider.coverageArea || "No coverage area")} ${provider.availableDays ? `- ${escapeHtml(provider.availableDays)}` : ""} ${provider.availableTime ? `- ${escapeHtml(provider.availableTime)}` : ""}</div>
+            <small>Requests: ${provider.consentRequests ? "Yes" : "No"} | Ratings: ${provider.consentRatings ? "Yes" : "No"} | Rules: ${provider.rulesAgreement ? "Yes" : "No"}</small>
+          </div>
+        ` : ""}
+        ${renderAdminProviderMetricDetail(provider)}
+      </div>
     </article>
   `).join("")}`;
+  bindProviderCardActions(host);
   applyHomeSearch();
+}
+
+function renderProviderSummary(provider = {}) {
+  const categories = categoryList(provider.category);
+  const reputation = providerReputation(provider);
+  const average = Number(reputation?.average);
+  const completedJobs = Number(reputation?.count || 0);
+  const stats = providerResponseStats(provider);
+  return `
+    <div class="provider-summary-row">
+      <span><i class="fa-solid fa-screwdriver-wrench"></i>${escapeHtml(categories[0] || "General services")}</span>
+      <span><i class="fa-solid fa-location-dot"></i>${escapeHtml(provider.area || "Service area")}</span>
+      <span><i class="fa-solid fa-shield-halved"></i>${escapeHtml(provider.trustLevel || "Listed")}</span>
+      ${provider.minimumFee ? `<span><i class="fa-solid fa-wallet"></i>${escapeHtml(provider.minimumFee)}</span>` : `<span><i class="fa-solid fa-star"></i>${Number.isFinite(average) ? `${escapeHtml(average.toFixed(1))} rating` : "No ratings yet"}</span>`}
+      ${provider.yearsExperience ? `<span><i class="fa-solid fa-briefcase"></i>${escapeHtml(provider.yearsExperience)} yrs</span>` : ""}
+      ${completedJobs ? `<span><i class="fa-solid fa-circle-check"></i>${completedJobs} completed</span>` : ""}
+      ${Number.isFinite(stats.rate) && stats.matchingRequests ? `<span><i class="fa-solid fa-reply"></i>${stats.rate}% response</span>` : ""}
+    </div>
+  `;
+}
+
+function renderProviderExpandButton(provider = {}) {
+  return `
+    <button class="provider-expand-button" type="button" data-toggle-provider-card="${escapeAttribute(provider.userId)}" aria-expanded="false">
+      <span><i class="fa-solid fa-chevron-down"></i> View profile details</span>
+    </button>
+  `;
+}
+
+function bindProviderCardActions(host) {
+  $$("[data-toggle-provider-card]", host).forEach((button) => button.addEventListener("click", () => {
+    const card = button.closest("[data-provider-card]");
+    setProviderCardExpanded(card, button.getAttribute("aria-expanded") !== "true");
+  }));
+}
+
+function setProviderCardExpanded(card, expanded) {
+  if (!card) return;
+  const isExpanded = Boolean(expanded);
+  const body = $("[data-provider-card-full]", card);
+  const button = $("[data-toggle-provider-card]", card);
+  card.classList.toggle("expanded", isExpanded);
+  if (body) body.hidden = !isExpanded;
+  if (button) {
+    button.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+    button.innerHTML = isExpanded
+      ? `<span><i class="fa-solid fa-chevron-up"></i> Hide profile details</span>`
+      : `<span><i class="fa-solid fa-chevron-down"></i> View profile details</span>`;
+  }
 }
 
 function adminMetricProviders(providers) {
@@ -5260,7 +5364,7 @@ function renderSettings() {
     $$("[data-unblock-settings]").forEach((button) => button.addEventListener("click", () => unblockUser(button.dataset.unblockSettings)));
     bindCategoryChips("settings-category");
     bindAddressGroup("settings-address");
-    bindAttachmentPreview("[data-settings-form] [name='photo']", "[data-settings-photo-preview]", 1);
+    bindProfilePhotoPreview("[data-settings-form] [name='photo']", "[data-settings-photo-preview]");
   } catch (error) {
     console.error("Settings render failed:", error);
     host.innerHTML = emptyCard("Settings unavailable", "Refresh the app and try again.");
@@ -8906,6 +9010,49 @@ function bindAttachmentPreview(inputSelector, previewSelector, limit = MEDIA_ATT
   });
 }
 
+function bindProfilePhotoPreview(inputSelector, previewSelector, scope = document) {
+  const input = $(inputSelector, scope);
+  const preview = $(previewSelector, scope);
+  if (!input || !preview) return;
+  let url = "";
+  const clearUrl = () => {
+    if (url) URL.revokeObjectURL(url);
+    url = "";
+  };
+  const renderPreview = () => {
+    clearUrl();
+    const file = input.files?.[0];
+    if (!file) {
+      preview.innerHTML = "";
+      return;
+    }
+    url = URL.createObjectURL(file);
+    preview.innerHTML = `
+      <div class="upload-thumb profile-upload-thumb">
+        <button class="upload-thumb-remove" type="button" data-remove-profile-photo aria-label="Remove ${escapeAttribute(file.name)}"><i class="fa-solid fa-xmark"></i></button>
+        <img src="${escapeAttribute(url)}" alt="${escapeAttribute(file.name)}">
+        <span>${escapeHtml(file.name)}</span>
+      </div>
+    `;
+  };
+  if (!preview.dataset.kailaProfilePreviewBound) {
+    preview.dataset.kailaProfilePreviewBound = "true";
+    preview.addEventListener("click", (event) => {
+      const remove = event.target.closest("[data-remove-profile-photo]");
+      if (!remove || !preview.contains(remove)) return;
+      clearUrl();
+      input.value = "";
+      preview.innerHTML = "";
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+  if (!input.dataset.kailaProfilePreviewInputBound) {
+    input.dataset.kailaProfilePreviewInputBound = "true";
+    input.addEventListener("change", renderPreview);
+  }
+  renderPreview();
+}
+
 async function openAttachmentPreviewGallery(selector, startIndex = 0, scope = document) {
   const urls = [];
   const items = mediaAttachmentEntries(selector, scope).map((entry) => {
@@ -11851,6 +11998,16 @@ function emptyCard(title, detail) {
   return `<article class="k-card empty-state"><i class="fa-solid fa-inbox"></i><h3>${escapeHtml(title)}</h3><p>${escapeHtml(detail)}</p></article>`;
 }
 
+function loadingCard(title, detail) {
+  return `
+    <article class="k-card empty-state loading-state" aria-live="polite" aria-busy="true">
+      <span class="app-loading-spinner" aria-hidden="true"></span>
+      <h3>${escapeHtml(title)}</h3>
+      <p>${escapeHtml(detail)}</p>
+    </article>
+  `;
+}
+
 function statusColor(status) {
   if (status === "Accepted") return "success";
   if (["In Progress", "Provider Marked Done", "Revision Requested"].includes(status)) return "primary";
@@ -12295,6 +12452,7 @@ function workspaceForm(options) {
 async function successRedirect(title, text, options = {}) {
   const timer = Number.isFinite(options.timer) ? options.timer : 3500;
   route("app");
+  clearAppLoading();
   window.Swal.fire({
     customClass: { popup: "kaila-popup" },
     icon: "success",
@@ -12339,7 +12497,7 @@ async function tryOfflineLogin(data = {}) {
   }
 
   state.session = stored.user;
-  state.lastDashboardTabTarget = DEFAULT_DASHBOARD_TAB;
+  state.lastDashboardTabTarget = defaultDashboardTab(state.session.role);
   localStorage.setItem(STORAGE.session, JSON.stringify(state.session));
   loadAttentionBadgesForSession();
   registerPushToken(state.pushToken).catch((error) => console.warn("KAILA push token registration failed:", error));
@@ -12351,8 +12509,8 @@ async function tryOfflineLogin(data = {}) {
     render();
   }
   syncQueuedValidationEntries();
-  activateTab(DEFAULT_DASHBOARD_TAB);
-  await successRedirect("Offline login", `Welcome back, ${displayUserName(state.session)}. Saved entries will sync when online.`, { timer: 1, timerProgressBar: false });
+  activateTab(defaultDashboardTab(state.session.role));
+  await successRedirect("Offline login", `Welcome back, ${displayUserName(state.session)}. Saved entries will sync when online.`, { timer: 2600, timerProgressBar: true });
   return true;
 }
 
@@ -12401,6 +12559,58 @@ function localStringVerifier(value) {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function showAppLoading(title = "Loading KAILA", detail = "Please wait") {
+  state.appLoadingCount += 1;
+  updateAppLoading(title, detail);
+  const overlay = $("[data-app-loading]");
+  if (overlay) overlay.hidden = false;
+  let closed = false;
+  return () => {
+    if (closed) return;
+    closed = true;
+    state.appLoadingCount = Math.max(0, state.appLoadingCount - 1);
+    if (state.appLoadingCount === 0 && overlay) overlay.hidden = true;
+  };
+}
+
+function updateAppLoading(title = "Loading KAILA", detail = "Please wait") {
+  const overlay = $("[data-app-loading]");
+  if (!overlay) return;
+  const titleEl = $("[data-app-loading-title]", overlay);
+  const detailEl = $("[data-app-loading-detail]", overlay);
+  if (titleEl) titleEl.textContent = title;
+  if (detailEl) detailEl.textContent = detail;
+}
+
+function clearAppLoading() {
+  state.appLoadingCount = 0;
+  const overlay = $("[data-app-loading]");
+  if (overlay) overlay.hidden = true;
+}
+
+function setFormLoading(form, loading, label = "Loading") {
+  if (!form) return;
+  const controls = $$("input, select, textarea, button", form);
+  controls.forEach((control) => {
+    if (loading) {
+      if (!control.dataset.loadingOriginalDisabled) control.dataset.loadingOriginalDisabled = control.disabled ? "true" : "false";
+      control.disabled = true;
+    } else {
+      control.disabled = control.dataset.loadingOriginalDisabled === "true";
+      delete control.dataset.loadingOriginalDisabled;
+    }
+  });
+  const submit = form.querySelector("button[type='submit']");
+  if (!submit) return;
+  if (loading) {
+    if (!submit.dataset.loadingOriginalHtml) submit.dataset.loadingOriginalHtml = submit.innerHTML;
+    submit.innerHTML = `<span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
+  } else if (submit.dataset.loadingOriginalHtml) {
+    submit.innerHTML = submit.dataset.loadingOriginalHtml;
+    delete submit.dataset.loadingOriginalHtml;
+  }
 }
 
 function notify(title, text = "", icon = "info") {
@@ -12453,6 +12663,12 @@ function capitalize(value) {
 function roleLabel(role) {
   if (role === SUPPORT_ROLE) return SUPPORT_LABEL;
   return capitalize(String(role || "user"));
+}
+
+function defaultDashboardTab(role = state.session?.role) {
+  if (role === "ops") return OPS_DASHBOARD_TAB;
+  if (role === SUPPORT_ROLE) return SUPPORT_DASHBOARD_TAB;
+  return DEFAULT_DASHBOARD_TAB;
 }
 
 function ownProviderProfile() {

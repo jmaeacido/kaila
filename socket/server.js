@@ -604,13 +604,15 @@ function publicUser(user) {
 }
 
 function privateUser(user) {
-  const safe = publicUser(user);
-  return safe ? { ...safe, email: user.email || "" } : null;
+  if (!user) return null;
+  const { password_hash, password, authSubject, ...safe } = user;
+  return { ...safe, email: user.email || "" };
 }
 
 function publicUserForViewer(user, viewer) {
+  if (user?.id && viewer?.id && user.id === viewer.id) return privateUser(user);
   const safe = publicUser(user);
-  if (!safe || viewer?.role !== "customer_service" || safe.id === viewer.id || isStaffRole(safe.role)) return safe;
+  if (!safe || viewer?.role !== "customer_service" || isStaffRole(safe.role)) return safe;
   return {
     ...safe,
     contactNumber: "",
@@ -1484,11 +1486,10 @@ function emptyReputation() {
 function mapUser(row, reputation = emptyReputation()) {
   if (!row) return null;
   const photoVersion = row.photo_file ? encodeURIComponent(row.photo_file) : "";
-  const staffRole = isStaffRole(row.role);
   const fallbackPhotoUrl = socialPhotoUrl(row.social_photo_url);
   return {
     id: row.id,
-    name: staffRole ? staffDisplayName(row.role) : row.name,
+    name: row.name,
     username: row.username,
     email: row.email,
     password_hash: row.password_hash,
@@ -1503,7 +1504,7 @@ function mapUser(row, reputation = emptyReputation()) {
     authSubject: row.auth_subject || "",
     dataPrivacyConsent: Boolean(row.data_privacy_consent),
     photoUrl: row.photo_file ? `/profile-media/${encodeURIComponent(row.id)}?v=${photoVersion}` : fallbackPhotoUrl,
-    reputation: staffRole ? emptyReputation() : reputation,
+    reputation: isStaffRole(row.role) ? emptyReputation() : reputation,
     deletedAt: row.deleted_at || null,
     createdAt: row.created_at,
   };

@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v245-collapsed-jobs";
+const CACHE_NAME = "kaila-pwa-v249-profile-save";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"
