@@ -1,8 +1,8 @@
 {
-    "latestVersionCode": 1781529465,
-    "latestVersionName": "1.0.1781529465",
+    "latestVersionCode": 1781537703,
+    "latestVersionName": "1.0.1781537703",
     "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
-    "releaseNotes": "Security hardening: Android update downloads now use native-only signed links and clearer install prompts.",
-    "generatedAt": "2026-06-15T13:20:16Z",
+    "releaseNotes": "Consumer UI rebuild plus KAILA journey scene deck for post-job, offers, provider selection, tracking, completion, and rating visuals.",
+    "generatedAt": "2026-06-15T15:35:03Z",
     "source": "explicit"
 }

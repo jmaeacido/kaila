@@ -11077,3 +11077,485 @@ body.app-mode .app-view.active,
     white-space: nowrap;
   }
 }
+
+/* 2026-06-15 focused consumer marketplace rebuild.
+   Final layer only: preserves runtime hooks while aligning the app to the KAILA scene direction. */
+:root {
+  --kaila-premium-blue: #2563EB;
+  --kaila-premium-deep: #0B3FAE;
+  --kaila-premium-cyan: #38BDF8;
+  --kaila-premium-bg: #F8FAFC;
+  --kaila-premium-card: #FFFFFF;
+  --kaila-premium-ink: #0F172A;
+  --kaila-premium-muted: #64748B;
+  --kaila-premium-success: #10B981;
+  --kaila-premium-warning: #F59E0B;
+  --kaila-premium-danger: #EF4444;
+  --kaila-premium-line: rgba(37, 99, 235, 0.14);
+  --kaila-premium-soft: rgba(37, 99, 235, 0.08);
+  --kaila-premium-cyan-soft: rgba(56, 189, 248, 0.14);
+  --kaila-premium-radius: 22px;
+  --kaila-premium-radius-sm: 16px;
+  --kaila-premium-shadow: 0 18px 46px rgba(37, 99, 235, 0.11);
+  --kaila-premium-shadow-soft: 0 10px 28px rgba(15, 23, 42, 0.07);
+  --kaila-premium-glow: 0 0 0 1px rgba(56, 189, 248, 0.18), 0 22px 54px rgba(37, 99, 235, 0.16);
+  --kaila-app-blue: var(--kaila-premium-blue);
+  --kaila-app-blue-2: var(--kaila-premium-cyan);
+  --kaila-app-ink: var(--kaila-premium-ink);
+  --kaila-app-muted: var(--kaila-premium-muted);
+  --kaila-app-bg: var(--kaila-premium-bg);
+  --kaila-app-card: var(--kaila-premium-card);
+  --kaila-app-line: var(--kaila-premium-line);
+  --kaila-app-soft: #EFF6FF;
+  --kaila-app-success: var(--kaila-premium-success);
+  --kaila-app-warning: var(--kaila-premium-warning);
+  --kaila-app-danger: var(--kaila-premium-danger);
+}
+
+:root[data-theme="dark"] {
+  --kaila-premium-bg: #07111F;
+  --kaila-premium-card: #0F1E33;
+  --kaila-premium-ink: #EAF3FF;
+  --kaila-premium-muted: #9FB0C6;
+  --kaila-premium-line: rgba(148, 163, 184, 0.18);
+  --kaila-premium-soft: rgba(59, 130, 246, 0.18);
+  --kaila-premium-cyan-soft: rgba(56, 189, 248, 0.14);
+  --kaila-premium-shadow: 0 22px 56px rgba(0, 0, 0, 0.42);
+  --kaila-premium-shadow-soft: 0 14px 34px rgba(0, 0, 0, 0.28);
+  --kaila-premium-glow: 0 0 0 1px rgba(56, 189, 248, 0.18), 0 24px 60px rgba(0, 0, 0, 0.48);
+  --kaila-app-bg: var(--kaila-premium-bg);
+  --kaila-app-card: var(--kaila-premium-card);
+  --kaila-app-ink: var(--kaila-premium-ink);
+  --kaila-app-muted: var(--kaila-premium-muted);
+  --kaila-app-line: var(--kaila-premium-line);
+  --kaila-app-soft: #14243A;
+}
+
+body,
+body.app-mode,
+body.app-mode .app-view.active {
+  background:
+    radial-gradient(circle at 16% -8%, var(--kaila-premium-cyan-soft), transparent 18rem),
+    radial-gradient(circle at 96% 2%, var(--kaila-premium-soft), transparent 22rem),
+    linear-gradient(180deg, #FFFFFF 0, var(--kaila-premium-bg) 16rem) !important;
+  color: var(--kaila-premium-ink);
+}
+
+:root[data-theme="dark"] body,
+:root[data-theme="dark"] body.app-mode,
+:root[data-theme="dark"] body.app-mode .app-view.active {
+  background:
+    radial-gradient(circle at 16% -8%, rgba(56, 189, 248, 0.12), transparent 18rem),
+    radial-gradient(circle at 96% 2%, rgba(37, 99, 235, 0.18), transparent 22rem),
+    linear-gradient(180deg, #0B1628 0, var(--kaila-premium-bg) 18rem) !important;
+}
+
+.navbar,
+.app-header,
+.app-tabs {
+  background: color-mix(in srgb, var(--kaila-premium-card) 90%, transparent) !important;
+  border-color: var(--kaila-premium-line) !important;
+  backdrop-filter: blur(22px);
+}
+
+.app-header {
+  box-shadow: 0 12px 34px rgba(37, 99, 235, 0.08);
+}
+
+.landing-shell {
+  max-width: 1180px;
+  margin-inline: auto;
+}
+
+.hero-compact {
+  background:
+    radial-gradient(circle at 82% 12%, rgba(56, 189, 248, 0.2), transparent 16rem),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(239, 246, 255, 0.92)) !important;
+  box-shadow: var(--kaila-premium-shadow);
+}
+
+:root[data-theme="dark"] .hero-compact {
+  background:
+    radial-gradient(circle at 82% 12%, rgba(56, 189, 248, 0.13), transparent 16rem),
+    linear-gradient(135deg, rgba(15, 30, 51, 0.98), rgba(10, 22, 39, 0.94)) !important;
+}
+
+.btn-primary,
+.btn-success,
+.btn-info,
+.home-post-button i,
+.job-status-tracker .done b,
+.job-status-tracker .active b,
+.mobile-progress-tracker .active b,
+.request-wizard-progress .done b,
+.request-wizard-progress .active b,
+.app-tabs .nav-link.active {
+  background: linear-gradient(135deg, var(--kaila-premium-deep), var(--kaila-premium-blue) 58%, var(--kaila-premium-cyan)) !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 14px 30px rgba(37, 99, 235, 0.25) !important;
+}
+
+.btn-outline-primary,
+.btn-outline-secondary,
+.btn-outline-success,
+.btn-outline-warning,
+.btn-outline-danger,
+.btn-register,
+.icon-btn,
+.chat-icon-button,
+.jobs-search-button,
+.home-shortcut i,
+.home-categories i {
+  border-color: var(--kaila-premium-line) !important;
+  background: color-mix(in srgb, var(--kaila-premium-card) 88%, #EFF6FF) !important;
+  color: var(--kaila-premium-ink) !important;
+}
+
+.home-hero,
+.jobs-toolbar {
+  position: relative;
+}
+
+.home-greeting h2,
+.jobs-toolbar-head h2,
+.mobile-flow-header h2,
+.workspace-form-header h2 {
+  color: var(--kaila-premium-ink) !important;
+  letter-spacing: 0;
+}
+
+.home-search,
+.k-card,
+.request-card,
+.provider-card,
+.feed-card,
+.feed-composer,
+.offer-card,
+.mobile-job-summary-card,
+.mobile-info-card,
+.mobile-status-card,
+.mobile-offer-card,
+.mobile-rating-card,
+.request-flow-section,
+.settings-card,
+.inbox-item,
+.workspace-panel > div,
+.swal2-popup,
+.modal-content {
+  border: 1px solid var(--kaila-premium-line) !important;
+  border-radius: var(--kaila-premium-radius) !important;
+  background: var(--kaila-premium-card) !important;
+  box-shadow: var(--kaila-premium-shadow-soft) !important;
+  color: var(--kaila-premium-ink) !important;
+}
+
+.request-card,
+.provider-card,
+.mobile-offer-card,
+.mobile-info-card,
+.mobile-rating-card {
+  padding: clamp(0.82rem, 2.8vw, 1.05rem);
+}
+
+.request-card::before {
+  display: block;
+  height: 0.32rem;
+  background: linear-gradient(90deg, var(--kaila-premium-blue), var(--kaila-premium-cyan));
+}
+
+.request-card h3,
+.provider-card h3,
+.mobile-job-summary-card strong,
+.mobile-offer-card strong,
+.mobile-info-card strong,
+.mobile-rating-card strong {
+  color: var(--kaila-premium-ink) !important;
+}
+
+.request-card p,
+.provider-card p,
+.mobile-offer-card p,
+.mobile-info-card p,
+.mobile-job-summary-card span,
+.mobile-job-summary-card small,
+.mobile-flow-section-title span,
+.home-greeting span {
+  color: var(--kaila-premium-muted) !important;
+}
+
+.request-kicker,
+.status-pill,
+.badge,
+.meta span,
+.reputation-badge,
+.offer-distance,
+.mobile-flow-status,
+.jobs-filter-tabs b,
+.tab-count,
+.bell-count {
+  border: 1px solid transparent !important;
+  border-radius: 999px !important;
+  font-weight: 900;
+}
+
+.request-kicker,
+.text-bg-primary,
+.text-bg-info,
+.status-pill.text-bg-primary,
+.status-pill.text-bg-info {
+  background: var(--kaila-premium-soft) !important;
+  color: var(--kaila-premium-blue) !important;
+}
+
+.text-bg-success,
+.status-pill.text-bg-success,
+.mobile-flow-status {
+  background: rgba(16, 185, 129, 0.14) !important;
+  color: var(--kaila-premium-success) !important;
+}
+
+.text-bg-warning,
+.status-pill.text-bg-warning {
+  background: rgba(245, 158, 11, 0.16) !important;
+  color: var(--kaila-premium-warning) !important;
+}
+
+.text-bg-danger,
+.status-pill.text-bg-danger {
+  background: rgba(239, 68, 68, 0.14) !important;
+  color: var(--kaila-premium-danger) !important;
+}
+
+.job-summary-row span,
+.meta span,
+.offer-price-row > div,
+.mobile-offer-stats span,
+.mobile-detail-grid span,
+.request-review-card,
+.navigation-steps div,
+.completion-proof-empty {
+  background: color-mix(in srgb, var(--kaila-premium-card) 62%, #EFF6FF) !important;
+  color: var(--kaila-premium-muted) !important;
+}
+
+:root[data-theme="dark"] .job-summary-row span,
+:root[data-theme="dark"] .meta span,
+:root[data-theme="dark"] .offer-price-row > div,
+:root[data-theme="dark"] .mobile-offer-stats span,
+:root[data-theme="dark"] .mobile-detail-grid span,
+:root[data-theme="dark"] .request-review-card,
+:root[data-theme="dark"] .navigation-steps div,
+:root[data-theme="dark"] .completion-proof-empty {
+  background: #14243A !important;
+}
+
+.job-summary-row i,
+.mobile-offer-stats i,
+.mobile-detail-grid i,
+.offer-comparison-stats i,
+.home-shortcut i,
+.home-categories i,
+.jobs-search-button,
+.offer-price-row strong,
+.mobile-contact-actions button,
+.mobile-status-card i,
+.mobile-job-thumb.placeholder i {
+  color: var(--kaila-premium-blue) !important;
+}
+
+.job-status-tracker {
+  gap: 0;
+  padding: 0.55rem 0.2rem 0.1rem;
+  background: transparent !important;
+}
+
+.job-status-tracker span::before {
+  top: 0.79rem;
+  height: 3px;
+  background: rgba(100, 116, 139, 0.18);
+}
+
+.job-status-tracker .done::before,
+.job-status-tracker .active::before,
+.mobile-progress-tracker .done::after,
+.mobile-progress-tracker .active::after {
+  background: linear-gradient(90deg, var(--kaila-premium-blue), var(--kaila-premium-cyan));
+}
+
+.job-status-tracker b,
+.mobile-progress-tracker b,
+.request-wizard-progress b {
+  border: 0 !important;
+  box-shadow: 0 0 0 4px var(--kaila-premium-card);
+}
+
+.offer-comparison .offer-card,
+.mobile-offer-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.offer-comparison .offer-card:hover,
+.mobile-offer-card:hover,
+.request-card:hover,
+.provider-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--kaila-premium-glow) !important;
+}
+
+.mobile-offer-ribbon {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  background: var(--kaila-premium-soft);
+  color: var(--kaila-premium-blue);
+  font-size: 0.62rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.mobile-offer-price strong {
+  color: var(--kaila-premium-blue) !important;
+  font-size: 1.02rem;
+}
+
+.offer,
+.provider-contact-card,
+.navigation-card,
+.completion-panel,
+.mobile-status-card {
+  border-color: var(--kaila-premium-line) !important;
+  border-radius: var(--kaila-premium-radius-sm) !important;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--kaila-premium-card) 70%, #EFF6FF), var(--kaila-premium-card)) !important;
+}
+
+.completion-panel,
+.completion-success span {
+  border-color: rgba(16, 185, 129, 0.22) !important;
+}
+
+.completion-success span {
+  background: linear-gradient(135deg, var(--kaila-premium-success), #6EE7B7) !important;
+}
+
+.form-control,
+.form-select,
+.swal2-input,
+.swal2-textarea,
+.swal2-select {
+  border-color: var(--kaila-premium-line) !important;
+  border-radius: var(--kaila-premium-radius-sm) !important;
+  background-color: var(--kaila-premium-card) !important;
+  color: var(--kaila-premium-ink) !important;
+}
+
+.form-control:focus,
+.form-select:focus,
+.swal2-input:focus,
+.swal2-textarea:focus,
+.swal2-select:focus {
+  border-color: rgba(37, 99, 235, 0.48) !important;
+  box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.14) !important;
+}
+
+.auth-switch-copy {
+  margin: -0.15rem 0 0.85rem;
+  color: var(--kaila-premium-muted);
+  font-size: 0.88rem;
+  font-weight: 750;
+}
+
+.request-wizard-progress {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin-inline: -0.1rem;
+  padding-top: 0.2rem;
+  background: var(--kaila-premium-bg);
+}
+
+.request-flow-section {
+  gap: 0.85rem;
+}
+
+.request-flow-head b {
+  background: linear-gradient(135deg, var(--kaila-premium-blue), var(--kaila-premium-cyan)) !important;
+}
+
+.location-picker,
+.category-chip-box,
+.map-mode-toggle {
+  border-color: var(--kaila-premium-line) !important;
+  border-radius: var(--kaila-premium-radius-sm) !important;
+}
+
+.app-tabs {
+  box-shadow: 0 20px 48px rgba(37, 99, 235, 0.18) !important;
+}
+
+.app-tabs .nav-link {
+  color: var(--kaila-premium-muted) !important;
+}
+
+.app-tabs .nav-link.active i,
+.app-tabs .nav-link.active span {
+  color: #FFFFFF !important;
+}
+
+@media (max-width: 430px) {
+  .app-content,
+  .mobile-flow-screen {
+    padding-inline: 0.78rem;
+  }
+
+  .job-status-tracker {
+    overflow-x: auto;
+    grid-template-columns: repeat(5, minmax(4.4rem, 1fr));
+    scrollbar-width: none;
+  }
+
+  .job-status-tracker::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-offer-stats,
+  .mobile-detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 768px) {
+  .app-content {
+    width: min(100%, 1180px);
+    max-width: 1180px;
+  }
+
+  .stack[data-request-list],
+  .stack[data-provider-list],
+  .stack[data-feed-list] {
+    grid-template-columns: repeat(auto-fit, minmax(21rem, 1fr));
+  }
+
+  .request-card,
+  .provider-card,
+  .feed-card,
+  .feed-composer {
+    border-radius: 24px !important;
+  }
+
+  .mobile-flow-stack {
+    grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  }
+
+  .mobile-flow-actions,
+  .mobile-offer-actions,
+  .card-actions,
+  .offer-card-actions {
+    grid-template-columns: repeat(auto-fit, minmax(9rem, max-content));
+    justify-content: start;
+  }
+}

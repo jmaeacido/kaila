@@ -3051,7 +3051,7 @@ function jobStatusStep(status = "") {
 
 function renderJobStatusTracker(request = {}) {
   const activeStep = jobStatusStep(request.status);
-  const steps = ["Posted", "Offers Received", "Provider Selected", "In Progress", "Completed"];
+  const steps = ["Posted", "Offers", "Provider Selected", "In Progress", "Completed"];
   return `
     <div class="job-status-tracker" aria-label="Job status tracker">
       ${steps.map((label, index) => `
@@ -3086,6 +3086,14 @@ function renderJobSummary(request = {}) {
       <span><i class="fa-solid fa-clock"></i>${escapeHtml(formatRelativeTime(requestLastUpdate(request)) || "recent")}</span>
     </div>
   `;
+}
+
+function routeDistanceTextForOffer(request = {}, offer = {}) {
+  const routeDistance = request?.jobLocation && offer?.providerLocation ? cachedRouteDistanceKm(request.jobLocation, offer.providerLocation) : null;
+  if (routeDistance !== null) return `Route ${formatDistanceKm(routeDistance)} away`;
+  if (request?.jobLocation && offer?.providerLocation) return "Calculating route distance";
+  if (request?.area) return request.area;
+  return "Location shared after hire";
 }
 
 function renderJobPrimaryCta(request = {}) {
@@ -3554,8 +3562,10 @@ function renderMobileOfferCard(offer = {}, request = {}) {
   const responseRate = Number(reputation?.responseRate);
   const completedJobs = Number(reputation?.count || 0);
   const service = providerServiceLabel(offer.providerId) || "Local service provider";
+  const distanceCopy = routeDistanceTextForOffer(request, offer);
   return `
     <article class="mobile-offer-card">
+      <span class="mobile-offer-ribbon"><i class="fa-solid fa-bolt"></i> New offer</span>
       <div class="mobile-offer-head">
         ${mobilePersonAvatar(offer.providerName, offer.providerPhotoUrl)}
         <div>
@@ -3570,6 +3580,8 @@ function renderMobileOfferCard(offer = {}, request = {}) {
       </div>
       <div class="mobile-offer-stats">
         <span><i class="fa-solid fa-calendar-check"></i> ${escapeHtml(offer.schedule || "Schedule TBD")}</span>
+        <span><i class="fa-solid fa-location-dot"></i> ${escapeHtml(distanceCopy)}</span>
+        <span><i class="fa-solid fa-shield-halved"></i> Verified</span>
         ${Number.isFinite(responseRate) ? `<span><i class="fa-solid fa-reply"></i> ${responseRate}% response</span>` : ""}
       </div>
       ${offer.notes ? `<p>${escapeHtml(offer.notes)}</p>` : ""}
@@ -3619,7 +3631,7 @@ function renderActiveJobScreen(request = {}) {
       </article>
       <article class="mobile-status-card">
         <div>
-          <i class="fa-solid fa-route"></i>
+          <i class="fa-solid ${request.status === "Accepted" ? "fa-circle-check" : "fa-route"}"></i>
           <strong>${escapeHtml(statusCopy)}</strong>
           <span>${escapeHtml(activeJobEtaText(request))}</span>
         </div>
@@ -3773,7 +3785,7 @@ function serviceIcon(category = "") {
 
 function renderMobileProgressTracker(request = {}) {
   const step = jobStatusStep(request.status);
-  const labels = ["Posted", "Offers", "Accepted", ["Accepted", "In Progress", "Revision Requested"].includes(request.status) ? "In Progress" : "On The Way", "Completed"];
+  const labels = ["Posted", "Offers", "Confirmed", "In Progress", "Completed"];
   return `
     <div class="mobile-progress-tracker">
       ${labels.map((label, index) => `
@@ -6741,7 +6753,9 @@ async function confirmRequest(requestId, offerId) {
   try {
     const payload = await apiFetch(`/api/requests/${requestId}/confirm`, { method: "POST", body: JSON.stringify({ offerId }) });
     applyServerState(payload.state);
-    notify("Offer accepted", "", "success");
+    notify("Booking confirmed", "Your provider has been selected.", "success");
+    const confirmedRequest = state.requests.find((item) => item.id === requestId);
+    if (confirmedRequest) openActiveJobScreen(requestId);
   } catch (error) {
     notify("Confirm failed", error.message, "error");
   }

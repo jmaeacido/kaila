@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v239-instant-login-toast";
+const CACHE_NAME = "kaila-pwa-v241-consumer-marketplace-scenes";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"
@@ -10,6 +10,8 @@ const APP_SHELL = [
   "./index.html",
   "./style.css",
   "./app.js",
+  "./marketing-experience.html",
+  "./marketing-experience.css",
   "./manifest.webmanifest",
   "./robots.txt",
   "./sitemap.xml",
