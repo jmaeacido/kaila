@@ -1,8 +1,8 @@
 {
-    "latestVersionCode": 1781588727,
-    "latestVersionName": "1.0.1781588727",
+    "latestVersionCode": 1781590083,
+    "latestVersionName": "1.0.1781590083",
     "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
-    "releaseNotes": "Consumer UI rebuild plus KAILA journey scene deck for post-job, offers, provider selection, tracking, completion, and rating visuals.",
-    "generatedAt": "2026-06-16T13:46:19+08:00",
+    "releaseNotes": "Fixes modal layering and aligns VS Code Gradle import settings with the Android wrapper.",
+    "generatedAt": "2026-06-16T14:08:03+08:00",
     "source": "auto"
 }

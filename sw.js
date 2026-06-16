@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v241-consumer-marketplace-scenes";
+const CACHE_NAME = "kaila-pwa-v242-modal-stack";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"
