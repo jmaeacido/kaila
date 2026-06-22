@@ -1,8 +1,8 @@
 {
-    "latestVersionCode": 1782141447,
-    "latestVersionName": "1.0.1782141447",
+    "latestVersionCode": 1782141651,
+    "latestVersionName": "1.0.1782141651",
     "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
     "releaseNotes": "Limits provider coverage barangays to the provider's selected city and cleans mixed-city coverage areas.",
-    "generatedAt": "2026-06-22T23:17:27+08:00",
+    "generatedAt": "2026-06-22T23:21:07+08:00",
     "source": "auto"
 }
