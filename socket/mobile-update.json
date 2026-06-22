@@ -1,8 +1,8 @@
 {
-    "latestVersionCode": 1782140610,
-    "latestVersionName": "1.0.1782140610",
+    "latestVersionCode": 1782141447,
+    "latestVersionName": "1.0.1782141447",
     "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
-    "releaseNotes": "Updates the browser and Android app icons from assets/icon.jpg.",
-    "generatedAt": "2026-06-22T23:04:19+08:00",
+    "releaseNotes": "Limits provider coverage barangays to the provider's selected city and cleans mixed-city coverage areas.",
+    "generatedAt": "2026-06-22T23:17:27+08:00",
     "source": "auto"
 }

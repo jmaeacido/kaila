@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v252-icon-jpg";
+const CACHE_NAME = "kaila-pwa-v253-provider-coverage-city";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"

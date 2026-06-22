@@ -1064,11 +1064,11 @@ function renderRegisterAddress() {
   const host = $("[data-register-address]");
   if (host) {
     host.innerHTML = addressFields("register-address", state.session?.area || "");
-    bindAddressGroup("register-address");
+    bindAddressGroup("register-address", document, () => syncCoverageChipsWithAddress("register-coverage", "register-address"));
   }
   const coverage = $("[data-register-coverage]");
   if (coverage) {
-    coverage.innerHTML = coverageAreaChips("register-coverage", "");
+    coverage.innerHTML = coverageAreaChips("register-coverage", "", currentAddressCity("register-address"));
     bindCategoryChips("register-coverage");
   }
   const days = $("[data-register-days]");
@@ -1146,7 +1146,10 @@ async function loadState(options = {}) {
 
 function applyServerState(payload = {}, options = {}) {
   state.users = payload.users || state.users || [];
-  state.providers = payload.providers || [];
+  state.providers = (payload.providers || []).map((provider) => ({
+    ...provider,
+    coverageArea: normalizeCoverageAreaForProvider(provider.coverageArea, provider.area),
+  }));
   state.requests = payload.requests || [];
   state.reports = payload.reports || [];
   state.blocks = payload.blocks || [];
@@ -1217,7 +1220,7 @@ async function register(event) {
   data.area = addressValue("register-address");
   data.availableDays = selectedCategoryChips("register-days").join(", ");
   data.availableTime = timeRangeValue("[data-register-form] [name='availableTimeStart']", "[data-register-form] [name='availableTimeEnd']");
-  data.coverageArea = selectedCategoryChips("register-coverage").join(", ");
+  data.coverageArea = selectedCoverageChips("register-coverage", "register-address").join(", ");
   data.minimumFee = normalizeCurrencyInput(data.minimumFee);
   data.priceRange = priceRangeValue("[data-register-form] [name='priceRangeMin']", "[data-register-form] [name='priceRangeMax']");
   delete data.availableTimeStart;
@@ -1351,7 +1354,7 @@ function socialAuthPayloadFromRegisterForm(form = $("[data-register-form]")) {
   data.area = addressValue("register-address");
   data.availableDays = selectedCategoryChips("register-days").join(", ");
   data.availableTime = timeRangeValue("[data-register-form] [name='availableTimeStart']", "[data-register-form] [name='availableTimeEnd']");
-  data.coverageArea = selectedCategoryChips("register-coverage").join(", ");
+  data.coverageArea = selectedCoverageChips("register-coverage", "register-address").join(", ");
   data.minimumFee = normalizeCurrencyInput(data.minimumFee);
   data.priceRange = priceRangeValue("[data-register-form] [name='priceRangeMin']", "[data-register-form] [name='priceRangeMax']");
   data.dataPrivacyConsent = form.elements.dataPrivacyConsent?.checked;
@@ -6744,7 +6747,7 @@ async function openProviderModal() {
         <label><span>Available days</span>${availableDaysChips("provider-days", existing?.availableDays || "")}</label>
         <label><span>Available time</span>${timeRangeFields("provider-time", existing?.availableTime || "")}</label>
         <label class="wide"><span>Specific services</span><textarea id="provider-services" class="form-control" rows="3">${escapeHtml(existing?.specificServices || existing?.skills || "")}</textarea></label>
-        <label class="wide"><span>Coverage area</span>${coverageAreaChips("provider-coverage", existing?.coverageArea || "")}</label>
+        <label class="wide"><span>Coverage area</span>${coverageAreaChips("provider-coverage", existing?.coverageArea || "", parseAddress(existing?.area || state.session.area || "").city)}</label>
         <label class="wide"><span>Travel limits</span><textarea id="provider-travel" class="form-control" rows="2">${escapeHtml(existing?.travelLimits || "")}</textarea></label>
         <label><span>Minimum fee</span><input id="provider-minimum-fee" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeAttribute(currencyInputValue(existing?.minimumFee || ""))}" placeholder="300"></label>
         <label><span>Price range</span>${priceRangeFields("provider-price-range", existing?.priceRange || "")}</label>
@@ -6762,7 +6765,7 @@ async function openProviderModal() {
       bindCategoryChips("provider-category", providerFormRoot);
       bindCategoryChips("provider-days", providerFormRoot);
       bindCategoryChips("provider-coverage", providerFormRoot);
-      bindAddressGroup("provider-address", providerFormRoot);
+      bindAddressGroup("provider-address", providerFormRoot, () => syncCoverageChipsWithAddress("provider-coverage", "provider-address", providerFormRoot));
     },
     preConfirm: () => {
       const scope = providerFormRoot || document;
@@ -6775,7 +6778,7 @@ async function openProviderModal() {
         providerType: $("#provider-type", scope).value,
         specificServices: $("#provider-services", scope).value.trim(),
         yearsExperience: $("#provider-experience", scope).value,
-        coverageArea: selectedCategoryChips("provider-coverage", scope).join(", "),
+        coverageArea: selectedCoverageChips("provider-coverage", "provider-address", scope).join(", "),
         emergencyAvailability: $("#provider-emergency", scope).value,
         availableDays: selectedCategoryChips("provider-days", scope).join(", "),
         availableTime: timeRangeValue("#provider-time-start", "#provider-time-end", scope),
@@ -9462,7 +9465,7 @@ async function openAdminCreateAccountModal() {
           <label><span>Service categories</span>${categoryChips("admin-account-category", "")}</label>
           <label><span>Specific services</span><textarea id="admin-provider-services" class="form-control" rows="2"></textarea></label>
           <label><span>Experience</span>${select("admin-provider-experience", EXPERIENCE_OPTIONS, "1-2")}</label>
-          <label><span>Coverage area</span>${coverageAreaChips("admin-provider-coverage", "")}</label>
+          <label><span>Coverage area</span>${coverageAreaChips("admin-provider-coverage", "", parseAddress(state.session.area || "").city)}</label>
           <label><span>Emergency availability</span>${select("admin-provider-emergency", EMERGENCY_OPTIONS, "Sometimes")}</label>
           <label><span>Available days</span>${availableDaysChips("admin-provider-days", "")}</label>
           <label><span>Available time</span>${timeRangeFields("admin-provider-time", "")}</label>
@@ -9481,7 +9484,7 @@ async function openAdminCreateAccountModal() {
     `,
     confirmButtonText: "Create Account",
     didOpen: () => {
-      bindAddressGroup("admin-account-address");
+      bindAddressGroup("admin-account-address", document, () => syncCoverageChipsWithAddress("admin-provider-coverage", "admin-account-address"));
       bindCategoryChips("admin-account-category");
       bindCategoryChips("admin-provider-days");
       bindCategoryChips("admin-provider-coverage");
@@ -9508,7 +9511,7 @@ async function openAdminCreateAccountModal() {
         providerType: $("#admin-provider-type")?.value || "",
         specificServices: $("#admin-provider-services")?.value.trim() || "",
         yearsExperience: $("#admin-provider-experience")?.value || "",
-        coverageArea: selectedCategoryChips("admin-provider-coverage").join(", "),
+        coverageArea: selectedCoverageChips("admin-provider-coverage", "admin-account-address").join(", "),
         emergencyAvailability: $("#admin-provider-emergency")?.value || "",
         availableDays: selectedCategoryChips("admin-provider-days").join(", "),
         availableTime: timeRangeValue("#admin-provider-time-start", "#admin-provider-time-end"),
@@ -12063,8 +12066,10 @@ function categorySelect(id, blank = false, selected = "", multiple = false) {
   return select(id, SERVICE_CATEGORIES, selected, blank ? "Choose category" : "", multiple);
 }
 
-function coverageAreaChips(id, selected = "") {
-  return optionChips(id, sortedBarangays(state.geography.barangays), selected, {
+function coverageAreaChips(id, selected = "", city = "") {
+  const options = barangaysForCity(city || state.geography.city);
+  const selectedItems = categoryList(selected).filter((item) => options.includes(item));
+  return optionChips(id, options, selectedItems, {
     selectedEmpty: "Select barangays below",
     optionsEmpty: "All barangays selected",
     bulkActions: true,
@@ -12120,7 +12125,7 @@ function optionChips(id, options, selected = "", labels = {}) {
     </div>
   ` : "";
   return `
-    <div class="category-chip-box" data-category-chip-box="${escapeAttribute(id)}">
+    <div class="category-chip-box" data-category-chip-box="${escapeAttribute(id)}" data-chip-options="${escapeAttribute(JSON.stringify(options))}">
       ${bulkActions}
       <div class="category-chip-selected" data-category-selected>
         ${selectedItems.map((item) => categoryChip(item, true)).join("") || `<span class="category-chip-empty">${escapeHtml(selectedEmpty)}</span>`}
@@ -12148,17 +12153,17 @@ function bindCategoryChips(id, scope = document) {
   const box = $(`[data-category-chip-box="${escapeCssIdentifier(id)}"]`, scope);
   if (!box) return;
   $$("[data-chip-action]", box).forEach((button) => button.addEventListener("click", () => {
-    const options = chipOptionsForId(id);
+    const options = chipOptionsForId(id, scope);
     const action = button.dataset.chipAction;
     const next = action === "select-all" ? options : [];
-    box.outerHTML = chipsForId(id, next);
+    box.outerHTML = chipsForId(id, next, options);
     bindCategoryChips(id, scope);
   }));
   $$("[data-category-chip]", box).forEach((button) => button.addEventListener("click", () => {
     const selected = selectedCategoryChips(id, scope);
     const category = button.dataset.categoryChip;
     const next = selected.includes(category) ? selected.filter((item) => item !== category) : [...selected, category];
-    box.outerHTML = chipsForId(id, next);
+    box.outerHTML = chipsForId(id, next, chipOptionsForId(id, scope));
     bindCategoryChips(id, scope);
   }));
 }
@@ -12169,15 +12174,28 @@ function selectedCategoryChips(id, scope = document) {
   return $$("[data-category-selected] .category-chip", box).map((button) => button.dataset.categoryChip).filter(Boolean);
 }
 
-function chipsForId(id, selected = "") {
+function chipsForId(id, selected = "", options = null) {
   if (id.includes("days")) return availableDaysChips(id, selected);
-  if (id.includes("coverage")) return coverageAreaChips(id, selected);
+  if (id.includes("coverage")) {
+    return optionChips(id, options || barangaysForCity(state.geography.city), selected, {
+      selectedEmpty: "Select barangays below",
+      optionsEmpty: "All barangays selected",
+      bulkActions: true,
+    });
+  }
   return categoryChips(id, selected);
 }
 
-function chipOptionsForId(id) {
+function chipOptionsForId(id, scope = document) {
+  const box = $(`[data-category-chip-box="${escapeCssIdentifier(id)}"]`, scope);
+  if (box?.dataset.chipOptions) {
+    try {
+      const options = JSON.parse(box.dataset.chipOptions);
+      if (Array.isArray(options)) return options;
+    } catch {}
+  }
   if (id.includes("days")) return AVAILABLE_DAY_OPTIONS;
-  if (id.includes("coverage")) return sortedBarangays(state.geography.barangays);
+  if (id.includes("coverage")) return barangaysForCity(state.geography.city);
   return SERVICE_CATEGORIES;
 }
 
@@ -12203,7 +12221,7 @@ function addressFields(id, value = "") {
   `;
 }
 
-function bindAddressGroup(id, scope = document) {
+function bindAddressGroup(id, scope = document, onChange = null) {
   const group = $(`[data-address-group="${escapeCssIdentifier(id)}"]`, scope);
   if (!group) return;
   const region = $(`#${id}-region`, group);
@@ -12219,6 +12237,7 @@ function bindAddressGroup(id, scope = document) {
     city.innerHTML = cities.map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("");
     city.value = cities[0] || "";
     barangay.innerHTML = `<option value="">Choose barangay</option>${barangaysForCity(city.value).map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
+    onChange?.();
   });
   province?.addEventListener("change", () => {
     if (!city || !barangay) return;
@@ -12226,6 +12245,7 @@ function bindAddressGroup(id, scope = document) {
     city.innerHTML = cities.map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("");
     city.value = cities[0] || "";
     barangay.innerHTML = `<option value="">Choose barangay</option>${barangaysForCity(city.value).map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
+    onChange?.();
   });
   city?.addEventListener("change", () => {
     if (province) province.value = state.geography.cityProvinces?.[city.value] || INDEPENDENT_CITY_PROVINCE;
@@ -12233,7 +12253,30 @@ function bindAddressGroup(id, scope = document) {
     if (barangay) {
       barangay.innerHTML = `<option value="">Choose barangay</option>${barangaysForCity(city.value).map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("")}`;
     }
+    onChange?.();
   });
+}
+
+function currentAddressCity(id, scope = document) {
+  return $(`#${id}-city`, scope)?.value || state.geography.city;
+}
+
+function syncCoverageChipsWithAddress(coverageId, addressId, scope = document) {
+  const box = $(`[data-category-chip-box="${escapeCssIdentifier(coverageId)}"]`, scope);
+  if (!box) return;
+  box.outerHTML = coverageAreaChips(coverageId, selectedCategoryChips(coverageId, scope), currentAddressCity(addressId, scope));
+  bindCategoryChips(coverageId, scope);
+}
+
+function selectedCoverageChips(coverageId, addressId, scope = document) {
+  const options = barangaysForCity(currentAddressCity(addressId, scope));
+  return selectedCategoryChips(coverageId, scope).filter((item) => options.includes(item));
+}
+
+function normalizeCoverageAreaForProvider(coverageArea = "", area = "") {
+  const city = parseAddress(area).city || state.geography.city;
+  const options = barangaysForCity(city);
+  return categoryList(coverageArea).filter((item) => options.includes(item)).join(", ");
 }
 
 function regionForAddress(address = {}) {

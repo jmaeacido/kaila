@@ -83,6 +83,15 @@ const DB_CONFIG = {
   connectionLimit: 10,
 };
 
+const CITY_BARANGAYS = {
+  "city of gingoog": [
+    "Agay-ayan", "Alagatan", "Anakan", "Bagubad", "Bakidbakid", "Bal-ason", "Bantaawan", "Binakalan", "Capitulangan", "Daan-Lungsod", "Hindangon", "Kalagonoy", "Kibuging", "Kipuntos", "Lawaan", "Lawit", "Libertad", "Libon", "Lunao", "Lunotan", "Malibud", "Malinao", "Maribucao", "Mimbuntong", "Mimbalagon", "Mimbunga", "Minsapinit", "Murallon", "Odiongan", "Pangasihan", "Pigsaluhan", "Barangay 1", "Barangay 10", "Barangay 11", "Barangay 12", "Barangay 13", "Barangay 14", "Barangay 15", "Barangay 16", "Barangay 17", "Barangay 18-A", "Barangay 19", "Barangay 2", "Barangay 20", "Barangay 21", "Barangay 22-A", "Barangay 23", "Barangay 24", "Barangay 25", "Barangay 26", "Barangay 3", "Barangay 4", "Barangay 5", "Barangay 6", "Barangay 7", "Barangay 8", "Barangay 9", "Punong", "Ricoro", "Samay", "San Juan", "San Luis", "San Miguel", "Santiago", "Talisay", "Talon", "Tinabalan", "Tinulongan", "Barangay 18", "Barangay 22", "Barangay 24-A", "Dinawehan", "Eureka", "Kalipay", "Kamanikan", "Kianlagan", "San Jose", "Sangalan", "Tagpako",
+  ],
+  "city of butuan": [
+    "Agao Pob.", "Agusan Pequeño", "Ambago", "Amparo", "Ampayon", "Anticala", "Antongalon", "Aupagan", "Baan KM 3", "Babag", "Bading Pob.", "Bancasi", "Banza", "Baobaoan", "Basag", "Bayanihan Pob.", "Bilay", "Bit-os", "Bitan-agan", "Bobon", "Bonbon", "Bugabus", "Buhangin Pob.", "Cabcabon", "Camayahan", "Baan Riverside Pob.", "Dankias", "Imadejas Pob.", "Diego Silang Pob.", "Doongan", "Dumalagan", "Golden Ribbon Pob.", "Dagohoy Pob.", "Jose Rizal Pob.", "Holy Redeemer Pob.", "Humabon Pob.", "Kinamlutan", "Lapu-lapu Pob.", "Lemon", "Leon Kilat Pob.", "Libertad", "Limaha Pob.", "Los Angeles", "Lumbocan", "Maguinda", "Mahay", "Mahogany Pob.", "Maibu", "Mandamo", "Manila de Bugabus", "Maon Pob.", "Masao", "Maug", "Port Poyohon Pob.", "New Society Village Pob.", "Ong Yiu Pob.", "Pianing", "Pinamanculan", "Rajah Soliman Pob.", "San Ignacio Pob.", "San Mateo", "San Vicente", "Sikatuna Pob.", "Silongan Pob.", "Sumilihon", "Tagabaca", "Taguibo", "Taligaman", "Tandang Sora Pob.", "Tiniwisan", "Tungao", "Urduja Pob.", "Villa Kananga", "Obrero Pob.", "Bugsukan", "De Oro", "Dulag", "Florida", "Nong-nong", "Pagatpatan", "Pangabugan", "Salvacion", "Santo Niño", "Sumile", "Don Francisco", "Pigdaulan",
+  ],
+};
+
 let pool;
 const googleOAuthClient = new OAuth2Client(GOOGLE_CLIENT_ID || undefined);
 const conversationPresence = new Map();
@@ -459,6 +468,30 @@ function cityFromArea(area = "") {
   return parts[parts.length - 2] || "";
 }
 
+function canonicalCityKey(city = "") {
+  const clean = normalizeAreaCity(city);
+  if (["gingoog", "gingoog city"].includes(clean)) return "city of gingoog";
+  if (["butuan", "butuan city"].includes(clean)) return "city of butuan";
+  return clean;
+}
+
+function normalizeCoverageAreaForCity(coverageArea = "", city = "") {
+  const allowed = CITY_BARANGAYS[canonicalCityKey(city)];
+  const cleanCoverage = String(coverageArea || "").trim();
+  if (!allowed) return cleanCoverage;
+  const allowedByKey = new Map(allowed.map((barangay) => [barangay.toLowerCase(), barangay]));
+  const filtered = [];
+  String(cleanCoverage || "").split(",").map((item) => item.trim()).filter(Boolean).forEach((item) => {
+    const canonical = allowedByKey.get(item.toLowerCase());
+    if (canonical && !filtered.includes(canonical)) filtered.push(canonical);
+  });
+  return filtered.join(", ");
+}
+
+function normalizeCoverageAreaForArea(coverageArea = "", area = "") {
+  return normalizeCoverageAreaForCity(coverageArea, cityFromArea(area));
+}
+
 function sameCityArea(leftArea = "", rightArea = "") {
   const leftCity = normalizeAreaCity(cityFromArea(leftArea));
   const rightCity = normalizeAreaCity(cityFromArea(rightArea));
@@ -473,6 +506,17 @@ async function activeProviderProfileFor(userId) {
   if (!userId) return null;
   const [rows] = await pool.query("SELECT * FROM providers WHERE user_id = ? AND status = 'Active' LIMIT 1", [userId]);
   return rows[0] || null;
+}
+
+async function cleanupProviderCoverageAreas() {
+  const [rows] = await pool.query("SELECT id, area, coverage_area FROM providers WHERE coverage_area IS NOT NULL AND coverage_area <> ''");
+  const updates = rows
+    .map((row) => ({ id: row.id, coverageArea: normalizeCoverageAreaForArea(row.coverage_area, row.area) }))
+    .filter((row, index) => row.coverageArea !== rows[index].coverage_area);
+  for (const row of updates) {
+    await pool.query("UPDATE providers SET coverage_area = ?, updated_at = NOW() WHERE id = ?", [row.coverageArea, row.id]);
+  }
+  if (updates.length) console.log(`Cleaned provider coverage areas for ${updates.length} provider profile(s).`);
 }
 
 function canUseMarketplaceRole(user) {
@@ -784,6 +828,7 @@ async function initializeDatabase() {
   await ensureColumn("providers", "rules_agreement", "TINYINT(1) NOT NULL DEFAULT 0");
   await ensureColumn("providers", "trust_level", "VARCHAR(80) NOT NULL DEFAULT 'Listed'");
   await ensureColumn("providers", "status", "VARCHAR(80) NOT NULL DEFAULT 'Active'");
+  await cleanupProviderCoverageAreas();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS requests (
       id VARCHAR(64) PRIMARY KEY,
@@ -1631,7 +1676,7 @@ function mapProvider(row, reputation = emptyReputation(), photoUrl = "") {
     providerType: row.provider_type || "",
     specificServices: row.specific_services || "",
     yearsExperience: row.years_experience || "",
-    coverageArea: row.coverage_area || "",
+    coverageArea: normalizeCoverageAreaForArea(row.coverage_area, row.area),
     emergencyAvailability: row.emergency_availability || "",
     availableDays: row.available_days || "",
     availableTime: row.available_time || "",
@@ -3386,7 +3431,7 @@ async function createAccount(input = {}, allowedRoles = ["client", "provider"]) 
     providerType: String(input.providerType || "").trim(),
     specificServices: String(input.specificServices || "").trim(),
     yearsExperience: String(input.yearsExperience || "").trim(),
-    coverageArea: String(input.coverageArea || "").trim(),
+    coverageArea: normalizeCoverageAreaForArea(input.coverageArea, area),
     emergencyAvailability: String(input.emergencyAvailability || "").trim(),
     availableDays: String(input.availableDays || "").trim(),
     availableTime: String(input.availableTime || "").trim(),
@@ -4363,8 +4408,10 @@ app.post("/api/providers", requireUser, async (req, res) => {
     certificateProof, validIdConsent, consentRequests, consentRatings, rulesAgreement,
   } = req.body || {};
   const cleanCategory = normalizeCategories(category);
-  if (!cleanCategory || !area) return res.status(400).json({ error: "At least one category and area are required" });
-  if (!String(specificServices || skills || "").trim() || !String(coverageArea || "").trim() || !boolField(consentRequests) || !boolField(consentRatings) || !boolField(rulesAgreement)) {
+  const cleanArea = String(area || "").trim();
+  const cleanCoverageArea = normalizeCoverageAreaForArea(coverageArea, cleanArea);
+  if (!cleanCategory || !cleanArea) return res.status(400).json({ error: "At least one category and area are required" });
+  if (!String(specificServices || skills || "").trim() || !cleanCoverageArea || !boolField(consentRequests) || !boolField(consentRatings) || !boolField(rulesAgreement)) {
     return res.status(400).json({ error: "Specific services, coverage area, request consent, rating consent, and rules agreement are required" });
   }
   const timestamp = nowMysql();
@@ -4387,9 +4434,9 @@ app.post("/api/providers", requireUser, async (req, res) => {
       certificate_proof = VALUES(certificate_proof), valid_id_consent = VALUES(valid_id_consent), consent_requests = VALUES(consent_requests),
       consent_ratings = VALUES(consent_ratings), rules_agreement = VALUES(rules_agreement), updated_at = VALUES(updated_at)`,
     [
-      providerId, req.user.id, String(displayName || req.user.name).trim(), cleanCategory, area, availability || availableDays || "Available",
+      providerId, req.user.id, String(displayName || req.user.name).trim(), cleanCategory, cleanArea, availability || availableDays || "Available",
       String(skills || specificServices || "").trim(), String(displayName || req.user.name).trim(), String(providerType || "").trim(),
-      String(specificServices || skills || "").trim(), String(yearsExperience || "").trim(), String(coverageArea || "").trim(),
+      String(specificServices || skills || "").trim(), String(yearsExperience || "").trim(), cleanCoverageArea,
       String(emergencyAvailability || "").trim(), String(availableDays || "").trim(), String(availableTime || "").trim(),
       String(travelLimits || "").trim(), String(minimumFee || "").trim(), String(priceRange || "").trim(),
       String(workSamples || "").trim(), String(certificateProof || "").trim(), boolField(validIdConsent) ? 1 : 0,
