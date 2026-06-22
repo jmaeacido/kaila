@@ -1,9 +1,17 @@
 <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">KAILA icon</title>
-  <desc id="desc">A local marketplace icon combining a map pin, helpful hand, and K letterform.</desc>
-  <rect width="512" height="512" rx="112" fill="#1E3A8A"/>
-  <path d="M256 78C187.52 78 132 132.52 132 199.75C132 291.88 256 434 256 434C256 434 380 291.88 380 199.75C380 132.52 324.48 78 256 78Z" fill="#38BDF8"/>
-  <circle cx="256" cy="200" r="70" fill="#FFFFFF"/>
-  <path d="M218 154H245V196L285 154H320L273 202L324 270H290L254 220L245 229V270H218V154Z" fill="#1E3A8A"/>
-  <path d="M160 326C185 305 214 294 247 294H295C319 294 340 306 353 326C327 352 294 366 256 366C218 366 186 352 160 326Z" fill="#2563EB"/>
+  <desc id="desc">A blue KAILA app icon with a cyan location pin and tools forming a K.</desc>
+  <rect width="512" height="512" fill="#173B84"/>
+  <path d="M256 474C235 442 98 300 98 204C98 108 167.5 46 256 46C344.5 46 414 108 414 204C414 300 277 442 256 474Z" fill="#19B9E8"/>
+  <circle cx="256" cy="214" r="132" fill="#F5F6F8"/>
+  <path d="M78 194C140 170 204 142 256 90" stroke="#F5F6F8" stroke-width="15" stroke-linecap="butt" transform="translate(80 204) rotate(-14 167 142)"/>
+  <path d="M216 216H198C194.7 216 192 218.7 192 222V327C192 330.3 194.7 333 198 333H216C219.3 333 222 330.3 222 327V222C222 218.7 219.3 216 216 216Z" fill="#173B84"/>
+  <path d="M158 164C169 139 193 126 214 126H215L224 135H236L245 126H272V154H242L232 146H224L218 154H191C177 154 166 158 158 164Z" fill="#173B84"/>
+  <path d="M215 281L324 172" stroke="#173B84" stroke-width="29" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="339" cy="162" r="33" fill="#173B84"/>
+  <path d="M361 136A33 33 0 0 1 390 173L361 158V136Z" fill="#F5F6F8"/>
+  <circle cx="339" cy="162" r="11" fill="#F5F6F8"/>
+  <path d="M262 278L351 367" stroke="#173B84" stroke-width="17" stroke-linecap="round"/>
+  <path d="M310 326L367 383" stroke="#173B84" stroke-width="25" stroke-linecap="round"/>
+  <path d="M326 340L360 374" stroke="#F5F6F8" stroke-width="6" stroke-linecap="round"/>
 </svg>

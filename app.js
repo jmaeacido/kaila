@@ -19,7 +19,19 @@ const STORAGE = {
 const SOCIAL_AUTH_PENDING_PREFIX = "kaila.socialAuth.";
 const SOCIAL_AUTH_GOOGLE_PROFILE_TOKEN = "kaila.socialAuth.googleProfileToken";
 const SOCIAL_AUTH_FACEBOOK_PENDING_PREFIX = "kaila.socialAuth.facebook.";
-const SERVICE_CATEGORIES = ["Appliance repair", "Plumbing", "Electrical", "Computer repair", "Cellphone repair", "Mechanical / motorcycle", "Carpentry / home maintenance", "Cleaning", "AirCon Cleaning", "Beauty, makeup, and events", "Graphic / digital services", "General odd jobs"];
+const SERVICE_CATEGORIES = ["Plumbing", "Electrical", "Carpentry", "Welding", "Aircon & Refrigeration", "Appliance Repair", "Computer & IT Services", "Cellphone & Gadget Repair", "Cleaning Services", "Beauty Services", "Tutoring & Education", "Automotive Services", "Motorcycle Services", "Photography & Videography", "Home Improvement", "General Handyman", "Other Services"];
+const CATEGORY_ALIASES = {
+  "AirCon Cleaning": "Aircon & Refrigeration",
+  "Appliance repair": "Appliance Repair",
+  "Beauty, makeup, and events": "Beauty Services",
+  "Carpentry / home maintenance": "Carpentry",
+  "Cellphone repair": "Cellphone & Gadget Repair",
+  "Cleaning": "Cleaning Services",
+  "Computer repair": "Computer & IT Services",
+  "General odd jobs": "General Handyman",
+  "Graphic / digital services": "Computer & IT Services",
+  "Mechanical / motorcycle": "Motorcycle Services",
+};
 const URGENCY_OPTIONS = ["Emergency", "Today", "This Week", "Scheduled", "Flexible"];
 const CONTACT_CHANNELS = ["Messenger", "SMS", "Call", "Email", "Other"];
 const PROVIDER_TYPES = ["Individual", "Freelancer", "Shop", "Small team", "Business"];
@@ -953,7 +965,7 @@ function applyTheme(theme = "system") {
   document.documentElement.dataset.theme = resolved;
   document.documentElement.dataset.themeMode = state.theme;
   document.documentElement.dataset.bsTheme = resolved;
-  document.querySelector("meta[name='theme-color']")?.setAttribute("content", resolved === "dark" ? "#020617" : "#2563EB");
+  document.querySelector("meta[name='theme-color']")?.setAttribute("content", resolved === "dark" ? "#020617" : "#173B84");
 }
 
 function initializeSocketUrl() {
@@ -3025,9 +3037,16 @@ function renderJobsHeader(requests = []) {
           <span>${escapeHtml(eyebrow)}</span>
           <h2>${escapeHtml(title)}</h2>
         </div>
-        <button class="jobs-search-button" type="button" data-home-tab="#feed-pane" aria-label="${escapeAttribute(searchLabel)}">
-          <i class="fa-solid fa-magnifying-glass"></i>
-        </button>
+        <div class="jobs-toolbar-actions">
+          ${canActAsClient() ? `
+            <button class="jobs-post-button" type="button" data-new-request>
+              <i class="fa-solid fa-plus"></i><span>Post Request</span>
+            </button>
+          ` : ""}
+          <button class="jobs-search-button" type="button" data-home-tab="#feed-pane" aria-label="${escapeAttribute(searchLabel)}">
+            <i class="fa-solid fa-magnifying-glass"></i>
+          </button>
+        </div>
       </div>
       ${roleToggle}
       <div class="jobs-filter-tabs" role="tablist" aria-label="Filter jobs">
@@ -3063,6 +3082,7 @@ function bindJobsHeaderActions(host = document) {
     renderRequests();
   }));
   $$("[data-active-role]", host).forEach((button) => button.addEventListener("click", () => setActiveRole(button.dataset.activeRole)));
+  $$("[data-new-request]", host).forEach((button) => button.addEventListener("click", openRequestModal));
   $$("[data-home-tab]", host).forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.homeTab)));
 }
 
@@ -3883,10 +3903,19 @@ function serviceIcon(category = "") {
   if (text.includes("plumb") || text.includes("sink")) return "fa-faucet-drip";
   if (text.includes("elect")) return "fa-bolt";
   if (text.includes("appliance")) return "fa-blender";
-  if (text.includes("computer")) return "fa-laptop";
-  if (text.includes("cell")) return "fa-mobile-screen-button";
+  if (text.includes("computer") || text.includes("it")) return "fa-laptop";
+  if (text.includes("cell") || text.includes("gadget")) return "fa-mobile-screen-button";
   if (text.includes("carpent")) return "fa-hammer";
+  if (text.includes("weld")) return "fa-fire-flame-curved";
+  if (text.includes("aircon") || text.includes("refrigeration")) return "fa-wind";
   if (text.includes("clean")) return "fa-broom";
+  if (text.includes("beauty")) return "fa-wand-magic-sparkles";
+  if (text.includes("tutor") || text.includes("education")) return "fa-graduation-cap";
+  if (text.includes("automotive")) return "fa-car";
+  if (text.includes("motorcycle")) return "fa-motorcycle";
+  if (text.includes("photo") || text.includes("video")) return "fa-camera";
+  if (text.includes("home")) return "fa-house-chimney";
+  if (text.includes("handyman")) return "fa-toolbox";
   return "fa-briefcase";
 }
 
@@ -10989,7 +11018,7 @@ function sameCityArea(leftArea = "", rightArea = "") {
 
 function providerMatchesRequest(request) {
   const provider = state.providers.find((item) => item.userId === state.session?.id);
-  return Boolean(provider && categoryList(provider.category).includes(request.category) && sameCityArea(provider.area, request.area));
+  return Boolean(provider && categoryList(provider.category).includes(canonicalCategory(request.category)) && sameCityArea(provider.area, request.area));
 }
 
 async function passRequest(requestId) {
@@ -12025,7 +12054,7 @@ function select(id, options, selected = "", blank = "", multiple = false) {
     if (item && !optionItems.includes(item)) optionItems.push(item);
   });
   return `<select id="${id}" class="form-select" ${multiple ? "multiple size=\"4\"" : ""}>${blank ? `<option value="">${blank}</option>` : ""}${optionItems.map((item) => {
-    const isSelected = multiple ? selectedItems.includes(item) : item === selected;
+    const isSelected = multiple ? selectedItems.includes(item) : selectedItems.includes(item);
     return `<option value="${escapeAttribute(item)}" ${isSelected ? "selected" : ""}>${escapeHtml(item)}</option>`;
   }).join("")}</select>`;
 }
@@ -12322,8 +12351,13 @@ function parsePriceRange(value = "") {
 }
 
 function categoryList(value = "") {
-  if (Array.isArray(value)) return Array.from(new Set(value.map((item) => String(item).trim()).filter(Boolean)));
-  return Array.from(new Set(String(value || "").split(",").map((item) => item.trim()).filter(Boolean)));
+  const raw = Array.isArray(value) ? value : String(value || "").split(",");
+  return Array.from(new Set(raw.map((item) => canonicalCategory(item)).filter(Boolean)));
+}
+
+function canonicalCategory(value = "") {
+  const clean = String(value || "").trim();
+  return CATEGORY_ALIASES[clean] || clean;
 }
 
 function tuneFormDensity(scope = document) {

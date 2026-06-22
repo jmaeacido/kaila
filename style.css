@@ -8798,6 +8798,31 @@ body.app-mode .app-view.active {
   font-weight: 950;
 }
 
+.jobs-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.42rem;
+  flex: 0 0 auto;
+}
+
+.jobs-post-button {
+  min-height: 2.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.38rem;
+  padding: 0.25rem 0.72rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--kaila-app-blue);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 900;
+  box-shadow: 0 12px 24px rgba(13, 110, 253, 0.24);
+  white-space: nowrap;
+}
+
 .jobs-search-button {
   width: 2.55rem;
   height: 2.55rem;
@@ -9785,6 +9810,7 @@ body.app-mode .app-view.active {
 .icon-btn,
 .chat-icon-button,
 .mobile-contact-actions button,
+.jobs-post-button,
 .jobs-search-button {
   border: 1px solid var(--kaila-app-line) !important;
   background: color-mix(in srgb, var(--kaila-app-card) 76%, var(--kaila-app-soft)) !important;
@@ -10286,6 +10312,12 @@ body.app-mode .app-view.active,
   min-height: 2.25rem;
   border-color: color-mix(in srgb, var(--kaila-app-line) 72%, transparent) !important;
   box-shadow: none !important;
+}
+
+.jobs-post-button {
+  min-height: 2.25rem;
+  background: linear-gradient(135deg, var(--kaila-app-blue), var(--kaila-app-blue-2)) !important;
+  color: #fff !important;
 }
 
 .home-greeting span {

@@ -421,13 +421,31 @@ function sanitizedAttachmentName(name, extension, fallbackId = createId()) {
   return `${slug}-${suffix}${extension}`;
 }
 
+const CATEGORY_ALIASES = {
+  "AirCon Cleaning": "Aircon & Refrigeration",
+  "Appliance repair": "Appliance Repair",
+  "Beauty, makeup, and events": "Beauty Services",
+  "Carpentry / home maintenance": "Carpentry",
+  "Cellphone repair": "Cellphone & Gadget Repair",
+  "Cleaning": "Cleaning Services",
+  "Computer repair": "Computer & IT Services",
+  "General odd jobs": "General Handyman",
+  "Graphic / digital services": "Computer & IT Services",
+  "Mechanical / motorcycle": "Motorcycle Services",
+};
+
+function canonicalCategory(value = "") {
+  const clean = String(value || "").trim();
+  return CATEGORY_ALIASES[clean] || clean;
+}
+
 function normalizeCategories(value) {
   const raw = Array.isArray(value) ? value : String(value || "").split(",");
-  return Array.from(new Set(raw.map((item) => String(item).trim()).filter(Boolean))).join(", ");
+  return Array.from(new Set(raw.map((item) => canonicalCategory(item)).filter(Boolean))).join(", ");
 }
 
 function hasCategory(categories, category) {
-  const target = String(category || "").trim().toLowerCase();
+  const target = canonicalCategory(category).toLowerCase();
   return normalizeCategories(categories).split(",").map((item) => item.trim().toLowerCase()).includes(target);
 }
 

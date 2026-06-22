@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#2563EB">
+  <meta name="theme-color" content="#173B84">
   <meta name="description" content="KAILA helps clients in Gingoog City find trusted local service providers, compare offers, chat clearly, and track jobs from request to completion.">
   <meta name="robots" content="index, follow, max-image-preview:large">
   <meta name="application-name" content="KAILA">
@@ -26,11 +26,11 @@
   <meta name="twitter:title" content="KAILA | Find Trusted Local Services in Gingoog City">
   <meta name="twitter:description" content="Find trusted local help faster with request posting, provider offers, chat, and job tracking.">
   <meta name="twitter:image" content="https://kaila-app.com/assets/kaila-preview.png?v=20260615-consumer-scenes">
-  <link rel="manifest" href="manifest.webmanifest?v=20260615-consumer-scenes">
-  <link rel="icon" href="assets/favicon.ico?v=20260615-consumer-scenes" sizes="any">
-  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32x32.png?v=20260615-consumer-scenes">
-  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16x16.png?v=20260615-consumer-scenes">
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png?v=20260615-consumer-scenes">
+  <link rel="manifest" href="manifest.webmanifest?v=20260622-app-icon">
+  <link rel="icon" href="assets/favicon.ico?v=20260622-app-icon" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32x32.png?v=20260622-app-icon">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16x16.png?v=20260622-app-icon">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png?v=20260622-app-icon">
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
   <link rel="preconnect" href="https://tile.openstreetmap.org" crossorigin>
@@ -38,7 +38,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
-  <link rel="stylesheet" href="style.css?v=20260616-profile-save">
+  <link rel="stylesheet" href="style.css?v=20260622-service-categories">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -48,7 +48,7 @@
         "@id": "https://kaila-app.com/#organization",
         "name": "KAILA",
         "url": "https://kaila-app.com/",
-        "logo": "https://kaila-app.com/assets/android-chrome-512x512.png?v=20260615-consumer-scenes",
+        "logo": "https://kaila-app.com/assets/android-chrome-512x512.png?v=20260622-app-icon",
         "areaServed": {
           "@type": "City",
           "name": "Gingoog City"
@@ -95,7 +95,7 @@
   <nav class="navbar bg-white border-bottom sticky-top py-2">
     <div class="container-fluid px-3">
       <a class="navbar-brand d-flex align-items-center gap-2 fw-black m-0" href="#" data-route="landing">
-        <img class="brand-icon" src="assets/android-chrome-192x192.png?v=20260615-consumer-scenes" alt="">
+        <img class="brand-icon" src="assets/android-chrome-192x192.png?v=20260622-app-icon" alt="">
         <span>KAILA</span>
       </a>
       <div class="d-flex align-items-center gap-2">
@@ -135,7 +135,7 @@
           <div class="hero-preview" aria-label="KAILA request preview">
             <div class="preview-phone">
               <div class="preview-topbar">
-                <img class="preview-icon" src="assets/android-chrome-192x192.png?v=20260615-consumer-scenes" alt="">
+                <img class="preview-icon" src="assets/android-chrome-192x192.png?v=20260622-app-icon" alt="">
                 <strong>Nearby help</strong>
                 <em>12m</em>
               </div>
@@ -394,7 +394,7 @@
       <div class="container-fluid px-3 py-3">
         <div class="public-post-shell">
           <div class="public-post-head">
-            <img src="assets/android-chrome-192x192.png?v=20260615-consumer-scenes" alt="">
+            <img src="assets/android-chrome-192x192.png?v=20260622-app-icon" alt="">
             <div>
               <strong>KAILA Service Feed</strong>
               <span>Shared public post</span>
@@ -410,7 +410,7 @@
       <div class="adminlte-app">
         <header class="app-header">
           <div class="app-title">
-            <img src="assets/android-chrome-192x192.png?v=20260615-consumer-scenes" alt="" data-app-user-photo>
+            <img src="assets/android-chrome-192x192.png?v=20260622-app-icon" alt="" data-app-user-photo>
             <div>
               <strong data-dashboard-title>Dashboard</strong>
               <span data-current-user-summary>Signed in</span>
@@ -523,14 +523,21 @@
                 <section class="home-categories" aria-label="Service categories">
                   <button type="button" data-service-category="Plumbing"><i class="fa-solid fa-faucet-drip"></i><span>Plumbing</span></button>
                   <button type="button" data-service-category="Electrical"><i class="fa-solid fa-bolt"></i><span>Electrical</span></button>
-                  <button type="button" data-service-category="Appliance repair"><i class="fa-solid fa-blender"></i><span>Appliance Repair</span></button>
-                  <button type="button" data-service-category="AirCon Cleaning"><i class="fa-solid fa-wind"></i><span>AirCon Cleaning</span></button>
-                  <button type="button" data-service-category="Computer repair"><i class="fa-solid fa-laptop"></i><span>Computer Repair</span></button>
-                  <button type="button" data-service-category="Cellphone repair"><i class="fa-solid fa-mobile-screen-button"></i><span>Cellphone Repair</span></button>
-                  <button type="button" data-service-category="Carpentry / home maintenance"><i class="fa-solid fa-hammer"></i><span>Carpentry</span></button>
-                  <button type="button" data-service-category="Cleaning"><i class="fa-solid fa-broom"></i><span>Cleaning</span></button>
-                  <button type="button" data-service-category="Beauty, makeup, and events"><i class="fa-solid fa-wand-magic-sparkles"></i><span>Beauty & Events</span></button>
-                  <button type="button" data-service-category="General odd jobs"><i class="fa-solid fa-toolbox"></i><span>General Odd Jobs</span></button>
+                  <button type="button" data-service-category="Carpentry"><i class="fa-solid fa-hammer"></i><span>Carpentry</span></button>
+                  <button type="button" data-service-category="Welding"><i class="fa-solid fa-fire-flame-curved"></i><span>Welding</span></button>
+                  <button type="button" data-service-category="Aircon &amp; Refrigeration"><i class="fa-solid fa-wind"></i><span>Aircon &amp; Refrigeration</span></button>
+                  <button type="button" data-service-category="Appliance Repair"><i class="fa-solid fa-blender"></i><span>Appliance Repair</span></button>
+                  <button type="button" data-service-category="Computer &amp; IT Services"><i class="fa-solid fa-laptop"></i><span>Computer &amp; IT</span></button>
+                  <button type="button" data-service-category="Cellphone &amp; Gadget Repair"><i class="fa-solid fa-mobile-screen-button"></i><span>Gadget Repair</span></button>
+                  <button type="button" data-service-category="Cleaning Services"><i class="fa-solid fa-broom"></i><span>Cleaning Services</span></button>
+                  <button type="button" data-service-category="Beauty Services"><i class="fa-solid fa-wand-magic-sparkles"></i><span>Beauty Services</span></button>
+                  <button type="button" data-service-category="Tutoring &amp; Education"><i class="fa-solid fa-graduation-cap"></i><span>Tutoring</span></button>
+                  <button type="button" data-service-category="Automotive Services"><i class="fa-solid fa-car"></i><span>Automotive</span></button>
+                  <button type="button" data-service-category="Motorcycle Services"><i class="fa-solid fa-motorcycle"></i><span>Motorcycle</span></button>
+                  <button type="button" data-service-category="Photography &amp; Videography"><i class="fa-solid fa-camera"></i><span>Photo &amp; Video</span></button>
+                  <button type="button" data-service-category="Home Improvement"><i class="fa-solid fa-house-chimney"></i><span>Home Improvement</span></button>
+                  <button type="button" data-service-category="General Handyman"><i class="fa-solid fa-toolbox"></i><span>General Handyman</span></button>
+                  <button type="button" data-service-category="Other Services"><i class="fa-solid fa-briefcase"></i><span>Other Services</span></button>
                 </section>
                 <div class="home-search-empty" data-home-search-empty hidden>No matching services found.</div>
 
@@ -543,7 +550,7 @@
 
                 <form class="feed-composer" data-feed-form>
                   <div class="feed-composer-row">
-                    <img src="assets/android-chrome-192x192.png?v=20260615-consumer-scenes" alt="" data-feed-composer-photo>
+                    <img src="assets/android-chrome-192x192.png?v=20260622-app-icon" alt="" data-feed-composer-photo>
                     <textarea class="form-control" name="body" rows="2" maxlength="2000" placeholder="Share a service tip, update, availability, or community note"></textarea>
                   </div>
                   <div class="upload-preview feed-upload-preview" data-feed-media-preview></div>
@@ -634,6 +641,6 @@
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=20260616-profile-save"></script>
+  <script src="app.js?v=20260622-service-categories"></script>
 </body>
 </html>
