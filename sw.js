@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v251-app-icon-jobs-post";
+const CACHE_NAME = "kaila-pwa-v252-icon-jpg";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"
@@ -19,6 +19,7 @@ const APP_SHELL = [
   "./assets/Butuan City PSGC.xlsx",
   "./assets/android-chrome-192x192.png",
   "./assets/android-chrome-512x512.png",
+  "./assets/icon.jpg",
   "./assets/apple-touch-icon.png",
   "./assets/favicon.ico",
   "./assets/favicon-16x16.png",
