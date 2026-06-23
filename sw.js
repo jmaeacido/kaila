@@ -1,4 +1,4 @@
-const CACHE_NAME = "kaila-pwa-v272-deleted-account-sections";
+const CACHE_NAME = "kaila-pwa-v273-katabang-assistant";
 const IS_ANDROID_WEBVIEW = /\bwv\b/i.test(navigator.userAgent || "");
 const IS_NATIVE_WEBVIEW = IS_ANDROID_WEBVIEW
   && (self.location.protocol === "capacitor:"

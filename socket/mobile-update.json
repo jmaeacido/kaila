@@ -1,8 +1,8 @@
 {
-    "latestVersionCode": 1782226015,
-    "latestVersionName": "1.0.1782226015",
+    "latestVersionCode": 1782226016,
+    "latestVersionName": "1.0.1782226016",
     "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
-    "releaseNotes": "Moves deleted client and provider accounts into their own collapsed sections and excludes them from active provider counts.",
-    "generatedAt": "2026-06-23T14:17:09+08:00",
+    "releaseNotes": "Adds Katabang, KAILA's Groq-powered AI assistant for user questions, guidance, tutorials, and walkthroughs.",
+    "generatedAt": "2026-06-23T16:39:01+08:00",
     "source": "auto"
 }

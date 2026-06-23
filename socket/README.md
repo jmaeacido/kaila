@@ -48,7 +48,7 @@ Service requests and provider completion proofs accept optional JPG, PNG, WebP, 
 
 ## Groq AI
 
-Set `GROQ_API_KEY` in `socket/.env` to enable AI-assisted validation and dashboard analytics. The browser calls KAILA's API only; the Groq key stays on the Node service.
+Set `GROQ_API_KEY` in `socket/.env` to enable Katabang, AI-assisted validation, and dashboard analytics. Katabang uses `/api/assistant/chat` for authenticated user guidance, tutorials, walkthroughs, and support handoff advice. The browser calls KAILA's API only; the Groq key stays on the Node service.
 
 ```env
 GROQ_API_KEY=

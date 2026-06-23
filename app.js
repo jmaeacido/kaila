@@ -15,6 +15,7 @@ const STORAGE = {
   pushDeviceId: "kaila.deploy.pushDeviceId",
   mobileUpdateCheck: "kaila.deploy.mobileUpdateCheck",
   activeRole: "kaila.deploy.activeRole",
+  katabangMessages: "kaila.deploy.katabangMessages",
 };
 const SOCIAL_AUTH_PENDING_PREFIX = "kaila.socialAuth.";
 const SOCIAL_AUTH_GOOGLE_PROFILE_TOKEN = "kaila.socialAuth.googleProfileToken";
@@ -49,6 +50,13 @@ const SUPPORT_DASHBOARD_TAB = "#customer-service-pane";
 const SUPPORT_ROLE = "customer_service";
 const SUPPORT_LABEL = "Customer Service";
 const SUPPORT_AVATAR = "assets/kaila-customer-service-avatar.png";
+const KATABANG_LABEL = "Katabang";
+const KATABANG_SUGGESTIONS = [
+  "How do I post a service request?",
+  "Help me compare provider offers.",
+  "How do I report a problem?",
+  "Walk me through my account settings.",
+];
 const SUPER_ADMIN_USERNAME = "jmaeacido";
 const STAFF_ROLES = ["admin", "ops", SUPPORT_ROLE];
 const APP_TIME_ZONE = "Asia/Manila";
@@ -183,6 +191,8 @@ const state = {
   call: null,
   adminMetric: "",
   jobFilter: "all",
+  katabangMessages: readJson(STORAGE.katabangMessages, []),
+  katabangSending: false,
   activeRole: localStorage.getItem(STORAGE.activeRole) || "",
   theme: localStorage.getItem(STORAGE.theme) || "system",
   geography: FALLBACK_GEOGRAPHY,
@@ -919,6 +929,7 @@ function bindEvents() {
   $$("[data-new-request]").forEach((button) => button.addEventListener("click", openRequestModal));
   $$("[data-home-tab]").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.homeTab)));
   $$("[data-home-support]").forEach((button) => button.addEventListener("click", openCustomerServicePlatform));
+  $$("[data-open-katabang]").forEach((button) => button.addEventListener("click", openKatabangAssistant));
   $("[data-home-search]")?.addEventListener("input", applyHomeSearch);
   $("[data-home-search]")?.addEventListener("search", applyHomeSearch);
   $$("[data-service-category]").forEach((button) => button.addEventListener("click", () => {
@@ -2021,12 +2032,15 @@ function renderActions() {
     actions.push(`<button class="btn ${hasProviderProfile ? "btn-outline-primary" : "btn-provider-setup"}" type="button" data-provider-profile data-provider-setup="${hasProviderProfile ? "false" : "true"}"><i class="fa-solid fa-briefcase"></i><span>${hasProviderProfile ? "Provider Profile" : "Add a Provider Profile"}</span></button>`);
   }
   if (canActAsMarketplace()) {
+    actions.push(`<button class="btn btn-outline-primary" type="button" data-open-katabang><i class="fa-solid fa-wand-magic-sparkles"></i><span>${KATABANG_LABEL}</span></button>`);
     actions.push(`<button class="btn btn-outline-primary" type="button" data-open-support><i class="fa-solid fa-headset"></i><span>Customer Service</span></button>`);
   }
   if (state.session.role === "admin") {
+    actions.push(`<button class="btn btn-outline-primary" type="button" data-open-katabang><i class="fa-solid fa-wand-magic-sparkles"></i><span>${KATABANG_LABEL}</span></button>`);
     actions.push(`<button class="btn btn-primary" type="button" data-admin-create-account><i class="fa-solid fa-user-plus"></i><span>Create Account</span></button>`);
   }
   if (state.session.role === SUPPORT_ROLE) {
+    actions.push(`<button class="btn btn-outline-primary" type="button" data-open-katabang><i class="fa-solid fa-wand-magic-sparkles"></i><span>${KATABANG_LABEL}</span></button>`);
     actions.push(`<button class="btn btn-primary" type="button" data-open-support><i class="fa-solid fa-headset"></i><span>Support Desk</span></button>`);
   }
   if (["admin", "ops"].includes(state.session.role)) {
@@ -2049,6 +2063,7 @@ function renderActions() {
   $("[data-client-survey]")?.addEventListener("click", openClientSurveyModal);
   $("[data-provider-interview]")?.addEventListener("click", openProviderInterviewModal);
   $("[data-open-support]")?.addEventListener("click", openCustomerServicePlatform);
+  $("[data-open-katabang]")?.addEventListener("click", openKatabangAssistant);
   $("[data-team-note]")?.addEventListener("click", openMessageModal);
   const activeRoleLabel = state.activeRole ? roleLabel(state.activeRole) : roleLabel(state.session.role);
   $("[data-dashboard-title]").textContent = `${activeRoleLabel} Dashboard`;
@@ -5956,6 +5971,173 @@ async function openDashboardAiInsight() {
     window.Swal.close();
     notify("AI insight failed", error.message, "error");
   }
+}
+
+function katabangMessages() {
+  if (!Array.isArray(state.katabangMessages)) state.katabangMessages = [];
+  state.katabangMessages = state.katabangMessages
+    .filter((message) => ["user", "assistant"].includes(message?.role) && String(message?.content || "").trim())
+    .slice(-12);
+  return state.katabangMessages;
+}
+
+function saveKatabangMessages() {
+  state.katabangMessages = katabangMessages().slice(-12);
+  localStorage.setItem(STORAGE.katabangMessages, JSON.stringify(state.katabangMessages));
+}
+
+function katabangWelcomeMessage() {
+  const name = String(state.session?.name || state.session?.username || "there").trim().split(/\s+/)[0] || "there";
+  return {
+    role: "assistant",
+    content: `Hi ${name}. I am ${KATABANG_LABEL}, your KAILA assistant. Ask me about posting requests, finding providers, offers, chat, safety, reports, account settings, or any concern you want help with.`,
+  };
+}
+
+function katabangMessageHtml(message) {
+  const isUser = message.role === "user";
+  return `
+    <article class="katabang-message ${isUser ? "mine" : "assistant"}">
+      <strong>${isUser ? "You" : KATABANG_LABEL}</strong>
+      <p>${escapeHtml(message.content).replace(/\n{2,}/g, "</p><p>").replace(/\n/g, "<br>")}</p>
+    </article>
+  `;
+}
+
+function renderKatabangMessages(scope = document) {
+  const transcript = $("[data-katabang-transcript]", scope);
+  if (!transcript) return;
+  const messages = katabangMessages();
+  const visibleMessages = messages.length ? messages : [katabangWelcomeMessage()];
+  transcript.innerHTML = visibleMessages.map(katabangMessageHtml).join("");
+  transcript.scrollTop = transcript.scrollHeight;
+  const suggestions = $("[data-katabang-suggestions]", scope);
+  if (suggestions) {
+    const latest = messages[messages.length - 1];
+    const options = latest?.suggestions?.length ? latest.suggestions : KATABANG_SUGGESTIONS;
+    suggestions.innerHTML = options.slice(0, 4).map((item) => `
+      <button type="button" data-katabang-suggestion="${escapeAttribute(item)}">${escapeHtml(item)}</button>
+    `).join("");
+    $$("[data-katabang-suggestion]", suggestions).forEach((button) => {
+      button.addEventListener("click", () => {
+        const input = $("[data-katabang-input]", scope);
+        if (!input || state.katabangSending) return;
+        input.value = button.dataset.katabangSuggestion || "";
+        $("[data-katabang-form]", scope)?.dispatchEvent(new Event("submit", { cancelable: true }));
+      });
+    });
+  }
+}
+
+async function submitKatabangMessage(scope = document) {
+  if (state.katabangSending) return;
+  const input = $("[data-katabang-input]", scope);
+  const sendButton = $("[data-katabang-send]", scope);
+  const question = String(input?.value || "").trim();
+  if (!question) return;
+  state.katabangSending = true;
+  if (sendButton) {
+    sendButton.disabled = true;
+    sendButton.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i><span>Send</span>`;
+  }
+  if (input) input.value = "";
+  state.katabangMessages = [...katabangMessages(), { role: "user", content: question }];
+  renderKatabangMessages(scope);
+  saveKatabangMessages();
+  try {
+    const payload = await apiFetch("/api/assistant/chat", {
+      method: "POST",
+      body: JSON.stringify({ messages: katabangMessages() }),
+    });
+    state.katabangMessages = [
+      ...katabangMessages(),
+      {
+        role: "assistant",
+        content: payload.answer || "I could not prepare an answer yet. Please try again.",
+        suggestions: Array.isArray(payload.suggestions) ? payload.suggestions : [],
+      },
+    ];
+    saveKatabangMessages();
+    renderKatabangMessages(scope);
+  } catch (error) {
+    state.katabangMessages = [
+      ...katabangMessages(),
+      {
+        role: "assistant",
+        content: `${KATABANG_LABEL} could not connect right now. You can still open Customer Service for urgent help. ${error.message || ""}`.trim(),
+      },
+    ];
+    saveKatabangMessages();
+    renderKatabangMessages(scope);
+  } finally {
+    state.katabangSending = false;
+    if (sendButton) {
+      sendButton.disabled = false;
+      sendButton.innerHTML = `<i class="fa-solid fa-paper-plane"></i><span>Send</span>`;
+    }
+    input?.focus();
+  }
+}
+
+function openKatabangAssistant() {
+  if (!state.session) {
+    route("login");
+    return;
+  }
+  if (state.session.role === "ops") {
+    notify("Katabang unavailable", "Ops accounts are limited to validation work.", "info");
+    return;
+  }
+  window.Swal.fire({
+    customClass: { popup: "kaila-popup katabang-popup" },
+    title: "",
+    html: `
+      <section class="katabang-shell" aria-label="${KATABANG_LABEL} AI Assistant">
+        <header class="katabang-header">
+          <button class="chat-icon-button" type="button" data-katabang-close aria-label="Close">
+            <i class="fa-solid fa-arrow-left"></i>
+          </button>
+          <div>
+            <strong>${KATABANG_LABEL}</strong>
+            <span>AI Assistant</span>
+          </div>
+          <button class="chat-icon-button" type="button" data-katabang-reset aria-label="Reset chat" title="Reset chat">
+            <i class="fa-solid fa-rotate-left"></i>
+          </button>
+        </header>
+        <div class="katabang-suggestions" data-katabang-suggestions></div>
+        <div class="katabang-transcript" data-katabang-transcript></div>
+        <form class="katabang-compose" data-katabang-form>
+          <textarea class="form-control" rows="2" maxlength="1000" placeholder="Ask Katabang anything about KAILA..." data-katabang-input></textarea>
+          <button class="btn btn-primary" type="submit" data-katabang-send>
+            <i class="fa-solid fa-paper-plane"></i><span>Send</span>
+          </button>
+        </form>
+      </section>
+    `,
+    showConfirmButton: false,
+    showCancelButton: false,
+    didOpen: (popup) => {
+      renderKatabangMessages(popup);
+      $("[data-katabang-close]", popup)?.addEventListener("click", () => window.Swal.close());
+      $("[data-katabang-reset]", popup)?.addEventListener("click", () => {
+        state.katabangMessages = [];
+        saveKatabangMessages();
+        renderKatabangMessages(popup);
+      });
+      $("[data-katabang-form]", popup)?.addEventListener("submit", (event) => {
+        event.preventDefault();
+        submitKatabangMessage(popup);
+      });
+      $("[data-katabang-input]", popup)?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          $("[data-katabang-form]", popup)?.dispatchEvent(new Event("submit", { cancelable: true }));
+        }
+      });
+      $("[data-katabang-input]", popup)?.focus();
+    },
+  });
 }
 
 function renderSettings() {

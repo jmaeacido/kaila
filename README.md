@@ -20,6 +20,7 @@ Current MVP screens:
 - Login page
 - Authenticated compact dashboard
 - Admin-created Customer Service role with a support desk, client/provider direct messaging, and request triage visibility
+- Katabang AI assistant for KAILA questions, guided walkthroughs, tutorials, and support handoff guidance
 - In-app Privacy Policy, Terms of Service, Contact Support, report user/job, block user, and account deletion controls
 
 Real-time MVP events:
@@ -216,7 +217,7 @@ For deployment:
 - Run `socket/` as a Node service.
 - Run MySQL and configure `socket/.env`.
 - Set `KAILA_SOCKET_BEARER_TOKEN` in `socket/.env`.
-- Set `GROQ_API_KEY` in `socket/.env` if AI-assisted Decision Signal prefilling and dashboard analytics should be enabled.
+- Set `GROQ_API_KEY` in `socket/.env` if Katabang, AI-assisted Decision Signal prefilling, and dashboard analytics should be enabled.
 - Optional: set `KAILA_GOOGLE_CLIENT_ID`, `KAILA_FACEBOOK_APP_ID`, and `KAILA_FACEBOOK_APP_SECRET` in `socket/.env` to enable Google/Facebook login and signup.
 - Update the socket URL in the app if the deployed socket URL changes.
 - Serve the PWA over HTTPS so browsers allow microphone and camera access outside local development.
