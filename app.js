@@ -82,6 +82,8 @@ const MOBILE_UPDATE_PROMPT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const MEDIA_ATTACHMENT_LIMIT = 20;
 const MEDIA_ATTACHMENT_ACCEPT = "image/jpeg,image/png,image/webp,video/mp4,video/webm";
 const CAMERA_ATTACHMENT_ACCEPT = "image/*,video/*";
+const FEED_BODY_COLLAPSE_LIMIT = 320;
+const FEED_MENTION_RESULT_LIMIT = 6;
 const FALLBACK_GEOGRAPHY = {
   region: "Region X (Northern Mindanao)",
   province: "Misamis Oriental",
@@ -108,6 +110,7 @@ const state = {
   reports: [],
   blocks: [],
   feedPosts: [],
+  expandedFeedPosts: new Set(),
   feedLoaded: false,
   feedSyncing: false,
   publicPost: null,
@@ -901,6 +904,7 @@ function bindEvents() {
   $("[data-register-form] [name='role']").addEventListener("change", toggleProviderCategory);
   $("[data-login-form]").addEventListener("submit", login);
   $("[data-feed-form]")?.addEventListener("submit", createFeedPost);
+  bindMentionInputs($("[data-feed-form]") || document);
   bindAttachmentPreview("[data-feed-media]", "[data-feed-media-preview]", MEDIA_ATTACHMENT_LIMIT);
   bindFeedAudienceSelector();
   $$("[data-password-toggle]").forEach((button) => button.addEventListener("click", togglePasswordVisibility));
@@ -2092,7 +2096,7 @@ function adminPilotMetrics() {
   const gmv = completedRequests.reduce((total, request) => total + selectedOfferAmount(request), 0);
 
   return {
-    activeProviders: providers.filter((provider) => (provider.status || "Active") === "Active").length,
+    activeProviders: providers.filter((provider) => !isDeletedProvider(provider) && (provider.status || "Active") === "Active").length,
     requests: requests.length,
     responseRate: requests.length ? Math.round((respondedRequests / requests.length) * 100) : 0,
     offersPerRequest: requests.length ? (offersCount / requests.length).toFixed(1) : "0",
@@ -2185,6 +2189,8 @@ function renderFeed() {
     ? state.feedPosts.map((post) => renderFeedPost(post)).join("")
     : `<div class="empty-card"><strong>No posts yet</strong><p>Share the first service update or community note.</p></div>`;
   bindFeedPostActions(list);
+  bindMentionInputs(list);
+  hydrateFeedMediaPresentation(list);
   applyHomeSearch();
 }
 
@@ -2291,6 +2297,255 @@ function closeFeedAudienceMenus() {
   });
 }
 
+function feedTextSegments(value = "") {
+  const text = String(value || "");
+  const segments = [];
+  const mentionLabels = feedMentionLabelsForRendering();
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === "@") {
+      const mention = matchingFeedMentionAt(text, index, mentionLabels);
+      if (mention) {
+        segments.push({ type: "mention", value: mention });
+        index += mention.length;
+        continue;
+      }
+    }
+    if (char === "#") {
+      const match = text.slice(index).match(/^#[\p{L}\p{N}_][\p{L}\p{N}_.-]*/u);
+      if (match) {
+        segments.push({ type: "hashtag", value: match[0] });
+        index += match[0].length;
+        continue;
+      }
+    }
+    const nextToken = text.slice(index + 1).search(/[@#]/u);
+    const end = nextToken === -1 ? text.length : index + 1 + nextToken;
+    segments.push({ type: "text", value: text.slice(index, end) });
+    index = end;
+  }
+  return segments;
+}
+
+function feedMentionLabelsForRendering() {
+  const labels = new Set();
+  (state.users || []).forEach((user) => {
+    const displayName = displayUserName(user);
+    if (displayName) labels.add(displayName);
+    if (user.name) labels.add(user.name);
+    if (user.username) labels.add(user.username);
+  });
+  return Array.from(labels).sort((a, b) => b.length - a.length);
+}
+
+function matchingFeedMentionAt(text = "", atIndex = 0, labels = []) {
+  const lowerText = text.toLowerCase();
+  for (const label of labels) {
+    const clean = String(label || "").trim();
+    if (!clean) continue;
+    const start = atIndex + 1;
+    const end = start + clean.length;
+    if (lowerText.slice(start, end) !== clean.toLowerCase()) continue;
+    const after = text[end] || " ";
+    if (/[\p{L}\p{N}_]/u.test(after)) continue;
+    return text.slice(atIndex, end);
+  }
+  return text.slice(atIndex).match(/^@[\p{L}\p{N}_][\p{L}\p{N}_.-]*/u)?.[0] || "";
+}
+
+function renderFeedRichText(value = "") {
+  return feedTextSegments(value).map((segment) => {
+    if (segment.type === "mention") return `<span class="feed-mention">${escapeHtml(String(segment.value || "").replace(/^@/, ""))}</span>`;
+    if (segment.type === "hashtag") return `<span class="feed-hashtag">${escapeHtml(segment.value)}</span>`;
+    return escapeHtml(segment.value);
+  }).join("");
+}
+
+function collapsedFeedBody(post = {}) {
+  const body = String(post.body || "");
+  if (state.expandedFeedPosts.has(post.id) || body.length <= FEED_BODY_COLLAPSE_LIMIT) return body;
+  const truncated = body.slice(0, FEED_BODY_COLLAPSE_LIMIT).replace(/\s+\S*$/, "").trim();
+  return truncated || body.slice(0, FEED_BODY_COLLAPSE_LIMIT);
+}
+
+function renderFeedBody(post = {}) {
+  if (!post.body) return "";
+  const expanded = state.expandedFeedPosts.has(post.id);
+  const collapsible = String(post.body || "").length > FEED_BODY_COLLAPSE_LIMIT;
+  const body = collapsedFeedBody(post);
+  return `
+    <div class="feed-body-wrap">
+      <p class="feed-body">${renderFeedRichText(body)}${collapsible && !expanded ? `<span aria-hidden="true">...</span>` : ""}</p>
+      ${collapsible ? `<button class="feed-body-toggle" type="button" data-feed-body-toggle aria-expanded="${expanded ? "true" : "false"}">${expanded ? "See less..." : "See more..."}</button>` : ""}
+    </div>
+  `;
+}
+
+function normalizeMentionText(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}@#._ -]+/gu, "")
+    .replace(/\s+/g, " ");
+}
+
+function mentionCandidates(query = "") {
+  const normalizedQuery = normalizeMentionText(query).replace(/^@/, "");
+  const seen = new Set();
+  return (state.users || [])
+    .filter((user) => user?.id && user.username && !user.deletedAt && (user.accountStatus || "active") === "active")
+    .map((user) => ({
+      id: user.id,
+      name: displayUserName(user),
+      mentionLabel: displayUserName(user),
+      username: String(user.username || "").trim().replace(/^@+/, ""),
+      role: user.role || "",
+      photoUrl: user.photoUrl || "",
+    }))
+    .filter((user) => {
+      const key = normalizeMentionText(user.username || user.name || user.id);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      if (!normalizedQuery) return true;
+      return key.includes(normalizedQuery) || normalizeMentionText(user.name).includes(normalizedQuery);
+    })
+    .slice(0, FEED_MENTION_RESULT_LIMIT);
+}
+
+function feedMentionMenu() {
+  let menu = $("[data-feed-mention-menu]");
+  if (menu) return menu;
+  menu = document.createElement("div");
+  menu.className = "feed-mention-menu";
+  menu.dataset.feedMentionMenu = "";
+  menu.hidden = true;
+  document.body.appendChild(menu);
+  return menu;
+}
+
+function mentionQueryForControl(control) {
+  const value = control.value || "";
+  const cursor = control.selectionStart ?? value.length;
+  const before = value.slice(0, cursor);
+  const match = before.match(/(^|[\s([{])@([\p{L}\p{N}._-]{0,40})$/u);
+  if (!match) return null;
+  return {
+    query: match[2] || "",
+    start: before.length - (match[2] || "").length - 1,
+    end: cursor,
+  };
+}
+
+function bindMentionInputs(scope = document) {
+  $$("[data-mention-enabled]", scope).forEach((control) => {
+    if (control.dataset.mentionBound === "true") return;
+    control.dataset.mentionBound = "true";
+    control.addEventListener("input", () => {
+      if (control.tagName === "TEXTAREA") autoResizeTextarea(control);
+      updateMentionMenu(control);
+    });
+    control.addEventListener("keydown", (event) => handleMentionMenuKeydown(event, control));
+    control.addEventListener("blur", () => setTimeout(closeMentionMenu, 140));
+    if (control.tagName === "TEXTAREA") autoResizeTextarea(control);
+  });
+}
+
+function updateMentionMenu(control) {
+  const context = mentionQueryForControl(control);
+  const menu = feedMentionMenu();
+  if (!context) {
+    closeMentionMenu();
+    return;
+  }
+  const matches = mentionCandidates(context.query);
+  if (!matches.length) {
+    closeMentionMenu();
+    return;
+  }
+  menu.innerHTML = matches.map((user, index) => `
+    <button type="button" data-feed-mention-choice="${escapeAttribute(user.id)}" data-feed-mention-index="${index}" data-feed-mention-label="${escapeAttribute(user.mentionLabel || user.name)}" ${index === 0 ? "aria-selected=\"true\"" : ""}>
+      <img src="${escapeAttribute(resolveMediaUrl(user.photoUrl))}" alt="">
+      <span><strong>${escapeHtml(user.name)}</strong><small>${escapeHtml(user.username ? `@${user.username}` : capitalize(user.role || "user"))}</small></span>
+    </button>
+  `).join("");
+  menu.dataset.controlStart = String(context.start);
+  menu.dataset.controlEnd = String(context.end);
+  menu._control = control;
+  menu.hidden = false;
+  positionMentionMenu(control, menu);
+  $$("[data-feed-mention-choice]", menu).forEach((button) => {
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      insertMentionChoice(control, button.dataset.feedMentionLabel || "");
+    });
+  });
+}
+
+function positionMentionMenu(control, menu) {
+  const rect = control.getBoundingClientRect();
+  const margin = 8;
+  const width = Math.min(280, window.innerWidth - (margin * 2));
+  let left = rect.left;
+  let top = rect.bottom + 6;
+  left = Math.min(Math.max(margin, left), window.innerWidth - width - margin);
+  if (top + 220 > window.innerHeight - margin) top = rect.top - 226;
+  menu.style.left = `${left}px`;
+  menu.style.top = `${Math.max(margin, top)}px`;
+  menu.style.width = `${width}px`;
+}
+
+function handleMentionMenuKeydown(event, control) {
+  const menu = $("[data-feed-mention-menu]");
+  if (!menu || menu.hidden || menu._control !== control) return;
+  const choices = $$("[data-feed-mention-choice]", menu);
+  const currentIndex = Math.max(0, choices.findIndex((button) => button.getAttribute("aria-selected") === "true"));
+  if (event.key === "Escape") {
+    closeMentionMenu();
+    return;
+  }
+  if (!["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(event.key)) return;
+  event.preventDefault();
+  if (event.key === "Enter" || event.key === "Tab") {
+    insertMentionChoice(control, choices[currentIndex]?.dataset.feedMentionLabel || "");
+    return;
+  }
+  const nextIndex = event.key === "ArrowDown"
+    ? Math.min(choices.length - 1, currentIndex + 1)
+    : Math.max(0, currentIndex - 1);
+  choices.forEach((button, index) => button.setAttribute("aria-selected", index === nextIndex ? "true" : "false"));
+}
+
+function insertMentionChoice(control, label) {
+  const mentionLabel = String(label || "").trim().replace(/^@+/, "").replace(/\s+/g, " ");
+  if (!control || !mentionLabel) return;
+  const menu = $("[data-feed-mention-menu]");
+  const start = Number(menu?.dataset.controlStart || control.selectionStart || 0);
+  const end = Number(menu?.dataset.controlEnd || control.selectionStart || 0);
+  const value = control.value || "";
+  const mention = `@${mentionLabel} `;
+  control.value = `${value.slice(0, start)}${mention}${value.slice(end)}`;
+  const cursor = start + mention.length;
+  control.focus();
+  control.setSelectionRange(cursor, cursor);
+  if (control.tagName === "TEXTAREA") autoResizeTextarea(control);
+  closeMentionMenu();
+}
+
+function closeMentionMenu() {
+  const menu = $("[data-feed-mention-menu]");
+  if (!menu) return;
+  menu.hidden = true;
+  menu.innerHTML = "";
+  delete menu._control;
+}
+
+function autoResizeTextarea(textarea) {
+  if (!textarea) return;
+  textarea.style.height = "auto";
+  textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 52), 260)}px`;
+}
+
 function renderPublicPost() {
   const host = $("[data-public-post]");
   if (!host) return;
@@ -2302,6 +2557,8 @@ function renderPublicPost() {
     ? renderFeedPost(state.publicPost, { publicOnly: true })
     : `<div class="empty-card"><strong>Post unavailable</strong><p>This shared post is private, deleted, or no longer available.</p><button class="btn btn-primary" type="button" data-route="login">Login</button></div>`;
   bindFeedPostActions(host, { publicOnly: true });
+  bindMentionInputs(host);
+  hydrateFeedMediaPresentation(host);
   $$("[data-route]", host).forEach((el) => el.addEventListener("click", () => route(el.dataset.route)));
 }
 
@@ -2320,7 +2577,7 @@ function renderFeedPost(post = {}, options = {}) {
         </div>
         ${canManage ? renderFeedPostMoreMenu() : ""}
       </div>
-      ${post.body ? `<p class="feed-body">${escapeHtml(post.body)}</p>` : ""}
+      ${renderFeedBody(post)}
       ${renderFeedMedia(post.media)}
       <div class="feed-stats">
         <span>${feedReactionTotal(post)} reaction${feedReactionTotal(post) === 1 ? "" : "s"}</span>
@@ -2342,7 +2599,7 @@ function renderFeedPost(post = {}, options = {}) {
       <div class="feed-comments">
         ${(post.comments || []).slice(-4).map((comment) => renderFeedComment(comment, post, { publicOnly })).join("")}
         <form class="feed-comment-form" data-feed-comment-form ${publicOnly ? "data-auth-required" : ""}>
-          <input class="form-control form-control-sm" name="body" maxlength="800" placeholder="Write a comment">
+          <input class="form-control form-control-sm" name="body" maxlength="800" placeholder="Write a comment" data-mention-enabled>
           <button class="btn btn-sm btn-primary" type="submit" aria-label="Send comment"><i class="fa-solid fa-paper-plane"></i></button>
         </form>
       </div>
@@ -2360,7 +2617,7 @@ function renderFeedComment(comment = {}, post = {}, options = {}) {
         <img src="${escapeAttribute(resolveMediaUrl(comment.authorPhotoUrl))}" alt="">
         <div>
           <strong>${escapeHtml(comment.authorName || "KAILA user")} ${comment.official ? `<span class="verified-badge"><i class="fa-solid fa-circle-check"></i></span>` : ""}</strong>
-          <p>${escapeHtml(comment.body)}</p>
+          <p>${renderFeedRichText(comment.body)}</p>
           <div class="feed-comment-actions">
             ${renderFeedCommentReactionButtons(comment, publicOnly)}
             ${isReply || comment.hidden || comment.deleted ? "" : `<button type="button" data-feed-reply-toggle title="Reply" aria-label="Reply" ${publicOnly ? "data-auth-required" : ""}><i class="fa-solid fa-reply"></i></button>`}
@@ -2369,7 +2626,7 @@ function renderFeedComment(comment = {}, post = {}, options = {}) {
         </div>
       </div>
       ${isReply ? "" : `<form class="feed-comment-form feed-reply-form" data-feed-reply-form hidden ${publicOnly ? "data-auth-required" : ""}>
-        <input class="form-control form-control-sm" name="body" maxlength="800" placeholder="Write a reply">
+        <input class="form-control form-control-sm" name="body" maxlength="800" placeholder="Write a reply" data-mention-enabled>
         <button class="btn btn-sm btn-primary" type="submit" aria-label="Send reply"><i class="fa-solid fa-paper-plane"></i></button>
       </form>`}
       ${(comment.replies || []).length ? `<div class="feed-replies">${comment.replies.map((reply) => renderFeedComment(reply, post, { publicOnly, isReply: true })).join("")}</div>` : ""}
@@ -2414,7 +2671,7 @@ function renderMediaFeedComment(comment = {}, options = {}) {
         <img src="${escapeAttribute(resolveMediaUrl(comment.authorPhotoUrl))}" alt="">
         <div>
           <strong>${escapeHtml(comment.authorName || "KAILA user")} ${comment.official ? `<span class="verified-badge"><i class="fa-solid fa-circle-check"></i></span>` : ""}</strong>
-          <p>${escapeHtml(comment.body || "")}</p>
+          <p>${renderFeedRichText(comment.body || "")}</p>
           <div class="feed-comment-actions">
             ${renderMediaFeedCommentReactionButtons(comment)}
             ${isReply || comment.hidden || comment.deleted ? "" : `<button type="button" data-media-feed-reply-toggle title="Reply" aria-label="Reply"><i class="fa-solid fa-reply"></i></button>`}
@@ -2423,7 +2680,7 @@ function renderMediaFeedComment(comment = {}, options = {}) {
         </div>
       </div>
       ${isReply ? "" : `<form class="feed-comment-form feed-reply-form" data-media-feed-reply-form hidden>
-        <input class="form-control form-control-sm" name="body" maxlength="800" placeholder="Write a reply">
+        <input class="form-control form-control-sm" name="body" maxlength="800" placeholder="Write a reply" data-mention-enabled>
         <button class="btn btn-sm btn-primary" type="submit" aria-label="Send reply"><i class="fa-solid fa-paper-plane"></i></button>
       </form>`}
       ${(comment.replies || []).length ? `<div class="feed-replies">${comment.replies.map((reply) => renderMediaFeedComment(reply, { isReply: true })).join("")}</div>` : ""}
@@ -2470,10 +2727,85 @@ function renderFeedMedia(media = []) {
         const extraOverlay = remaining && index === visibleMedia.length - 1 ? `<span class="feed-media-more">+${remaining}</span>` : "";
         return item.mimeType?.startsWith("video/")
           ? `<button class="feed-media-button" type="button" data-feed-media-open="${index}" aria-label="Open video ${index + 1}"><video class="feed-media" src="${escapeAttribute(url)}" muted playsinline preload="metadata"></video><span class="media-type">Video</span>${extraOverlay}</button>`
-          : `<button class="feed-media-button" type="button" data-feed-media-open="${index}" aria-label="Open photo ${index + 1}"><img class="feed-media" src="${escapeAttribute(url)}" alt="${escapeAttribute(item.originalName || "Feed media")}"><span class="media-type">Photo</span>${extraOverlay}</button>`;
+          : `<button class="feed-media-button has-media-backdrop" type="button" data-feed-media-open="${index}" aria-label="Open photo ${index + 1}"${mediaBackdropStyle(url)}><img class="feed-media" src="${escapeAttribute(url)}" alt="${escapeAttribute(item.originalName || "Feed media")}"><span class="media-type">Photo</span>${extraOverlay}</button>`;
       }).join("")}
     </div>
   `;
+}
+
+function mediaBackdropStyle(url = "") {
+  const declaration = mediaBackdropDeclaration(url);
+  return declaration ? ` style="${escapeAttribute(declaration)}"` : "";
+}
+
+function mediaBackdropDeclaration(url = "") {
+  const cleanUrl = String(url || "").replace(/["\\]/g, "\\$&");
+  return cleanUrl ? `--feed-media-backdrop: url("${cleanUrl}")` : "";
+}
+
+function hydrateFeedMediaPresentation(scope = document) {
+  $$("[data-feed-media-open] img.feed-media", scope).forEach((image) => {
+    const button = image.closest("[data-feed-media-open]");
+    if (!button || button.dataset.mediaAspectBound === "true") return;
+    button.dataset.mediaAspectBound = "true";
+    const apply = () => {
+      const width = image.naturalWidth || 0;
+      const height = image.naturalHeight || 0;
+      if (!width || !height) return;
+      const ratio = width / height;
+      button.style.setProperty("--feed-media-ratio", `${width} / ${height}`);
+      button.style.setProperty("--feed-media-height", `${(height / width) * 100}cqw`);
+      button.classList.toggle("is-portrait-media", ratio < 0.86);
+      button.classList.toggle("is-landscape-media", ratio >= 1.12);
+      button.classList.toggle("is-square-media", ratio >= 0.86 && ratio < 1.12);
+      updateImageMatchedBackdrop(button, image);
+    };
+    if (image.complete && image.naturalWidth) apply();
+    else image.addEventListener("load", apply, { once: true });
+    setTimeout(apply, 80);
+    window.addEventListener("resize", () => updateImageMatchedBackdrop(button, image), { passive: true });
+  });
+}
+
+function updateImageMatchedBackdrop(container, media) {
+  requestAnimationFrame(() => {
+    if (!container?.isConnected || !media?.isConnected) return;
+    const containerRect = container.getBoundingClientRect();
+    const intrinsicWidth = media.naturalWidth || media.videoWidth || 0;
+    const intrinsicHeight = media.naturalHeight || media.videoHeight || 0;
+    if (!intrinsicWidth || !intrinsicHeight || !containerRect.width || !containerRect.height) {
+      container.classList.add("has-media-backdrop");
+      return;
+    }
+    const containerRatio = containerRect.width / containerRect.height;
+    const mediaRatio = intrinsicWidth / intrinsicHeight;
+    let renderedWidth;
+    let renderedHeight;
+    if (mediaRatio > containerRatio) {
+      renderedWidth = containerRect.width;
+      renderedHeight = containerRect.width / mediaRatio;
+    } else {
+      renderedHeight = containerRect.height;
+      renderedWidth = containerRect.height * mediaRatio;
+    }
+    const hasEmptySpace = (containerRect.width - renderedWidth > 2) || (containerRect.height - renderedHeight > 2);
+    container.classList.toggle("has-media-backdrop", hasEmptySpace);
+  });
+}
+
+function hydrateMediaViewerBackdrop(frame) {
+  const media = frame?.querySelector("img, video");
+  if (!frame || !media) return;
+  const apply = () => updateImageMatchedBackdrop(frame, media);
+  if (media.tagName === "IMG") {
+    if (media.complete) apply();
+    else media.addEventListener("load", apply, { once: true });
+  } else if (media.readyState >= 1) {
+    apply();
+  } else {
+    media.addEventListener("loadedmetadata", apply, { once: true });
+  }
+  window.addEventListener("resize", apply, { passive: true });
 }
 
 function renderEditFeedExistingMedia(media = []) {
@@ -2528,6 +2860,16 @@ function bindFeedPostActions(scope, options = {}) {
   $$("[data-feed-comment-focus]", scope).forEach((button) => {
     if (options.publicOnly) return;
     button.addEventListener("click", () => button.closest("[data-feed-post]")?.querySelector("[data-feed-comment-form] input")?.focus());
+  });
+  $$("[data-feed-body-toggle]", scope).forEach((button) => {
+    button.addEventListener("click", () => {
+      const postId = button.closest("[data-feed-post]")?.dataset.feedPost;
+      if (!postId) return;
+      if (state.expandedFeedPosts.has(postId)) state.expandedFeedPosts.delete(postId);
+      else state.expandedFeedPosts.add(postId);
+      if (options.publicOnly) renderPublicPost();
+      else renderFeed();
+    });
   });
   $$("[data-feed-reply-toggle]", scope).forEach((button) => {
     if (options.publicOnly) return;
@@ -2741,7 +3083,10 @@ function resetFeedComposer(form = $("[data-feed-form]")) {
   if (!form) return;
   const body = form.elements.body;
   const preview = $("[data-feed-media-preview]", form);
-  if (body) body.value = "";
+  if (body) {
+    body.value = "";
+    autoResizeTextarea(body);
+  }
   clearMediaAttachmentInputs("[data-feed-media]", form);
   if (preview) preview.innerHTML = "";
   if (form.elements.postAsOfficial) form.elements.postAsOfficial.checked = false;
@@ -2875,7 +3220,7 @@ async function editFeedPost(postId) {
     html: `
       <div class="swal-form">
         <label class="wide">Post
-          <textarea class="form-control" data-edit-feed-body rows="5" maxlength="2000">${escapeHtml(post.body || "")}</textarea>
+          <textarea class="form-control" data-edit-feed-body data-mention-enabled rows="5" maxlength="2000">${escapeHtml(post.body || "")}</textarea>
         </label>
         <label>Visibility
           <select class="form-select" data-edit-feed-visibility>
@@ -2904,6 +3249,7 @@ async function editFeedPost(postId) {
     `,
     confirmButtonText: "Save",
     didOpen: (popup) => {
+      bindMentionInputs(popup);
       bindAttachmentPreview("[data-edit-feed-media]", "[data-edit-feed-media-preview]", MEDIA_ATTACHMENT_LIMIT, popup);
       $("[data-edit-feed-existing-media]", popup)?.addEventListener("click", (event) => {
         const button = event.target.closest("[data-edit-feed-remove-media]");
@@ -4223,7 +4569,7 @@ function mediaViewerFeedActions(post = {}, item = {}) {
           ${(media.comments || []).slice(-4).map((comment) => renderMediaFeedComment(comment)).join("") || `<span>No media comments yet</span>`}
         </div>
         <form class="feed-comment-form" data-media-feed-comment-form>
-          <input class="form-control form-control-sm" name="body" maxlength="800" placeholder="Comment on this media">
+          <input class="form-control form-control-sm" name="body" maxlength="800" placeholder="Comment on this media" data-mention-enabled>
           <button class="btn btn-sm btn-primary" type="submit" aria-label="Send media comment"><i class="fa-solid fa-paper-plane"></i></button>
         </form>
       </div>
@@ -4379,14 +4725,22 @@ async function openMediaGallery(items = [], startIndex = 0, title = "Media", opt
     const frame = popup.querySelector("[data-media-frame]");
     if (!frame) return;
     frame.classList.remove("is-ready");
+    frame.classList.toggle("has-media-backdrop", !currentItem().mimeType?.startsWith("video/"));
+    frame.setAttribute("style", currentItem().mimeType?.startsWith("video/") ? "" : mediaBackdropDeclaration(currentItem().url));
     requestAnimationFrame(() => {
       frame.innerHTML = renderItem();
-      requestAnimationFrame(() => frame.classList.add("is-ready"));
+      requestAnimationFrame(() => {
+        hydrateMediaViewerBackdrop(frame);
+        frame.classList.add("is-ready");
+      });
     });
   };
   const updateActions = (popup) => {
     const host = popup.querySelector("[data-media-actions-host]");
-    if (host) host.innerHTML = mediaViewerFeedActions(feedPost, currentItem());
+    if (host) {
+      host.innerHTML = mediaViewerFeedActions(feedPost, currentItem());
+      bindMentionInputs(host);
+    }
   };
 
   await window.Swal.fire({
@@ -4395,7 +4749,7 @@ async function openMediaGallery(items = [], startIndex = 0, title = "Media", opt
       <div class="media-viewer">
         <div class="media-viewer-stage" data-media-swipe>
           <button type="button" class="media-viewer-close" data-media-close aria-label="Close media"><i class="fa-solid fa-xmark"></i></button>
-          <div class="media-viewer-frame is-ready" data-media-frame>${renderItem()}</div>
+          <div class="media-viewer-frame is-ready${currentItem().mimeType?.startsWith("video/") ? "" : " has-media-backdrop"}" data-media-frame${currentItem().mimeType?.startsWith("video/") ? "" : mediaBackdropStyle(currentItem().url)}>${renderItem()}</div>
           ${feedPost?.id ? `<div data-media-actions-host>${mediaViewerFeedActions(feedPost, currentItem())}</div>` : ""}
         </div>
       </div>
@@ -4404,6 +4758,8 @@ async function openMediaGallery(items = [], startIndex = 0, title = "Media", opt
     showCancelButton: false,
     showConfirmButton: false,
     didOpen: (popup) => {
+      bindMentionInputs(popup);
+      hydrateMediaViewerBackdrop(popup.querySelector("[data-media-frame]"));
       const go = (direction) => {
         if (items.length <= 1) return;
         const nextIndex = direction === "next" ? index + 1 : index - 1;
@@ -4831,10 +5187,12 @@ function renderProviders() {
     return;
   }
   let providers = state.providers;
-  if (canActAsMarketplace()) providers = providers.filter((provider) => !isBlockedUser(provider.userId) && (provider.status || "Active") === "Active");
-  if (state.session?.role === "admin") providers = adminMetricProviders(providers);
+  if (canActAsMarketplace()) providers = providers.filter((provider) => !isDeletedProvider(provider) && !isBlockedUser(provider.userId) && (provider.status || "Active") === "Active");
+  const deletedProviders = providers.filter(isDeletedProvider);
+  const activeProviders = providers.filter((provider) => !isDeletedProvider(provider));
+  const visibleProviders = state.session?.role === "admin" ? adminMetricProviders(activeProviders) : activeProviders;
   const adminPanel = state.session?.role === "admin" ? adminProviderMetricPanel() : "";
-  if (!providers.length) {
+  if (!visibleProviders.length && !deletedProviders.length) {
     const setupAction = canActAsMarketplace()
       ? `<div class="card-actions mt-2"><button class="btn btn-primary" type="button" data-provider-profile><i class="fa-solid fa-briefcase"></i> Add a Provider Profile</button></div>`
       : "";
@@ -4842,7 +5200,33 @@ function renderProviders() {
     $$("[data-provider-profile]", host).forEach((button) => button.addEventListener("click", openProviderModal));
     return;
   }
-  host.innerHTML = `${adminPanel}${providers.map((provider) => `
+  const deletedSection = renderDeletedAccountSection(deletedProviders, renderProviderCard);
+  host.innerHTML = `${adminPanel}${visibleProviders.map(renderProviderCard).join("") || emptyCard("No active providers", "Deleted provider accounts are tucked below.")}${deletedSection}`;
+  bindProviderCardActions(host);
+  applyHomeSearch();
+}
+
+function isDeletedProvider(provider = {}) {
+  return Boolean(userProfile(provider.userId)?.deletedAt);
+}
+
+function renderDeletedAccountSection(items = [], renderCard) {
+  if (!items.length) return "";
+  return `
+    <details class="k-card collapsed-section">
+      <summary>
+        <span>Deleted accounts</span>
+        <small>${items.length}</small>
+      </summary>
+      <div class="stack mt-2">
+        ${items.map(renderCard).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function renderProviderCard(provider) {
+  return `
     <article class="k-card provider-card" data-provider-card="${escapeAttribute(provider.userId)}" data-home-search-item="provider" data-home-search-text="${escapeAttribute(homeSearchText([provider.displayName, provider.name, provider.specificServices, provider.skills, provider.category, provider.area, provider.trustLevel]))}">
       <div class="provider-card-head">
         <div>
@@ -4875,9 +5259,7 @@ function renderProviders() {
         ${renderAdminAccountActions(userProfile(provider.userId))}
       </div>
     </article>
-  `).join("")}`;
-  bindProviderCardActions(host);
-  applyHomeSearch();
+  `;
 }
 
 function renderProviderSummary(provider = {}) {
@@ -4930,7 +5312,7 @@ function setProviderCardExpanded(card, expanded) {
 }
 
 function adminMetricProviders(providers) {
-  if (state.adminMetric === "active-providers") return providers.filter((provider) => (provider.status || "Active") === "Active");
+  if (state.adminMetric === "active-providers") return providers.filter((provider) => !isDeletedProvider(provider) && (provider.status || "Active") === "Active");
   if (state.adminMetric === "response-rate") return [...providers].sort((left, right) => providerResponseStats(right).rate - providerResponseStats(left).rate);
   if (state.adminMetric === "ratings") return [...providers].sort((left, right) => Number(right.reputation?.average || 0) - Number(left.reputation?.average || 0));
   return providers;
@@ -5009,37 +5391,41 @@ function renderClients() {
   }
 
   const clients = state.users.filter((user) => user.role === "client");
-  if (!clients.length) {
+  const deletedClients = clients.filter((client) => client.deletedAt);
+  const activeClients = clients.filter((client) => !client.deletedAt);
+  if (!activeClients.length && !deletedClients.length) {
     host.innerHTML = emptyCard("No clients yet", "Registered clients will appear here.");
     return;
   }
 
-  host.innerHTML = clients.map((client) => {
-    const requests = state.requests.filter((request) => request.clientId === client.id);
-    const activeCount = requests.filter((request) => !["Cancelled", "Rated / Closed", "Resolved"].includes(request.status)).length;
-    return `
-      <article class="k-card">
-        <div class="d-flex justify-content-between gap-2">
-          <div>
-            ${renderIdentity(client.name, client.photoUrl, "Client reputation", client.reputation)}
-            <p>${escapeHtml(client.username || "No username")} ${client.contactNumber ? `- ${escapeHtml(client.contactNumber)}` : ""}</p>
-          </div>
-          <div class="d-grid gap-1 justify-items-end">
-            ${accountStatusBadge(client)}
-            <span class="badge text-bg-light align-self-start">${requests.length} request${requests.length === 1 ? "" : "s"}</span>
-          </div>
+  host.innerHTML = `${activeClients.map(renderClientCard).join("") || emptyCard("No active clients", "Deleted client accounts are tucked below.")}${renderDeletedAccountSection(deletedClients, renderClientCard)}`;
+}
+
+function renderClientCard(client) {
+  const requests = state.requests.filter((request) => request.clientId === client.id);
+  const activeCount = requests.filter((request) => !["Cancelled", "Rated / Closed", "Resolved"].includes(request.status)).length;
+  return `
+    <article class="k-card">
+      <div class="d-flex justify-content-between gap-2">
+        <div>
+          ${renderIdentity(client.name, client.photoUrl, "Client reputation", client.reputation)}
+          <p>${escapeHtml(client.username || "No username")} ${client.contactNumber ? `- ${escapeHtml(client.contactNumber)}` : ""}</p>
         </div>
-        <div class="meta">
-          <span>${escapeHtml(client.area || "No area")}</span>
-          ${client.preferredContactChannel ? `<span>${escapeHtml(client.preferredContactChannel)}</span>` : ""}
-          ${client.bestContactTime ? `<span>${escapeHtml(client.bestContactTime)}</span>` : ""}
-          <span>${activeCount} active</span>
+        <div class="d-grid gap-1 justify-items-end">
+          ${accountStatusBadge(client)}
+          <span class="badge text-bg-light align-self-start">${requests.length} request${requests.length === 1 ? "" : "s"}</span>
         </div>
-        ${directContactButtons(client.id)}
-        ${renderAdminAccountActions(client)}
-      </article>
-    `;
-  }).join("");
+      </div>
+      <div class="meta">
+        <span>${escapeHtml(client.area || "No area")}</span>
+        ${client.preferredContactChannel ? `<span>${escapeHtml(client.preferredContactChannel)}</span>` : ""}
+        ${client.bestContactTime ? `<span>${escapeHtml(client.bestContactTime)}</span>` : ""}
+        <span>${activeCount} active</span>
+      </div>
+      ${directContactButtons(client.id)}
+      ${renderAdminAccountActions(client)}
+    </article>
+  `;
 }
 
 function renderCustomerService() {

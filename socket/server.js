@@ -1691,7 +1691,14 @@ function clearJobRequestNotification(userIds, requestId) {
 }
 
 async function providerUserIdsForRequest(request = {}) {
-  const [rows] = await pool.query("SELECT user_id, category, area FROM providers WHERE status = 'Active'");
+  const [rows] = await pool.query(`
+    SELECT provider.user_id, provider.category, provider.area
+    FROM providers AS provider
+    JOIN users AS user ON user.id = provider.user_id
+    WHERE provider.status = 'Active'
+      AND user.deleted_at IS NULL
+      AND COALESCE(user.account_status, 'active') = 'active'
+  `);
   return rows.filter((row) => providerMatchesRequestRow(row, request)).map((row) => row.user_id);
 }
 
@@ -2199,6 +2206,74 @@ async function createFeedNotification({ recipientId, actor, postId, commentId = 
     },
   }).catch((error) => console.warn("Feed push failed:", error.message));
   return notification;
+}
+
+async function feedMentionedUserIds(body = "", actor = {}) {
+  const text = String(body || "");
+  if (!text.includes("@")) return [];
+  const [rows] = await pool.query(
+    `SELECT id, name, username, role
+     FROM users
+     WHERE deleted_at IS NULL
+       AND COALESCE(account_status, 'active') = 'active'`
+  );
+  const labels = [];
+  const addLabel = (label, userId) => {
+    const clean = String(label || "").trim().replace(/^@+/, "").replace(/\s+/g, " ");
+    if (!clean || !userId) return;
+    labels.push({ label: clean, userId });
+  };
+  const firstNames = new Map();
+  rows.forEach((row) => {
+    const displayName = displayNameForUser(row);
+    addLabel(row.username, row.id);
+    addLabel(row.name, row.id);
+    addLabel(displayName, row.id);
+    const firstName = String(displayName || row.name || "").trim().split(/\s+/)[0] || "";
+    if (firstName) {
+      if (!firstNames.has(firstName.toLowerCase())) firstNames.set(firstName.toLowerCase(), { label: firstName, ids: new Set() });
+      firstNames.get(firstName.toLowerCase()).ids.add(row.id);
+    }
+  });
+  firstNames.forEach(({ label, ids }) => {
+    if (ids.size === 1) addLabel(label, Array.from(ids)[0]);
+  });
+  labels.sort((a, b) => b.label.length - a.label.length);
+  const mentioned = new Set();
+  const lowerText = text.toLowerCase();
+  const pattern = /(^|[^\p{L}\p{N}_])@/gu;
+  for (const match of text.matchAll(pattern)) {
+    const atIndex = match.index + (match[1] || "").length;
+    const start = atIndex + 1;
+    for (const item of labels) {
+      const end = start + item.label.length;
+      if (lowerText.slice(start, end) !== item.label.toLowerCase()) continue;
+      const after = text[end] || " ";
+      if (/[\p{L}\p{N}_]/u.test(after)) continue;
+      if (item.userId !== actor.id) mentioned.add(item.userId);
+      break;
+    }
+  }
+  return Array.from(mentioned);
+}
+
+async function createFeedMentionNotifications({ body, actor, post, commentId = null, type = "feed_mention", excludeIds = [] } = {}) {
+  if (!post?.id || post.visibility !== "public") return [];
+  const excluded = new Set([actor?.id, ...excludeIds].filter(Boolean));
+  const recipientIds = (await feedMentionedUserIds(body, actor)).filter((id) => !excluded.has(id));
+  const title = type === "post_mention" ? "Mentioned in a feed post" : "Mentioned in a feed comment";
+  const message = type === "post_mention"
+    ? `${displayNameForUser(actor)} mentioned you in a feed post.`
+    : `${displayNameForUser(actor)} mentioned you in a feed comment.`;
+  return Promise.all(recipientIds.map((recipientId) => createFeedNotification({
+    recipientId,
+    actor,
+    postId: post.id,
+    commentId,
+    type,
+    title,
+    body: message,
+  })));
 }
 
 function mapFeedNotification(row = {}) {
@@ -4006,6 +4081,12 @@ app.post("/api/feed", requireUser, async (req, res) => {
     return res.status(400).json({ error: error.message || "Post could not be saved" });
   }
   await addActivity("Feed post created", `${postAsOfficial ? "KAILA" : displayNameForUser(req.user)} posted to the ${visibility} feed`);
+  await createFeedMentionNotifications({
+    body,
+    actor: req.user,
+    post: { id: post.id, visibility },
+    type: "post_mention",
+  });
   const posts = await feedPostsFor(req.user);
   broadcast("kaila.feed.updated", { postId: post.id, action: "created" });
   res.status(201).json({ post: posts.find((item) => item.id === post.id), posts });
@@ -4044,6 +4125,12 @@ app.put("/api/feed/:id", requireUser, async (req, res) => {
     "UPDATE feed_posts SET body = ?, visibility = ?, updated_at = ? WHERE id = ?",
     [body, visibility, nowMysql(), post.id]
   );
+  await createFeedMentionNotifications({
+    body,
+    actor: req.user,
+    post: { id: post.id, visibility },
+    type: "post_mention",
+  });
   await addActivity("Feed post edited", `${displayNameForUser(req.user)} edited a ${visibility} feed post`);
   const posts = await feedPostsFor(req.user);
   broadcast("kaila.feed.updated", { postId: post.id, action: "edited" });
@@ -4118,6 +4205,14 @@ app.post("/api/feed/:id/comments", requireUser, async (req, res) => {
     title: "New feed comment",
     body: `${displayNameForUser(req.user)} commented on your post.`,
   });
+  await createFeedMentionNotifications({
+    body,
+    actor: req.user,
+    post,
+    commentId: id,
+    type: "comment_mention",
+    excludeIds: [post.author_id],
+  });
   const postsForUser = await feedPostsFor(req.user);
   broadcast("kaila.feed.updated", { postId: req.params.id, action: "comment" });
   res.status(201).json({ post: postsForUser.find((item) => item.id === req.params.id), posts: postsForUser });
@@ -4147,6 +4242,14 @@ app.post("/api/feed/:id/comments/:commentId/replies", requireUser, async (req, r
     type: "comment_reply",
     title: "New feed reply",
     body: `${displayNameForUser(req.user)} replied to your comment.`,
+  });
+  await createFeedMentionNotifications({
+    body,
+    actor: req.user,
+    post,
+    commentId: id,
+    type: "comment_mention",
+    excludeIds: [parent.author_id],
   });
   const postsForUser = await feedPostsFor(req.user);
   broadcast("kaila.feed.updated", { postId: post.id, action: "reply" });
@@ -4255,6 +4358,13 @@ app.post("/api/feed/:id/media/:mediaId/comments", requireUser, async (req, res) 
     title: "New media comment",
     body: `${displayNameForUser(req.user)} commented on your media.`,
   });
+  await createFeedMentionNotifications({
+    body,
+    actor: req.user,
+    post,
+    type: "comment_mention",
+    excludeIds: [post.author_id],
+  });
   const postsForUser = await feedPostsFor(req.user);
   broadcast("kaila.feed.updated", { postId: post.id, mediaId: media.id, action: "media_comment" });
   res.status(201).json({ post: postsForUser.find((item) => item.id === post.id), posts: postsForUser });
@@ -4285,6 +4395,13 @@ app.post("/api/feed/:id/media/:mediaId/comments/:commentId/replies", requireUser
     type: "media_comment_reply",
     title: "New media reply",
     body: `${displayNameForUser(req.user)} replied to your media comment.`,
+  });
+  await createFeedMentionNotifications({
+    body,
+    actor: req.user,
+    post,
+    type: "comment_mention",
+    excludeIds: [parent.author_id],
   });
   const postsForUser = await feedPostsFor(req.user);
   broadcast("kaila.feed.updated", { postId: post.id, mediaId: media.id, action: "media_comment_reply" });
@@ -5388,7 +5505,7 @@ app.post("/api/analytics/insights", requireUser, async (req, res) => {
     .map(Number)
     .filter((score) => Number.isFinite(score) && score > 0);
   const metrics = {
-    activeProviders: providers.filter((provider) => (provider.status || "Active") === "Active").length,
+    activeProviders: providers.filter((provider) => !state.users.find((user) => user.id === provider.userId)?.deletedAt && (provider.status || "Active") === "Active").length,
     requests: requests.length,
     responseRate: requests.length ? Math.round((respondedRequests / requests.length) * 100) : 0,
     offersPerRequest: requests.length ? Math.round((requests.reduce((total, request) => total + (request.offers || []).length, 0) / requests.length) * 10) / 10 : 0,

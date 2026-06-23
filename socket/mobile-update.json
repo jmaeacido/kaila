@@ -1,8 +1,8 @@
 {
-    "latestVersionCode": 1782226001,
-    "latestVersionName": "1.0.1782226001",
+    "latestVersionCode": 1782226014,
+    "latestVersionName": "1.0.1782226014",
     "apkUrl": "https://drive.google.com/file/d/1FG0o6--zWQpmqYkqszSSDJVuivwzf89L/view?usp=drive_link",
-    "releaseNotes": "Allows admins to add provider profiles for existing client accounts.",
-    "generatedAt": "2026-06-23T11:02:30+08:00",
+    "releaseNotes": "Moves deleted client and provider accounts into their own collapsed sections and excludes them from active provider counts.",
+    "generatedAt": "2026-06-23T06:04:09Z",
     "source": "auto"
 }
