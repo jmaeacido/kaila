@@ -34,6 +34,7 @@ const socketServers = [io, proxiedIo];
 const PORT = Number(process.env.PORT || 6002);
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
 const CHANNEL = "kaila-mvp";
+const SUPER_ADMIN_USERNAME = "jmaeacido";
 const SOCKET_TOKEN = sanitizeToken(process.env.KAILA_SOCKET_BEARER_TOKEN || "kaila_mvp_secret_token");
 const MESSAGE_ENCRYPTION_KEY = parseMessageEncryptionKey(process.env.KAILA_MESSAGE_ENCRYPTION_KEY);
 const AUTO_CONFIRM_HOURS = Number(process.env.KAILA_AUTO_CONFIRM_HOURS || 48);
@@ -285,7 +286,7 @@ function analyticsPrompt(metrics, samples) {
     {
       role: "system",
       content: [
-        "You are KAILA's concise marketplace ops analyst for Gingoog City.",
+        "You are KAILA's concise marketplace ops analyst for active local service markets.",
         "Return only one JSON object with keys summary, risks, actions.",
         "summary must be one short sentence.",
         "risks and actions must be arrays of 1 to 3 short strings each.",
@@ -673,6 +674,7 @@ function privateUser(user) {
 
 function publicUserForViewer(user, viewer) {
   if (user?.id && viewer?.id && user.id === viewer.id) return privateUser(user);
+  if (viewer?.role === "admin") return privateUser(user);
   const safe = publicUser(user);
   if (!safe || viewer?.role !== "customer_service" || isStaffRole(safe.role)) return safe;
   return {
@@ -695,11 +697,15 @@ function staffDisplayName(role) {
   return "";
 }
 
+function isSuperAdminUser(user = {}) {
+  return user.role === "admin" && String(user.username || "").trim().toLowerCase() === SUPER_ADMIN_USERNAME;
+}
+
 function maskStaffUser(user = {}) {
   if (!isStaffRole(user.role)) return user;
   return {
     ...user,
-    name: staffDisplayName(user.role) || "KAILA Staff",
+    name: isSuperAdminUser(user) ? "KAILA Super Admin" : staffDisplayName(user.role) || "KAILA Staff",
     contactNumber: "",
     messengerLink: "",
     preferredContactChannel: "",
@@ -751,6 +757,9 @@ async function initializeDatabase() {
       auth_subject VARCHAR(255) NULL,
       social_photo_url VARCHAR(1024) NULL,
       data_privacy_consent TINYINT(1) NOT NULL DEFAULT 0,
+      account_status VARCHAR(24) NOT NULL DEFAULT 'active',
+      status_updated_at DATETIME NULL,
+      banned_at DATETIME NULL,
       deleted_at DATETIME NULL,
       created_at DATETIME NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -766,6 +775,9 @@ async function initializeDatabase() {
   await ensureColumn("users", "auth_subject", "VARCHAR(255) NULL");
   await ensureColumn("users", "social_photo_url", "VARCHAR(1024) NULL");
   await ensureColumn("users", "data_privacy_consent", "TINYINT(1) NOT NULL DEFAULT 0");
+  await ensureColumn("users", "account_status", "VARCHAR(24) NOT NULL DEFAULT 'active'");
+  await ensureColumn("users", "status_updated_at", "DATETIME NULL");
+  await ensureColumn("users", "banned_at", "DATETIME NULL");
   await ensureColumn("users", "deleted_at", "DATETIME NULL");
   await pool.query("ALTER TABLE users MODIFY COLUMN role ENUM('client','provider','admin','ops','customer_service') NOT NULL");
   await pool.query("ALTER TABLE users MODIFY COLUMN category VARCHAR(255) NULL");
@@ -774,6 +786,7 @@ async function initializeDatabase() {
   await ensureIndex("users", "users_auth_subject_unique", "auth_subject", true);
   await pool.query("ALTER TABLE users MODIFY COLUMN username VARCHAR(80) NOT NULL");
   await pool.query("ALTER TABLE users MODIFY COLUMN email VARCHAR(190) NULL");
+  await ensureSuperAdminAccount();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS providers (
       id VARCHAR(64) PRIMARY KEY,
@@ -1321,6 +1334,25 @@ async function initializeDatabase() {
       CONSTRAINT conversation_access_audit_viewer_fk FOREIGN KEY (viewer_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id VARCHAR(64) PRIMARY KEY,
+      actor_id VARCHAR(64) NULL,
+      actor_role VARCHAR(40) NULL,
+      actor_name VARCHAR(160) NULL,
+      action VARCHAR(80) NOT NULL,
+      target_type VARCHAR(80) NOT NULL,
+      target_id VARCHAR(64) NULL,
+      target_label VARCHAR(190) NULL,
+      metadata TEXT NULL,
+      ip_address VARCHAR(80) NULL,
+      user_agent VARCHAR(255) NULL,
+      created_at DATETIME NOT NULL,
+      INDEX audit_logs_created_idx (created_at),
+      INDEX audit_logs_actor_idx (actor_id, created_at),
+      INDEX audit_logs_target_idx (target_type, target_id, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
 }
 
 async function ensureColumn(table, column, definition) {
@@ -1568,12 +1600,17 @@ function mapUser(row, reputation = emptyReputation()) {
     dataPrivacyConsent: Boolean(row.data_privacy_consent),
     photoUrl: row.photo_file ? `/profile-media/${encodeURIComponent(row.id)}?v=${photoVersion}` : fallbackPhotoUrl,
     reputation: isStaffRole(row.role) ? emptyReputation() : reputation,
+    superAdmin: row.role === "admin" && String(row.username || "").trim().toLowerCase() === SUPER_ADMIN_USERNAME,
+    accountStatus: row.account_status || "active",
+    statusUpdatedAt: row.status_updated_at || null,
+    bannedAt: row.banned_at || null,
     deletedAt: row.deleted_at || null,
     createdAt: row.created_at,
   };
 }
 
 function displayNameForUser(user = {}) {
+  if (isSuperAdminUser(user)) return "KAILA Super Admin";
   if (isStaffRole(user.role)) return staffDisplayName(user.role);
   return user.name || "KAILA user";
 }
@@ -2384,6 +2421,29 @@ function mapActivity(row) {
   };
 }
 
+function mapAuditLog(row) {
+  let metadata = {};
+  try {
+    metadata = typeof row.metadata === "string" ? JSON.parse(row.metadata) : row.metadata || {};
+  } catch {
+    metadata = {};
+  }
+  return {
+    id: row.id,
+    actorId: row.actor_id || "",
+    actorRole: row.actor_role || "",
+    actorName: row.actor_name || "",
+    action: row.action,
+    targetType: row.target_type,
+    targetId: row.target_id || "",
+    targetLabel: row.target_label || "",
+    metadata,
+    ipAddress: row.ip_address || "",
+    userAgent: row.user_agent || "",
+    createdAt: row.created_at,
+  };
+}
+
 function mapValidationEntry(row) {
   let responses = {};
   try {
@@ -2930,6 +2990,9 @@ async function getState(viewer = null) {
   const [passRows] = await pool.query("SELECT * FROM request_passes ORDER BY created_at ASC");
   const [navigationRows] = await pool.query("SELECT * FROM job_navigation_states ORDER BY updated_at DESC");
   const [activityRows] = await pool.query("SELECT * FROM activities ORDER BY created_at DESC LIMIT 80");
+  const [auditRows] = viewer?.role === "admin"
+    ? await pool.query("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 200")
+    : [[]];
   const [validationRows] = ["admin", "ops"].includes(viewer?.role)
     ? await pool.query("SELECT entry.*, operator.role AS operator_role FROM validation_entries AS entry LEFT JOIN users AS operator ON operator.id = entry.operator_id ORDER BY entry.created_at DESC LIMIT 200")
     : [[]];
@@ -3031,9 +3094,10 @@ async function getState(viewer = null) {
     users: Array.from(profiles.values()).map((user) => publicUserForViewer(user, viewer)),
     providers: providerRows.map((row) => mapProvider(row, reputations.get(row.user_id) || emptyReputation(), profiles.get(row.user_id)?.photoUrl || "")),
     requests: visibleRequestRows.map((row) => mapRequest(row, offersByRequest.get(row.id) || [], passesByRequest.get(row.id) || [], attachmentsByRequest.get(row.id) || [], reputations, profiles, navigationByRequest)),
-    activities: activityRows.map(mapActivity),
-    blocks: blockRows,
-    reports: reportRows.map(mapReport),
+      activities: activityRows.map(mapActivity),
+      auditLogs: auditRows.map(mapAuditLog),
+      blocks: blockRows,
+      reports: reportRows.map(mapReport),
     ...(["admin", "ops"].includes(viewer?.role) ? { validationEntries: validationRows.map(mapValidationEntry) } : {}),
   };
 }
@@ -3364,8 +3428,29 @@ async function autoConfirmExpiredJobs() {
 }
 
 async function getUser(id) {
-  const [rows] = await pool.query("SELECT * FROM users WHERE id = ? AND deleted_at IS NULL LIMIT 1", [id]);
+  const [rows] = await pool.query("SELECT * FROM users WHERE id = ? AND deleted_at IS NULL AND COALESCE(account_status, 'active') = 'active' LIMIT 1", [id]);
   return mapUser(rows[0]);
+}
+
+async function loadUserForAdminAction(userId) {
+  const [rows] = await pool.query("SELECT * FROM users WHERE id = ? LIMIT 1", [userId]);
+  return rows[0] || null;
+}
+
+async function canDisableAdminAccount(userId) {
+  const [[row]] = await pool.query(
+    "SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND id <> ? AND deleted_at IS NULL AND COALESCE(account_status, 'active') = 'active'",
+    [userId]
+  );
+  return Number(row?.count || 0) > 0;
+}
+
+async function ensureSuperAdminAccount() {
+  const timestamp = nowMysql();
+  await pool.query(
+    "UPDATE users SET role = 'admin', account_status = 'active', status_updated_at = COALESCE(status_updated_at, ?), banned_at = NULL, deleted_at = NULL WHERE username = ?",
+    [timestamp, SUPER_ADMIN_USERNAME]
+  );
 }
 
 async function isBlockedBetween(leftUserId, rightUserId) {
@@ -3407,6 +3492,31 @@ async function addActivity(title, detail) {
   return activity;
 }
 
+async function recordAuditLog(req, { action, targetType = "account", targetId = "", targetLabel = "", metadata = {} } = {}) {
+  if (!action) return null;
+  const entry = {
+    id: createId(),
+    actorId: req?.user?.id || null,
+    actorRole: req?.user?.role || null,
+    actorName: req?.user ? displayNameForUser(req.user) : null,
+    action,
+    targetType,
+    targetId: targetId || null,
+    targetLabel: targetLabel || null,
+    metadata: JSON.stringify(metadata || {}),
+    ipAddress: String(req?.headers?.["x-forwarded-for"] || req?.socket?.remoteAddress || "").split(",")[0].trim().slice(0, 80) || null,
+    userAgent: String(req?.headers?.["user-agent"] || "").slice(0, 255) || null,
+    createdAt: nowMysql(),
+  };
+  await pool.query(
+    `INSERT INTO audit_logs
+      (id, actor_id, actor_role, actor_name, action, target_type, target_id, target_label, metadata, ip_address, user_agent, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [entry.id, entry.actorId, entry.actorRole, entry.actorName, entry.action, entry.targetType, entry.targetId, entry.targetLabel, entry.metadata, entry.ipAddress, entry.userAgent, entry.createdAt]
+  );
+  return entry;
+}
+
 async function createAccount(input = {}, allowedRoles = ["client", "provider"]) {
   const name = String(input.name || "").trim();
   const cleanUsername = String(input.username || "").trim().toLowerCase();
@@ -3418,7 +3528,9 @@ async function createAccount(input = {}, allowedRoles = ["client", "provider"]) 
   const cleanEmail = String(input.email || "").trim().toLowerCase() || null;
   const cleanAuthProvider = String(input.authProvider || "").trim().toLowerCase();
   const cleanAuthSubject = String(input.authSubject || "").trim();
-  const area = role === "ops"
+  const area = role === "admin"
+    ? (String(input.area || "").trim() || "KAILA Administration")
+    : role === "ops"
     ? (String(input.area || "").trim() || "Operations")
     : role === "customer_service"
       ? (String(input.area || "").trim() || "Customer Service")
@@ -3546,6 +3658,209 @@ async function createAccount(input = {}, allowedRoles = ["client", "provider"]) 
   }
 
   return user;
+}
+
+async function updateAccount(target = {}, input = {}, allowedRoles = ["client", "provider"]) {
+  const name = String(input.name || "").trim();
+  const cleanUsername = String(input.username || "").trim().toLowerCase();
+  const password = String(input.password || "");
+  const role = normalizeAccountRole(input.role || target.role);
+  const cleanCategory = normalizeCategories(input.category);
+  const cleanEmail = String(input.email || "").trim().toLowerCase() || null;
+  const area = role === "admin"
+    ? (String(input.area || "").trim() || "KAILA Administration")
+    : role === "ops"
+    ? (String(input.area || "").trim() || "Operations")
+    : role === "customer_service"
+      ? (String(input.area || "").trim() || "Customer Service")
+      : String(input.area || "").trim();
+  const contactNumber = String(input.contactNumber || "").trim();
+  const messengerLink = String(input.messengerLink || "").trim();
+  const preferredContactChannel = String(input.preferredContactChannel || "").trim();
+  const bestContactTime = String(input.bestContactTime || "").trim();
+  const dataPrivacyConsent = boolField(input.dataPrivacyConsent);
+  const providerDetails = {
+    displayName: String(input.displayName || name).trim(),
+    providerType: String(input.providerType || "").trim(),
+    specificServices: String(input.specificServices || "").trim(),
+    yearsExperience: String(input.yearsExperience || "").trim(),
+    coverageArea: normalizeCoverageAreaForArea(input.coverageArea, area),
+    emergencyAvailability: String(input.emergencyAvailability || "").trim(),
+    availableDays: String(input.availableDays || "").trim(),
+    availableTime: String(input.availableTime || "").trim(),
+    travelLimits: String(input.travelLimits || "").trim(),
+    minimumFee: String(input.minimumFee || "").trim(),
+    priceRange: String(input.priceRange || "").trim(),
+    workSamples: String(input.workSamples || "").trim(),
+    certificateProof: String(input.certificateProof || "").trim(),
+    validIdConsent: boolField(input.validIdConsent),
+    consentRequests: boolField(input.consentRequests),
+    consentRatings: boolField(input.consentRatings),
+    rulesAgreement: boolField(input.rulesAgreement),
+  };
+
+  if (!name || !cleanUsername || !role || !area || !contactNumber || !preferredContactChannel || !dataPrivacyConsent) {
+    const error = new Error("Missing required fields");
+    error.status = 400;
+    throw error;
+  }
+  if (!/^[a-z0-9._-]{3,40}$/.test(cleanUsername)) {
+    const error = new Error("Username must be 3 to 40 characters using letters, numbers, dots, underscores, or hyphens");
+    error.status = 400;
+    throw error;
+  }
+  if (password && password.length < 6) {
+    const error = new Error("Password must be at least 6 characters");
+    error.status = 400;
+    throw error;
+  }
+  if (!allowedRoles.includes(role)) {
+    const error = new Error("Invalid role");
+    error.status = 400;
+    throw error;
+  }
+  if (role === "provider" && !cleanCategory) {
+    const error = new Error("Provider service category is required");
+    error.status = 400;
+    throw error;
+  }
+  if (role === "provider" && (!providerDetails.specificServices || !providerDetails.coverageArea || !providerDetails.consentRequests || !providerDetails.consentRatings || !providerDetails.rulesAgreement)) {
+    const error = new Error("Provider services, coverage area, request consent, rating consent, and rules agreement are required");
+    error.status = 400;
+    throw error;
+  }
+
+  const [existing] = await pool.query("SELECT id FROM users WHERE username = ? AND id <> ? LIMIT 1", [cleanUsername, target.id]);
+  if (existing.length) {
+    const error = new Error("Username already registered");
+    error.status = 409;
+    throw error;
+  }
+  if (cleanEmail) {
+    const [emailRows] = await pool.query("SELECT id FROM users WHERE email = ? AND id <> ? AND deleted_at IS NULL LIMIT 1", [cleanEmail, target.id]);
+    if (emailRows.length) {
+      const error = new Error("Email already registered");
+      error.status = 409;
+      throw error;
+    }
+  }
+
+  const timestamp = nowMysql();
+  const passwordSql = password ? ", password_hash = ?" : "";
+  const params = [
+    name, cleanUsername, cleanEmail, role, area, cleanCategory, contactNumber, messengerLink,
+    preferredContactChannel, bestContactTime, dataPrivacyConsent ? 1 : 0,
+  ];
+  if (password) params.push(passwordHash(password));
+  params.push(timestamp, target.id);
+  await pool.query(
+    `UPDATE users
+     SET name = ?, username = ?, email = ?, role = ?, area = ?, category = ?, contact_number = ?,
+       messenger_link = ?, preferred_contact_channel = ?, best_contact_time = ?, data_privacy_consent = ?
+       ${passwordSql}, status_updated_at = ?
+     WHERE id = ?`,
+    params
+  );
+
+  if (role === "provider") {
+    const [providerRows] = await pool.query("SELECT id FROM providers WHERE user_id = ? LIMIT 1", [target.id]);
+    if (providerRows.length) {
+      await pool.query(
+        `UPDATE providers
+         SET name = ?, category = ?, area = ?, availability = ?, skills = ?, display_name = ?, provider_type = ?,
+           specific_services = ?, years_experience = ?, coverage_area = ?, emergency_availability = ?, available_days = ?,
+           available_time = ?, travel_limits = ?, minimum_fee = ?, price_range = ?, work_samples = ?, certificate_proof = ?,
+           valid_id_consent = ?, consent_requests = ?, consent_ratings = ?, rules_agreement = ?, updated_at = ?
+         WHERE user_id = ?`,
+        [
+          providerDetails.displayName || name, cleanCategory, area, providerDetails.availableDays || "Available",
+          providerDetails.specificServices, providerDetails.displayName || name, providerDetails.providerType,
+          providerDetails.specificServices, providerDetails.yearsExperience, providerDetails.coverageArea,
+          providerDetails.emergencyAvailability, providerDetails.availableDays, providerDetails.availableTime,
+          providerDetails.travelLimits, providerDetails.minimumFee, providerDetails.priceRange, providerDetails.workSamples,
+          providerDetails.certificateProof, providerDetails.validIdConsent ? 1 : 0, providerDetails.consentRequests ? 1 : 0,
+          providerDetails.consentRatings ? 1 : 0, providerDetails.rulesAgreement ? 1 : 0, timestamp, target.id,
+        ]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO providers (
+          id, user_id, name, category, area, availability, skills, display_name, provider_type,
+          specific_services, years_experience, coverage_area, emergency_availability, available_days,
+          available_time, travel_limits, minimum_fee, price_range, work_samples, certificate_proof,
+          valid_id_consent, consent_requests, consent_ratings, rules_agreement, trust_level, status,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          createId(), target.id, providerDetails.displayName || name, cleanCategory, area, providerDetails.availableDays || "Available",
+          providerDetails.specificServices, providerDetails.displayName || name, providerDetails.providerType,
+          providerDetails.specificServices, providerDetails.yearsExperience, providerDetails.coverageArea,
+          providerDetails.emergencyAvailability, providerDetails.availableDays, providerDetails.availableTime,
+          providerDetails.travelLimits, providerDetails.minimumFee, providerDetails.priceRange, providerDetails.workSamples,
+          providerDetails.certificateProof, providerDetails.validIdConsent ? 1 : 0, providerDetails.consentRequests ? 1 : 0,
+          providerDetails.consentRatings ? 1 : 0, providerDetails.rulesAgreement ? 1 : 0, "Listed", "Active", timestamp, timestamp,
+        ]
+      );
+    }
+  } else if (target.role === "provider") {
+    await pool.query("UPDATE providers SET status = 'Inactive', updated_at = ? WHERE user_id = ?", [timestamp, target.id]);
+  }
+
+  const [updatedRows] = await pool.query("SELECT * FROM users WHERE id = ? LIMIT 1", [target.id]);
+  return mapUser(updatedRows[0]);
+}
+
+async function saveProviderProfileForUser(user = {}, input = {}) {
+  const {
+    category, area, availability, skills, displayName, providerType, specificServices, yearsExperience, coverageArea,
+    emergencyAvailability, availableDays, availableTime, travelLimits, minimumFee, priceRange, workSamples,
+    certificateProof, validIdConsent, consentRequests, consentRatings, rulesAgreement,
+  } = input || {};
+  const cleanCategory = normalizeCategories(category);
+  const cleanArea = String(area || "").trim();
+  const cleanCoverageArea = normalizeCoverageAreaForArea(coverageArea, cleanArea);
+  if (!cleanCategory || !cleanArea) {
+    const error = new Error("At least one category and area are required");
+    error.status = 400;
+    throw error;
+  }
+  if (!String(specificServices || skills || "").trim() || !cleanCoverageArea || !boolField(consentRequests) || !boolField(consentRatings) || !boolField(rulesAgreement)) {
+    const error = new Error("Specific services, coverage area, request consent, rating consent, and rules agreement are required");
+    error.status = 400;
+    throw error;
+  }
+  const timestamp = nowMysql();
+  const providerId = createId();
+
+  await pool.query(
+    `INSERT INTO providers (
+      id, user_id, name, category, area, availability, skills, display_name, provider_type,
+      specific_services, years_experience, coverage_area, emergency_availability, available_days,
+      available_time, travel_limits, minimum_fee, price_range, work_samples, certificate_proof,
+      valid_id_consent, consent_requests, consent_ratings, rules_agreement, trust_level, status,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      name = VALUES(name), category = VALUES(category), area = VALUES(area), availability = VALUES(availability), skills = VALUES(skills),
+      display_name = VALUES(display_name), provider_type = VALUES(provider_type), specific_services = VALUES(specific_services),
+      years_experience = VALUES(years_experience), coverage_area = VALUES(coverage_area), emergency_availability = VALUES(emergency_availability),
+      available_days = VALUES(available_days), available_time = VALUES(available_time), travel_limits = VALUES(travel_limits),
+      minimum_fee = VALUES(minimum_fee), price_range = VALUES(price_range), work_samples = VALUES(work_samples),
+      certificate_proof = VALUES(certificate_proof), valid_id_consent = VALUES(valid_id_consent), consent_requests = VALUES(consent_requests),
+      consent_ratings = VALUES(consent_ratings), rules_agreement = VALUES(rules_agreement), status = 'Active', updated_at = VALUES(updated_at)`,
+    [
+      providerId, user.id, String(displayName || user.name).trim(), cleanCategory, cleanArea, availability || availableDays || "Available",
+      String(skills || specificServices || "").trim(), String(displayName || user.name).trim(), String(providerType || "").trim(),
+      String(specificServices || skills || "").trim(), String(yearsExperience || "").trim(), cleanCoverageArea,
+      String(emergencyAvailability || "").trim(), String(availableDays || "").trim(), String(availableTime || "").trim(),
+      String(travelLimits || "").trim(), String(minimumFee || "").trim(), String(priceRange || "").trim(),
+      String(workSamples || "").trim(), String(certificateProof || "").trim(), boolField(validIdConsent) ? 1 : 0,
+      boolField(consentRequests) ? 1 : 0, boolField(consentRatings) ? 1 : 0, boolField(rulesAgreement) ? 1 : 0,
+      "Listed", "Active", timestamp, timestamp,
+    ]
+  );
+  const [rows] = await pool.query("SELECT * FROM providers WHERE user_id = ? LIMIT 1", [user.id]);
+  return mapProvider(rows[0]);
 }
 
 async function createSocialAccount(profile = {}, subject = "", input = {}) {
@@ -3702,10 +4017,28 @@ app.put("/api/feed/:id", requireUser, async (req, res) => {
   if (!canManageFeedPostAction(post, req.user)) return res.status(403).json({ error: "Only the post owner can edit this post" });
   const body = String(req.body?.body || "").trim();
   const visibility = String(req.body?.visibility || post.visibility || "public").toLowerCase() === "private" ? "private" : "public";
+  const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+  const [existingMediaRows] = await pool.query("SELECT id, file_name FROM feed_post_media WHERE post_id = ?", [post.id]);
+  const existingMediaIds = new Set(existingMediaRows.map((row) => row.id));
+  const requestedKeepIds = Array.isArray(req.body?.keepMediaIds)
+    ? new Set(req.body.keepMediaIds.map((id) => String(id)).filter((id) => existingMediaIds.has(id)))
+    : existingMediaIds;
+  const finalMediaCount = requestedKeepIds.size + attachments.length;
   if (body.length > 2000) return res.status(400).json({ error: "Post text must be 2,000 characters or less" });
-  if (!body) {
-    const [[mediaCount]] = await pool.query("SELECT COUNT(*) AS count FROM feed_post_media WHERE post_id = ?", [post.id]);
-    if (!Number(mediaCount?.count || 0)) return res.status(400).json({ error: "Write something or keep a photo/video on the post" });
+  if (finalMediaCount > MAX_ATTACHMENTS_PER_STAGE) return res.status(400).json({ error: `Keep or upload up to ${MAX_ATTACHMENTS_PER_STAGE} media files` });
+  if (!body && !finalMediaCount) return res.status(400).json({ error: "Write something or keep a photo/video on the post" });
+  try {
+    await saveFeedMedia(post.id, attachments);
+  } catch (error) {
+    return res.status(400).json({ error: error.message || "Post media could not be saved" });
+  }
+  const mediaRowsToDelete = existingMediaRows.filter((row) => !requestedKeepIds.has(row.id));
+  if (mediaRowsToDelete.length) {
+    await pool.query(
+      `DELETE FROM feed_post_media WHERE post_id = ? AND id IN (${mediaRowsToDelete.map(() => "?").join(",")})`,
+      [post.id, ...mediaRowsToDelete.map((row) => row.id)]
+    );
+    await Promise.all(mediaRowsToDelete.map((row) => fs.promises.unlink(path.join(UPLOAD_DIR, row.file_name)).catch(() => {})));
   }
   await pool.query(
     "UPDATE feed_posts SET body = ?, visibility = ?, updated_at = ? WHERE id = ?",
@@ -4190,14 +4523,14 @@ app.post("/api/auth/social", async (req, res) => {
   try {
     const profile = await verifySocialCredential(req.body?.provider, req.body?.token || req.body?.credential || req.body?.accessToken);
     const subject = authSubject(profile.provider, profile.subject);
-    const [authRows] = await pool.query("SELECT * FROM users WHERE auth_subject = ? AND deleted_at IS NULL LIMIT 1", [subject]);
+    const [authRows] = await pool.query("SELECT * FROM users WHERE auth_subject = ? AND deleted_at IS NULL AND COALESCE(account_status, 'active') = 'active' LIMIT 1", [subject]);
     let user = mapUser(authRows[0]);
     if (user) {
       await fillMissingSocialPhoto(user.id, profile);
       user = await getUser(user.id);
     }
     if (!user && profile.email) {
-      const [emailRows] = await pool.query("SELECT * FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1", [profile.email]);
+      const [emailRows] = await pool.query("SELECT * FROM users WHERE email = ? AND deleted_at IS NULL AND COALESCE(account_status, 'active') = 'active' LIMIT 1", [profile.email]);
       user = mapUser(emailRows[0]);
       if (user && !user.authSubject) {
         await pool.query("UPDATE users SET auth_provider = ?, auth_subject = ? WHERE id = ?", [profile.provider, subject, user.id]);
@@ -4223,7 +4556,7 @@ app.post("/api/auth/social", async (req, res) => {
 app.post("/api/login", async (req, res) => {
   const username = String(req.body?.username || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
-  const [rows] = await pool.query("SELECT * FROM users WHERE username = ? AND deleted_at IS NULL LIMIT 1", [username]);
+  const [rows] = await pool.query("SELECT * FROM users WHERE username = ? AND deleted_at IS NULL AND COALESCE(account_status, 'active') = 'active' LIMIT 1", [username]);
   const user = mapUser(rows[0]);
   if (!user || !verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Invalid username or password" });
   res.json({ user: privateUser(user), state: await getStateFor(user) });
@@ -4307,9 +4640,10 @@ app.delete("/api/account", requireUser, async (req, res) => {
     `UPDATE users
      SET name = ?, username = ?, email = NULL, password_hash = ?, area = 'Deleted account', category = NULL,
        contact_number = NULL, messenger_link = NULL, preferred_contact_channel = NULL, best_contact_time = NULL,
-       data_privacy_consent = 0, photo_file = NULL, photo_mime_type = NULL, social_photo_url = NULL, deleted_at = ?
+       data_privacy_consent = 0, photo_file = NULL, photo_mime_type = NULL, social_photo_url = NULL,
+       account_status = 'deleted', status_updated_at = ?, deleted_at = ?
      WHERE id = ?`,
-    [deletedName, `deleted_${req.user.id.slice(0, 16)}`, passwordHash(crypto.randomBytes(24).toString("hex")), timestamp, req.user.id]
+    [deletedName, `deleted_${req.user.id.slice(0, 16)}`, passwordHash(crypto.randomBytes(24).toString("hex")), timestamp, timestamp, req.user.id]
   );
   await addActivity("Account deleted", `${deletedName} removed their account`);
   broadcast("kaila.state.updated", await getState());
@@ -4402,50 +4736,12 @@ app.delete("/api/blocks/:userId", requireUser, async (req, res) => {
 
 app.post("/api/providers", requireUser, async (req, res) => {
   if (!canUseMarketplaceRole(req.user)) return res.status(403).json({ error: "Only marketplace accounts can save provider profiles" });
-  const {
-    category, area, availability, skills, displayName, providerType, specificServices, yearsExperience, coverageArea,
-    emergencyAvailability, availableDays, availableTime, travelLimits, minimumFee, priceRange, workSamples,
-    certificateProof, validIdConsent, consentRequests, consentRatings, rulesAgreement,
-  } = req.body || {};
-  const cleanCategory = normalizeCategories(category);
-  const cleanArea = String(area || "").trim();
-  const cleanCoverageArea = normalizeCoverageAreaForArea(coverageArea, cleanArea);
-  if (!cleanCategory || !cleanArea) return res.status(400).json({ error: "At least one category and area are required" });
-  if (!String(specificServices || skills || "").trim() || !cleanCoverageArea || !boolField(consentRequests) || !boolField(consentRatings) || !boolField(rulesAgreement)) {
-    return res.status(400).json({ error: "Specific services, coverage area, request consent, rating consent, and rules agreement are required" });
+  let provider;
+  try {
+    provider = await saveProviderProfileForUser(req.user, req.body);
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message || "Provider profile failed" });
   }
-  const timestamp = nowMysql();
-  const providerId = createId();
-
-  await pool.query(
-    `INSERT INTO providers (
-      id, user_id, name, category, area, availability, skills, display_name, provider_type,
-      specific_services, years_experience, coverage_area, emergency_availability, available_days,
-      available_time, travel_limits, minimum_fee, price_range, work_samples, certificate_proof,
-      valid_id_consent, consent_requests, consent_ratings, rules_agreement, trust_level, status,
-      created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE
-      name = VALUES(name), category = VALUES(category), area = VALUES(area), availability = VALUES(availability), skills = VALUES(skills),
-      display_name = VALUES(display_name), provider_type = VALUES(provider_type), specific_services = VALUES(specific_services),
-      years_experience = VALUES(years_experience), coverage_area = VALUES(coverage_area), emergency_availability = VALUES(emergency_availability),
-      available_days = VALUES(available_days), available_time = VALUES(available_time), travel_limits = VALUES(travel_limits),
-      minimum_fee = VALUES(minimum_fee), price_range = VALUES(price_range), work_samples = VALUES(work_samples),
-      certificate_proof = VALUES(certificate_proof), valid_id_consent = VALUES(valid_id_consent), consent_requests = VALUES(consent_requests),
-      consent_ratings = VALUES(consent_ratings), rules_agreement = VALUES(rules_agreement), updated_at = VALUES(updated_at)`,
-    [
-      providerId, req.user.id, String(displayName || req.user.name).trim(), cleanCategory, cleanArea, availability || availableDays || "Available",
-      String(skills || specificServices || "").trim(), String(displayName || req.user.name).trim(), String(providerType || "").trim(),
-      String(specificServices || skills || "").trim(), String(yearsExperience || "").trim(), cleanCoverageArea,
-      String(emergencyAvailability || "").trim(), String(availableDays || "").trim(), String(availableTime || "").trim(),
-      String(travelLimits || "").trim(), String(minimumFee || "").trim(), String(priceRange || "").trim(),
-      String(workSamples || "").trim(), String(certificateProof || "").trim(), boolField(validIdConsent) ? 1 : 0,
-      boolField(consentRequests) ? 1 : 0, boolField(consentRatings) ? 1 : 0, boolField(rulesAgreement) ? 1 : 0,
-      "Listed", "Active", timestamp, timestamp,
-    ]
-  );
-  const [rows] = await pool.query("SELECT * FROM providers WHERE user_id = ? LIMIT 1", [req.user.id]);
-  const provider = mapProvider(rows[0]);
   await addActivity("Provider saved", `${provider.name} - ${provider.category}`);
   broadcast("kaila.provider.saved", { provider });
   res.json({ provider, state: await getStateFor(req.user) });
@@ -5201,22 +5497,145 @@ app.delete("/api/validation/:id", requireUser, async (req, res) => {
 
 app.post("/api/admin/users", requireUser, async (req, res) => {
   if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+  if (normalizeAccountRole(req.body?.role) === "admin" && !isSuperAdminUser(req.user)) {
+    return res.status(403).json({ error: "Only the super admin can create admin accounts" });
+  }
   let user;
   try {
-    user = await createAccount(req.body, ["client", "provider", "ops", "customer_service"]);
+    user = await createAccount(req.body, ["client", "provider", "admin", "ops", "customer_service"]);
   } catch (error) {
     return res.status(error.status || 400).json({ error: error.message || "Account creation failed" });
   }
+  await recordAuditLog(req, {
+    action: "account.create",
+    targetId: user.id,
+    targetLabel: `${user.username || user.name} (${user.role})`,
+    metadata: { role: user.role, username: user.username },
+  });
   await addActivity("Account created", `${displayNameForUser(req.user)} created ${displayNameForUser(user)} as ${user.role}`);
   const state = await getStateFor(req.user);
   broadcast("kaila.state.updated", state);
   res.status(201).json({ user: publicUser(user), state });
 });
 
+app.put("/api/admin/users/:id", requireUser, async (req, res) => {
+  if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+  const target = await loadUserForAdminAction(req.params.id);
+  if (!target || target.deleted_at) return res.status(404).json({ error: "Account not found" });
+  if (isSuperAdminUser(target)) return res.status(403).json({ error: "The super admin account cannot be changed from here" });
+  if (target.id === req.user.id) return res.status(400).json({ error: "Use Settings to update your own account" });
+  const nextRole = normalizeAccountRole(req.body?.role || target.role);
+  if ((target.role === "admin" || nextRole === "admin") && !isSuperAdminUser(req.user)) {
+    return res.status(403).json({ error: "Only the super admin can edit admin accounts" });
+  }
+  let user;
+  try {
+    user = await updateAccount(target, req.body, ["client", "provider", ...(isSuperAdminUser(req.user) ? ["admin"] : []), "ops", "customer_service"]);
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message || "Account update failed" });
+  }
+  await recordAuditLog(req, {
+    action: "account.edit",
+    targetId: user.id,
+    targetLabel: `${user.username || user.name} (${user.role})`,
+    metadata: {
+      previousRole: target.role,
+      role: user.role,
+      previousUsername: target.username,
+      username: user.username,
+      passwordChanged: Boolean(req.body?.password),
+    },
+  });
+  await addActivity("Account edited", `${displayNameForUser(req.user)} edited ${user.username || user.name}`);
+  const state = await getStateFor(req.user);
+  broadcast("kaila.state.updated", state);
+  res.json({ user: publicUser(user), state });
+});
+
+app.post("/api/admin/users/:id/provider-profile", requireUser, async (req, res) => {
+  if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+  const target = await loadUserForAdminAction(req.params.id);
+  if (!target || target.deleted_at) return res.status(404).json({ error: "Account not found" });
+  if (target.role !== "client") return res.status(400).json({ error: "Only client accounts can receive an added provider profile" });
+  let provider;
+  try {
+    provider = await saveProviderProfileForUser(mapUser(target), req.body);
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message || "Provider profile failed" });
+  }
+  await recordAuditLog(req, {
+    action: "provider_profile.create",
+    targetType: "provider_profile",
+    targetId: target.id,
+    targetLabel: `${target.username || target.name} (${target.role})`,
+    metadata: { providerId: provider.id, category: provider.category, area: provider.area },
+  });
+  await addActivity("Provider profile added", `${displayNameForUser(req.user)} added a provider profile for ${target.username || target.name}`);
+  const state = await getStateFor(req.user);
+  broadcast("kaila.state.updated", state);
+  res.status(201).json({ provider, state });
+});
+
+app.post("/api/admin/users/:id/status", requireUser, async (req, res) => {
+  if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+  const target = await loadUserForAdminAction(req.params.id);
+  if (!target) return res.status(404).json({ error: "Account not found" });
+  if (isSuperAdminUser(target)) return res.status(403).json({ error: "The super admin account cannot be changed from here" });
+  if (target.id === req.user.id) return res.status(400).json({ error: "Use another admin account for changes to your own access" });
+  const action = String(req.body?.action || "").trim().toLowerCase();
+  if (!["activate", "deactivate", "ban", "delete"].includes(action)) return res.status(400).json({ error: "Invalid account action" });
+  if (action === "delete" && !isSuperAdminUser(req.user)) return res.status(403).json({ error: "Only the super admin can delete accounts" });
+  if (target.role === "admin" && !isSuperAdminUser(req.user)) return res.status(403).json({ error: "Only the super admin can manage admin accounts" });
+  if (target.role === "admin" && ["deactivate", "ban", "delete"].includes(action) && !(await canDisableAdminAccount(target.id))) {
+    return res.status(400).json({ error: "At least one other active admin account must remain" });
+  }
+
+  const timestamp = nowMysql();
+  if (action === "delete") {
+    const deletedName = `Deleted ${target.role}`;
+    await pool.query("DELETE FROM push_tokens WHERE user_id = ?", [target.id]);
+    await pool.query("DELETE FROM user_blocks WHERE blocker_id = ? OR blocked_id = ?", [target.id, target.id]);
+    await pool.query("UPDATE providers SET status = 'Deleted', updated_at = ? WHERE user_id = ?", [timestamp, target.id]);
+    await pool.query(
+      `UPDATE users
+       SET name = ?, username = ?, email = NULL, password_hash = ?, area = 'Deleted account', category = NULL,
+         contact_number = NULL, messenger_link = NULL, preferred_contact_channel = NULL, best_contact_time = NULL,
+         data_privacy_consent = 0, photo_file = NULL, photo_mime_type = NULL, social_photo_url = NULL,
+         account_status = 'deleted', status_updated_at = ?, banned_at = NULL, deleted_at = ?
+       WHERE id = ?`,
+      [deletedName, `deleted_${target.id.slice(0, 16)}`, passwordHash(crypto.randomBytes(24).toString("hex")), timestamp, timestamp, target.id]
+    );
+  } else {
+    const status = action === "activate" ? "active" : action === "deactivate" ? "inactive" : "banned";
+    await pool.query(
+      "UPDATE users SET account_status = ?, status_updated_at = ?, banned_at = ? WHERE id = ?",
+      [status, timestamp, status === "banned" ? timestamp : null, target.id]
+    );
+    if (target.role === "provider") {
+      const providerStatus = status === "active" ? "Active" : status === "inactive" ? "Inactive" : "Banned";
+      await pool.query("UPDATE providers SET status = ?, updated_at = ? WHERE user_id = ?", [providerStatus, timestamp, target.id]);
+    }
+    if (status !== "active") await pool.query("DELETE FROM push_tokens WHERE user_id = ?", [target.id]);
+  }
+
+  const actionLabels = { activate: "activated", deactivate: "deactivated", ban: "banned", delete: "deleted" };
+  await recordAuditLog(req, {
+    action: `account.${action}`,
+    targetId: target.id,
+    targetLabel: `${target.username || target.name} (${target.role})`,
+    metadata: { role: target.role, username: target.username, status: action === "delete" ? "deleted" : action },
+  });
+  await addActivity("Account updated", `${displayNameForUser(req.user)} ${actionLabels[action]} ${target.username || target.name}`);
+  const state = await getStateFor(req.user);
+  broadcast("kaila.state.updated", state);
+  res.json({ ok: true, state });
+});
+
 app.post("/api/admin/truncate", requireUser, async (req, res) => {
   if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
   await pool.query("SET FOREIGN_KEY_CHECKS = 0");
   await pool.query("TRUNCATE TABLE activities");
+  await pool.query("TRUNCATE TABLE audit_logs");
   await pool.query("TRUNCATE TABLE conversation_access_audit");
   await pool.query("TRUNCATE TABLE notification_read_states");
   await pool.query("TRUNCATE TABLE message_read_states");

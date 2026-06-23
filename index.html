@@ -4,18 +4,18 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#173B84">
-  <meta name="description" content="KAILA helps clients in Gingoog City find trusted local service providers, compare offers, chat clearly, and track jobs from request to completion.">
+  <meta name="description" content="KAILA helps clients find trusted local service providers, compare offers, chat clearly, and track jobs from request to completion.">
   <meta name="robots" content="index, follow, max-image-preview:large">
   <meta name="application-name" content="KAILA">
   <meta name="apple-mobile-web-app-title" content="KAILA">
   <meta name="format-detection" content="telephone=no">
-  <meta name="keywords" content="KAILA, local services marketplace, Gingoog City services, home repair, local providers, service requests">
+  <meta name="keywords" content="KAILA, local services marketplace, home repair, local providers, service requests">
   <link rel="canonical" href="https://kaila-app.com/">
-  <title>KAILA | Find Trusted Local Services in Gingoog City</title>
+  <title>KAILA | Find Trusted Local Services</title>
   <meta property="og:site_name" content="KAILA">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://kaila-app.com/">
-  <meta property="og:title" content="KAILA | Find Trusted Local Services in Gingoog City">
+  <meta property="og:title" content="KAILA | Find Trusted Local Services">
   <meta property="og:description" content="Post service requests, compare local offers, chat with providers, and track job completion in one mobile-first marketplace.">
   <meta property="og:image" content="https://kaila-app.com/assets/kaila-preview.png?v=20260615-consumer-scenes">
   <meta property="og:image:width" content="1200">
@@ -23,7 +23,7 @@
   <meta property="og:image:alt" content="KAILA local services marketplace preview">
   <meta property="og:locale" content="en_PH">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="KAILA | Find Trusted Local Services in Gingoog City">
+  <meta name="twitter:title" content="KAILA | Find Trusted Local Services">
   <meta name="twitter:description" content="Find trusted local help faster with request posting, provider offers, chat, and job tracking.">
   <meta name="twitter:image" content="https://kaila-app.com/assets/kaila-preview.png?v=20260615-consumer-scenes">
   <link rel="manifest" href="manifest.webmanifest?v=20260622-icon-jpg">
@@ -38,7 +38,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css">
-  <link rel="stylesheet" href="style.css?v=20260622-provider-coverage-city">
+  <link rel="stylesheet" href="style.css?v=20260623-admin-provider-profile">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -50,8 +50,8 @@
         "url": "https://kaila-app.com/",
         "logo": "https://kaila-app.com/assets/android-chrome-512x512.png?v=20260622-icon-jpg",
         "areaServed": {
-          "@type": "City",
-          "name": "Gingoog City"
+          "@type": "Country",
+          "name": "Philippines"
         }
       },
       {
@@ -74,8 +74,8 @@
         "image": "https://kaila-app.com/assets/kaila-preview.png?v=20260615-consumer-scenes",
         "description": "KAILA helps clients find trusted local service providers, compare offers, chat clearly, and track jobs from request to completion.",
         "areaServed": {
-          "@type": "City",
-          "name": "Gingoog City"
+          "@type": "Country",
+          "name": "Philippines"
         },
         "offers": {
           "@type": "Offer",
@@ -182,7 +182,7 @@
             <input id="register-username" class="form-control" name="username" placeholder="Username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40" required>
             <div class="password-field">
               <input id="register-password" class="form-control" name="password" type="password" placeholder="Password" autocomplete="new-password" minlength="6" required>
-              <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
+              <button class="password-toggle" type="button" data-password-toggle aria-label="Show password" title="Show password">
                 <i class="fa-solid fa-eye"></i>
               </button>
             </div>
@@ -374,7 +374,7 @@
             <input id="login-username" class="form-control" name="username" placeholder="Username" autocomplete="username" autocapitalize="none" spellcheck="false" enterkeyhint="next" required>
             <div class="password-field">
               <input id="login-password" class="form-control" name="password" type="password" placeholder="Password" autocomplete="current-password" enterkeyhint="done" required>
-              <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
+              <button class="password-toggle" type="button" data-password-toggle aria-label="Show password" title="Show password">
                 <i class="fa-solid fa-eye"></i>
               </button>
             </div>
@@ -641,6 +641,6 @@
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=20260622-provider-coverage-city"></script>
+  <script src="app.js?v=20260623-admin-provider-profile"></script>
 </body>
 </html>

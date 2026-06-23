@@ -3625,6 +3625,36 @@ body.app-mode .live-panel {
   white-space: nowrap;
 }
 
+.edit-feed-media-section {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.edit-feed-media-section > span {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.edit-feed-media-thumb.is-removed {
+  opacity: 0.48;
+}
+
+.edit-feed-media-thumb.is-removed::after {
+  content: "Removed";
+  position: absolute;
+  inset: auto 0.35rem 1.85rem;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  min-height: 1.45rem;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(220, 53, 69, 0.9);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
 .camera-capture-overlay {
   position: fixed;
   inset: 0;
@@ -5017,6 +5047,36 @@ body.call-overlay-open {
 .chat-call-log.missed i {
   background: rgba(220, 53, 69, 0.12);
   color: #dc3545;
+}
+
+.audit-log-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.audit-log-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid rgba(15, 23, 42, 0.1);
+}
+
+.audit-log-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.audit-log-item p {
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+}
+
+.audit-log-item small {
+  flex: 0 0 auto;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .chat-message strong,

@@ -49,6 +49,7 @@ const SUPPORT_DASHBOARD_TAB = "#customer-service-pane";
 const SUPPORT_ROLE = "customer_service";
 const SUPPORT_LABEL = "Customer Service";
 const SUPPORT_AVATAR = "assets/kaila-customer-service-avatar.png";
+const SUPER_ADMIN_USERNAME = "jmaeacido";
 const STAFF_ROLES = ["admin", "ops", SUPPORT_ROLE];
 const APP_TIME_ZONE = "Asia/Manila";
 const PRODUCTION_HOST = "kaila-app.com";
@@ -114,6 +115,7 @@ const state = {
   publicPostId: "",
   validationEntries: [],
   activity: [],
+  auditLogs: [],
   missedCalls: [],
   socket: null,
   connected: false,
@@ -946,6 +948,7 @@ function togglePasswordVisibility(event) {
   const show = input.type === "password";
   input.type = show ? "text" : "password";
   button.setAttribute("aria-label", show ? "Hide password" : "Show password");
+  button.title = show ? "Hide password" : "Show password";
   button.innerHTML = `<i class="fa-solid fa-${show ? "eye-slash" : "eye"}"></i>`;
 }
 
@@ -1156,6 +1159,7 @@ function applyServerState(payload = {}, options = {}) {
   if ("validationEntries" in payload) state.validationEntries = mergeQueuedValidationEntries(payload.validationEntries || []);
   else state.validationEntries = mergeQueuedValidationEntries(state.validationEntries || []);
   state.activity = payload.activities || state.activity || [];
+  state.auditLogs = payload.auditLogs || state.auditLogs || [];
   if (state.session && !options.fromCache) {
     const freshSession = state.users.find((user) => user.id === state.session.id);
     if (freshSession) {
@@ -1166,6 +1170,13 @@ function applyServerState(payload = {}, options = {}) {
   ensureActiveRole();
   if (!options.fromCache) cacheStateSnapshot();
   render();
+}
+
+function enhanceIconButtonTooltips(scope = document) {
+  $$("button[aria-label]:not([title])", scope).forEach((button) => {
+    const label = button.getAttribute("aria-label")?.trim();
+    if (label) button.title = label;
+  });
 }
 
 function safeApplyState(payload = {}) {
@@ -1839,6 +1850,7 @@ function render() {
   renderSettings();
   renderStats();
   renderConnectivity();
+  enhanceIconButtonTooltips();
   bindDirectContactActions();
   bindDashboardAnalytics();
 }
@@ -2464,6 +2476,29 @@ function renderFeedMedia(media = []) {
   `;
 }
 
+function renderEditFeedExistingMedia(media = []) {
+  if (!media.length) return "";
+  return `
+    <div class="wide edit-feed-media-section">
+      <span>Media</span>
+      <div class="upload-preview feed-upload-preview edit-feed-existing-media" data-edit-feed-existing-media>
+        ${media.map((item) => {
+          const url = resolveMediaUrl(item.url);
+          const isVideo = item.mimeType?.startsWith("video/");
+          const label = item.originalName || "Post media";
+          return `
+            <div class="upload-thumb edit-feed-media-thumb" data-edit-feed-media-item="${escapeAttribute(item.id)}">
+              <button class="upload-thumb-remove" type="button" data-edit-feed-remove-media aria-label="Remove ${escapeAttribute(label)}"><i class="fa-solid fa-xmark"></i></button>
+              ${isVideo ? `<video muted preload="metadata" src="${escapeAttribute(url)}"></video>` : `<img src="${escapeAttribute(url)}" alt="${escapeAttribute(label)}">`}
+              <span>${escapeHtml(label)}</span>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function bindFeedPostActions(scope, options = {}) {
   $$("[data-auth-required]", scope).forEach((item) => {
     item.addEventListener("click", (event) => {
@@ -2848,18 +2883,61 @@ async function editFeedPost(postId) {
             <option value="private" ${post.visibility === "private" ? "selected" : ""}>Private</option>
           </select>
         </label>
+        ${renderEditFeedExistingMedia(post.media || [])}
+        <div class="wide media-input-group">
+          <span>Add photo or video</span>
+          <div class="upload-preview feed-upload-preview" data-edit-feed-media-preview></div>
+          <div class="media-input-actions">
+            <label class="btn btn-outline-primary btn-sm">
+              <i class="fa-solid fa-image"></i>
+              <span>Choose</span>
+              <input class="visually-hidden" type="file" accept="${MEDIA_ATTACHMENT_ACCEPT}" multiple data-edit-feed-media>
+            </label>
+            <label class="btn btn-outline-primary btn-sm">
+              <i class="fa-solid fa-camera"></i>
+              <span>Camera</span>
+              <input class="visually-hidden" type="file" accept="${CAMERA_ATTACHMENT_ACCEPT}" capture="environment" data-camera-input data-edit-feed-media>
+            </label>
+          </div>
+        </div>
       </div>
     `,
     confirmButtonText: "Save",
-    preConfirm: () => {
+    didOpen: (popup) => {
+      bindAttachmentPreview("[data-edit-feed-media]", "[data-edit-feed-media-preview]", MEDIA_ATTACHMENT_LIMIT, popup);
+      $("[data-edit-feed-existing-media]", popup)?.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-edit-feed-remove-media]");
+        if (!button) return;
+        const item = button.closest("[data-edit-feed-media-item]");
+        if (!item) return;
+        item.classList.toggle("is-removed");
+        const removed = item.classList.contains("is-removed");
+        button.setAttribute("aria-label", `${removed ? "Keep" : "Remove"} ${item.querySelector("span")?.textContent || "post media"}`);
+        button.innerHTML = removed ? `<i class="fa-solid fa-rotate-left"></i>` : `<i class="fa-solid fa-xmark"></i>`;
+      });
+    },
+    preConfirm: async () => {
       const popup = window.Swal.getPopup();
       const body = $("[data-edit-feed-body]", popup)?.value.trim() || "";
       const visibility = $("[data-edit-feed-visibility]", popup)?.value || "public";
-      if (!body && !(post.media || []).length) {
+      const keepMediaIds = $$("[data-edit-feed-media-item]:not(.is-removed)", popup).map((item) => item.dataset.editFeedMediaItem).filter(Boolean);
+      let attachments;
+      try {
+        attachments = await readMediaAttachments("[data-edit-feed-media]", popup);
+      } catch (error) {
+        window.Swal.showValidationMessage(error.message || "Could not read the selected file.");
+        return false;
+      }
+      if (!attachments) return false;
+      if (keepMediaIds.length + attachments.length > MEDIA_ATTACHMENT_LIMIT) {
+        window.Swal.showValidationMessage(`Keep or upload up to ${MEDIA_ATTACHMENT_LIMIT} media files.`);
+        return false;
+      }
+      if (!body && !keepMediaIds.length && !attachments.length) {
         window.Swal.showValidationMessage("Write something or keep a photo/video on the post.");
         return false;
       }
-      return { body, visibility };
+      return { body, visibility, keepMediaIds, attachments };
     },
   });
   if (!result.isConfirmed) return;
@@ -4534,10 +4612,15 @@ function userProfile(userId) {
 }
 
 function displayUserName(user = {}) {
+  if (isSuperAdminUser(user)) return "KAILA Super Admin";
   if (user.role === "admin") return "KAILA Admin";
   if (user.role === "ops") return "KAILA Ops";
   if (user.role === SUPPORT_ROLE) return "KAILA Customer Service";
   return user.name || "KAILA user";
+}
+
+function isSuperAdminUser(user = {}) {
+  return Boolean(user.superAdmin || (user.role === "admin" && String(user.username || "").trim().toLowerCase() === SUPER_ADMIN_USERNAME));
 }
 
 function displayReputationForUser(user = {}) {
@@ -4576,7 +4659,52 @@ function canModerateUser(target = {}) {
   return Boolean(state.session && target.id && target.id !== state.session.id && !target.deletedAt && ["client", "provider"].includes(target.role));
 }
 
+function canAdminManageAccount(target = {}) {
+  if (!state.session || state.session.role !== "admin" || !target.id || target.id === state.session.id || target.deletedAt || isSuperAdminUser(target)) return false;
+  if (target.role === "admin" && !isSuperAdminUser(state.session)) return false;
+  return true;
+}
+
+function canAdminDeleteAccount(target = {}) {
+  return Boolean(canAdminManageAccount(target) && isSuperAdminUser(state.session));
+}
+
+function canAdminCreateProviderProfile(target = {}) {
+  return Boolean(canAdminManageAccount(target) && target.role === "client" && !providerForAccount(target.id).id);
+}
+
+function accountStatus(user = {}) {
+  if (user.deletedAt) return "deleted";
+  return String(user.accountStatus || "active").toLowerCase();
+}
+
+function accountStatusLabel(user = {}) {
+  const labels = { active: "Active", inactive: "Inactive", banned: "Banned", deleted: "Deleted" };
+  return labels[accountStatus(user)] || capitalize(accountStatus(user));
+}
+
+function accountStatusBadge(user = {}) {
+  const status = accountStatus(user);
+  const className = status === "active" ? "text-bg-success" : status === "banned" ? "text-bg-danger" : status === "deleted" ? "text-bg-dark" : "text-bg-warning";
+  const label = isSuperAdminUser(user) ? `Super Admin - ${accountStatusLabel(user)}` : accountStatusLabel(user);
+  return `<span class="badge ${className} align-self-start">${escapeHtml(label)}</span>`;
+}
+
+function renderAdminAccountActions(user = {}) {
+  if (!canAdminManageAccount(user)) return "";
+  const status = accountStatus(user);
+  const actions = [];
+  if (canAdminCreateProviderProfile(user)) actions.push(`<button class="btn btn-sm btn-outline-success" type="button" data-admin-client-provider="${escapeAttribute(user.id)}"><i class="fa-solid fa-briefcase"></i> Add Provider Profile</button>`);
+  actions.push(`<button class="btn btn-sm btn-outline-primary" type="button" data-admin-account-edit="${escapeAttribute(user.id)}"><i class="fa-solid fa-pen-to-square"></i> Edit</button>`);
+  if (status !== "active") actions.push(`<button class="btn btn-sm btn-outline-success" type="button" data-admin-account-action="activate" data-admin-account-id="${escapeAttribute(user.id)}"><i class="fa-solid fa-user-check"></i> Activate</button>`);
+  if (status === "active") actions.push(`<button class="btn btn-sm btn-outline-warning" type="button" data-admin-account-action="deactivate" data-admin-account-id="${escapeAttribute(user.id)}"><i class="fa-solid fa-user-minus"></i> Deactivate</button>`);
+  if (status !== "banned") actions.push(`<button class="btn btn-sm btn-outline-danger" type="button" data-admin-account-action="ban" data-admin-account-id="${escapeAttribute(user.id)}"><i class="fa-solid fa-ban"></i> Ban</button>`);
+  if (canAdminDeleteAccount(user)) actions.push(`<button class="btn btn-sm btn-danger" type="button" data-admin-account-action="delete" data-admin-account-id="${escapeAttribute(user.id)}"><i class="fa-solid fa-trash"></i> Delete</button>`);
+  return actions.length ? `<div class="card-actions mt-2">${actions.join("")}</div>` : "";
+}
+
 function directConversationDisplayTarget(target = {}) {
+  if (isSuperAdminUser(target)) return { ...target, name: "KAILA Super Admin", reputation: false };
   if (target.role === "admin") return { ...target, name: "KAILA Admin", reputation: false };
   if (target.role === "ops") return { ...target, name: "KAILA Ops", reputation: false };
   if (target.role === SUPPORT_ROLE) return { ...target, name: "KAILA Customer Service", photoUrl: SUPPORT_AVATAR, reputation: false };
@@ -4635,6 +4763,64 @@ function bindDirectContactActions() {
   $$("[data-report-user]").forEach((button) => button.addEventListener("click", () => openReportUserModal(button.dataset.reportUser)));
   $$("[data-block-user]").forEach((button) => button.addEventListener("click", () => blockUser(button.dataset.blockUser)));
   $$("[data-unblock-user]").forEach((button) => button.addEventListener("click", () => unblockUser(button.dataset.unblockUser)));
+  $$("[data-admin-client-provider]").forEach((button) => button.addEventListener("click", () => openAdminClientProviderProfileModal(button.dataset.adminClientProvider)));
+  $$("[data-admin-account-edit]").forEach((button) => button.addEventListener("click", () => openAdminEditAccountModal(button.dataset.adminAccountEdit)));
+  $$("[data-admin-account-action]").forEach((button) => button.addEventListener("click", () => updateAdminAccountStatus(button.dataset.adminAccountId, button.dataset.adminAccountAction)));
+}
+
+async function updateAdminAccountStatus(userId, action) {
+  const target = userProfile(userId);
+  if (!target?.id || !action) return;
+  const copy = {
+    activate: {
+      icon: "question",
+      title: "Activate account?",
+      text: `${displayUserName(target)} will be able to log in and use KAILA again.`,
+      confirm: "Activate",
+      done: "Account activated",
+    },
+    deactivate: {
+      icon: "warning",
+      title: "Deactivate account?",
+      text: `${displayUserName(target)} will be signed out from future API access until reactivated.`,
+      confirm: "Deactivate",
+      done: "Account deactivated",
+    },
+    ban: {
+      icon: "warning",
+      title: "Ban account?",
+      text: `${displayUserName(target)} will be blocked from logging in or using KAILA until reactivated.`,
+      confirm: "Ban",
+      done: "Account banned",
+    },
+    delete: {
+      icon: "warning",
+      title: "Delete account?",
+      text: `This anonymizes ${displayUserName(target)} and removes login access. Operational history is retained for safety records.`,
+      confirm: "Delete",
+      done: "Account deleted",
+      danger: true,
+    },
+  }[action];
+  if (!copy) return;
+  const result = await modal({
+    icon: copy.icon,
+    title: copy.title,
+    text: copy.text,
+    confirmButtonText: copy.confirm,
+    confirmButtonColor: copy.danger ? "#dc3545" : undefined,
+  });
+  if (!result.isConfirmed) return;
+  try {
+    const payload = await apiFetch(`/api/admin/users/${encodeURIComponent(target.id)}/status`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+    applyServerState(payload.state);
+    notify(copy.done, "KAILA account access was updated.", "success");
+  } catch (error) {
+    notify("Account update failed", error.message || "Try again.", "error");
+  }
 }
 
 function renderProviders() {
@@ -4645,7 +4831,7 @@ function renderProviders() {
     return;
   }
   let providers = state.providers;
-  if (canActAsMarketplace()) providers = providers.filter((provider) => !isBlockedUser(provider.userId));
+  if (canActAsMarketplace()) providers = providers.filter((provider) => !isBlockedUser(provider.userId) && (provider.status || "Active") === "Active");
   if (state.session?.role === "admin") providers = adminMetricProviders(providers);
   const adminPanel = state.session?.role === "admin" ? adminProviderMetricPanel() : "";
   if (!providers.length) {
@@ -4663,7 +4849,7 @@ function renderProviders() {
           ${renderIdentity(provider.displayName || provider.name, provider.photoUrl, "Provider reputation", providerReputation(provider))}
           <p>${escapeHtml(provider.specificServices || provider.skills || "No services added yet.")}</p>
         </div>
-        <span class="badge text-bg-light align-self-start">${escapeHtml(provider.status || "Active")}</span>
+        ${accountStatusBadge(userProfile(provider.userId))}
       </div>
       ${renderProviderSummary(provider)}
       <div class="provider-compact-actions">
@@ -4686,6 +4872,7 @@ function renderProviders() {
           </div>
         ` : ""}
         ${renderAdminProviderMetricDetail(provider)}
+        ${renderAdminAccountActions(userProfile(provider.userId))}
       </div>
     </article>
   `).join("")}`;
@@ -4837,7 +5024,10 @@ function renderClients() {
             ${renderIdentity(client.name, client.photoUrl, "Client reputation", client.reputation)}
             <p>${escapeHtml(client.username || "No username")} ${client.contactNumber ? `- ${escapeHtml(client.contactNumber)}` : ""}</p>
           </div>
-          <span class="badge text-bg-light align-self-start">${requests.length} request${requests.length === 1 ? "" : "s"}</span>
+          <div class="d-grid gap-1 justify-items-end">
+            ${accountStatusBadge(client)}
+            <span class="badge text-bg-light align-self-start">${requests.length} request${requests.length === 1 ? "" : "s"}</span>
+          </div>
         </div>
         <div class="meta">
           <span>${escapeHtml(client.area || "No area")}</span>
@@ -4846,6 +5036,7 @@ function renderClients() {
           <span>${activeCount} active</span>
         </div>
         ${directContactButtons(client.id)}
+        ${renderAdminAccountActions(client)}
       </article>
     `;
   }).join("");
@@ -4901,6 +5092,7 @@ function renderCustomerService() {
       <div class="card-actions">
         <button class="btn btn-sm btn-outline-primary" type="button" data-direct-chat="${escapeAttribute(primarySupport.id)}"><i class="fa-solid fa-message"></i> Message Support</button>
       </div>
+      ${state.session.role === "admin" ? renderAdminAccountActions(primarySupport) : ""}
     </article>
   `;
   bindCustomerServiceActions(host);
@@ -5126,6 +5318,7 @@ function renderOps() {
   }
 
   const opsUsers = state.users.filter((user) => user.role === "ops");
+  const supportUsers = state.users.filter((user) => user.role === SUPPORT_ROLE);
   const adminUsers = state.users.filter((user) => user.role === "admin" && user.id !== state.session.id);
   const adminSection = adminUsers.length ? `
     <article class="k-card admin-metric-panel">
@@ -5139,7 +5332,10 @@ function renderOps() {
           ${renderIdentity(displayUserName(user), user.photoUrl, "Admin account", false)}
             <p>${escapeHtml(user.username || "No username")} ${user.contactNumber ? `- ${escapeHtml(user.contactNumber)}` : ""}</p>
           </div>
-          <span class="badge text-bg-light align-self-start">Admin</span>
+          <div class="d-grid gap-1 justify-items-end">
+            ${accountStatusBadge(user)}
+            <span class="badge text-bg-light align-self-start">Admin</span>
+          </div>
         </div>
         <div class="meta">
           <span>${escapeHtml(user.area || "Operations")}</span>
@@ -5147,6 +5343,34 @@ function renderOps() {
           ${user.bestContactTime ? `<span>${escapeHtml(user.bestContactTime)}</span>` : ""}
         </div>
         ${directContactButtons(user.id)}
+        ${renderAdminAccountActions(user)}
+      </article>
+    `).join("")}
+  ` : "";
+  const supportSection = supportUsers.length ? `
+    <article class="k-card admin-metric-panel">
+      <h3>Customer Service Team</h3>
+      <p>${supportUsers.length} support account${supportUsers.length === 1 ? "" : "s"} available for direct user assistance.</p>
+    </article>
+    ${supportUsers.map((user) => `
+      <article class="k-card">
+        <div class="d-flex justify-content-between gap-2">
+          <div>
+          ${renderIdentity(displayUserName(user), user.photoUrl || SUPPORT_AVATAR, "Support account", false)}
+            <p>${escapeHtml(user.username || "No username")} ${user.contactNumber ? `- ${escapeHtml(user.contactNumber)}` : ""}</p>
+          </div>
+          <div class="d-grid gap-1 justify-items-end">
+            ${accountStatusBadge(user)}
+            <span class="badge text-bg-light align-self-start">${SUPPORT_LABEL}</span>
+          </div>
+        </div>
+        <div class="meta">
+          <span>${escapeHtml(user.area || "Customer Service")}</span>
+          ${user.preferredContactChannel ? `<span>${escapeHtml(user.preferredContactChannel)}</span>` : ""}
+          ${user.bestContactTime ? `<span>${escapeHtml(user.bestContactTime)}</span>` : ""}
+        </div>
+        ${directContactButtons(user.id)}
+        ${renderAdminAccountActions(user)}
       </article>
     `).join("")}
   ` : "";
@@ -5157,11 +5381,11 @@ function renderOps() {
     </article>
   `;
   if (!opsUsers.length) {
-    host.innerHTML = `${adminSection}${summary}${emptyCard("No ops accounts yet", "Use Create Account and choose the Ops role.")}`;
+    host.innerHTML = `${adminSection}${supportSection}${summary}${emptyCard("No ops accounts yet", "Use Create Account and choose the Ops role.")}`;
     return;
   }
 
-  host.innerHTML = `${adminSection}${summary}${opsUsers.map((user) => {
+  host.innerHTML = `${adminSection}${supportSection}${summary}${opsUsers.map((user) => {
     const entries = state.validationEntries.filter((entry) => entry.operatorId === user.id);
     const clientSurveys = entries.filter((entry) => entry.type === "client_survey").length;
     const providerInterviews = entries.filter((entry) => entry.type === "provider_interview").length;
@@ -5173,7 +5397,10 @@ function renderOps() {
           ${renderIdentity(displayUserName(user), user.photoUrl, "Ops account", false)}
             <p>${escapeHtml(user.username || "No username")} ${user.contactNumber ? `- ${escapeHtml(user.contactNumber)}` : ""}</p>
           </div>
-          <span class="badge text-bg-light align-self-start">${entries.length} validation entr${entries.length === 1 ? "y" : "ies"}</span>
+          <div class="d-grid gap-1 justify-items-end">
+            ${accountStatusBadge(user)}
+            <span class="badge text-bg-light align-self-start">${entries.length} validation entr${entries.length === 1 ? "y" : "ies"}</span>
+          </div>
         </div>
         <div class="meta">
           <span>${escapeHtml(user.area || "Operations")}</span>
@@ -5184,6 +5411,7 @@ function renderOps() {
         </div>
         ${latestEntry ? `<div class="offer"><strong>Latest validation</strong><div>${escapeHtml(latestEntry.subjectName)} - ${escapeHtml(latestEntry.decisionSignal || "No signal")} - ${formatDateTime(latestEntry.createdAt)}</div></div>` : ""}
         ${directContactButtons(user.id)}
+        ${renderAdminAccountActions(user)}
       </article>
     `;
   }).join("")}`;
@@ -5390,6 +5618,7 @@ function renderSettings() {
     $("[data-settings-panel] [data-reconnect]")?.addEventListener("click", () => connectSocket(true));
     $("[data-settings-support]")?.addEventListener("click", openCustomerServicePlatform);
     $("[data-settings-panel] [data-admin-create-account]")?.addEventListener("click", openAdminCreateAccountModal);
+    $$("[data-admin-account-edit]", host).forEach((button) => button.addEventListener("click", () => openAdminEditAccountModal(button.dataset.adminAccountEdit)));
     $$("[data-provider-profile]", host).forEach((button) => button.addEventListener("click", openProviderModal));
     $$("[data-route]", host).forEach((button) => button.addEventListener("click", () => route(button.dataset.route)));
     $$("[data-home-tab]", host).forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.homeTab)));
@@ -5427,6 +5656,52 @@ function renderAdminAccountSettings() {
         <button class="btn btn-sm btn-outline-primary" type="button" data-home-tab="#customer-service-pane"><i class="fa-solid fa-headset"></i> Support Desk</button>
         <button class="btn btn-sm btn-outline-primary" type="button" data-home-tab="#validation-pane"><i class="fa-solid fa-clipboard-check"></i> Validation</button>
         <button class="btn btn-sm btn-outline-primary" type="button" data-home-tab="#activity-pane"><i class="fa-solid fa-chart-line"></i> Activity</button>
+      </div>
+    </section>
+    ${renderAuditTrailSettings()}
+  `;
+}
+
+function renderAuditTrailSettings() {
+  const logs = (state.auditLogs || []).slice(0, 12);
+  const actionLabels = {
+    "account.create": "Created account",
+    "account.edit": "Edited account",
+    "account.activate": "Activated account",
+    "account.deactivate": "Deactivated account",
+    "account.ban": "Banned account",
+    "account.delete": "Deleted account",
+    "provider_profile.create": "Created provider profile",
+  };
+  return `
+    <section class="settings-card">
+      <div class="settings-head">
+        <div class="profile-photo safety-icon"><i class="fa-solid fa-clipboard-list"></i></div>
+        <div>
+          <h3>Audit Trail</h3>
+          <p>Recent administrator account-management actions.</p>
+        </div>
+      </div>
+      <div class="audit-log-list">
+        ${logs.length ? logs.map((entry) => {
+          const label = actionLabels[entry.action] || capitalize(String(entry.action || "action").replace(/[._-]+/g, " "));
+          const metadata = entry.metadata || {};
+          const detailParts = [
+            entry.actorName || roleLabel(entry.actorRole || "admin"),
+            entry.targetLabel ? `targeted ${entry.targetLabel}` : "",
+            metadata.role ? `role: ${metadata.role}` : "",
+            metadata.passwordChanged ? "password changed" : "",
+          ].filter(Boolean);
+          return `
+            <article class="audit-log-item">
+              <div>
+                <strong>${escapeHtml(label)}</strong>
+                <p>${escapeHtml(detailParts.join(" - "))}</p>
+              </div>
+              <small>${escapeHtml(formatDateTime(entry.createdAt))}</small>
+            </article>
+          `;
+        }).join("") : `<p class="muted mb-0">No audit entries yet.</p>`}
       </div>
     </section>
   `;
@@ -5849,6 +6124,7 @@ function cacheStateSnapshot() {
     blocks: state.blocks,
     validationEntries: (state.validationEntries || []).filter((entry) => !entry.pendingSync),
     activities: state.activity,
+    auditLogs: state.auditLogs,
     cachedAt: new Date().toISOString(),
   };
   localStorage.setItem(STORAGE.stateSnapshot, JSON.stringify(snapshot));
@@ -6807,6 +7083,89 @@ async function openProviderModal() {
     notify("Provider saved", "", "success");
   } catch (error) {
     notify("Provider failed", error.message, "error");
+  }
+}
+
+async function openAdminClientProviderProfileModal(userId) {
+  const target = userProfile(userId);
+  if (!target?.id) return;
+  let providerFormRoot = document;
+  const result = await workspaceForm({
+    title: `Provider profile for ${displayUserName(target)}`,
+    html: `
+      <div class="swal-form two">
+        <label><span>Display name</span><input id="provider-display-name" class="form-control" value="${escapeAttribute(target.name || "")}"></label>
+        <label><span>Provider type</span>${select("provider-type", PROVIDER_TYPES, "Individual")}</label>
+        <label class="wide"><span>Categories</span>${categoryChips("provider-category", target.category || "")}</label>
+        <label class="wide"><span>Address</span>${addressFields("provider-address", target.area || "")}</label>
+        <label><span>Availability</span>${select("provider-availability", AVAILABILITY_OPTIONS, "Today")}</label>
+        <label><span>Experience</span>${select("provider-experience", EXPERIENCE_OPTIONS, "1-2")}</label>
+        <label><span>Emergency availability</span>${select("provider-emergency", EMERGENCY_OPTIONS, "Sometimes")}</label>
+        <label><span>Available days</span>${availableDaysChips("provider-days", "")}</label>
+        <label><span>Available time</span>${timeRangeFields("provider-time", "")}</label>
+        <label class="wide"><span>Specific services</span><textarea id="provider-services" class="form-control" rows="3"></textarea></label>
+        <label class="wide"><span>Coverage area</span>${coverageAreaChips("provider-coverage", "", parseAddress(target.area || "").city)}</label>
+        <label class="wide"><span>Travel limits</span><textarea id="provider-travel" class="form-control" rows="2"></textarea></label>
+        <label><span>Minimum fee</span><input id="provider-minimum-fee" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" placeholder="300"></label>
+        <label><span>Price range</span>${priceRangeFields("provider-price-range", "")}</label>
+        <label class="wide"><span>Work sample link</span><input id="provider-work-samples" class="form-control" inputmode="url"></label>
+        <label class="wide"><span>Certificate / permit link</span><input id="provider-certificate" class="form-control" inputmode="url"></label>
+        <label class="wide consent-line"><input id="provider-valid-id" type="checkbox"> Optional ID may be used for verification.</label>
+        <label class="wide consent-line"><input id="provider-consent-requests" type="checkbox"> Provider agreed to receive pilot job requests.</label>
+        <label class="wide consent-line"><input id="provider-consent-ratings" type="checkbox"> Provider agreed to receive ratings.</label>
+        <label class="wide consent-line"><input id="provider-rules" type="checkbox"> Provider understood and agreed to provider rules.</label>
+      </div>
+    `,
+    confirmButtonText: "Create Provider Profile",
+    didOpen: (workspacePanel) => {
+      providerFormRoot = workspacePanel || document;
+      bindCategoryChips("provider-category", providerFormRoot);
+      bindCategoryChips("provider-days", providerFormRoot);
+      bindCategoryChips("provider-coverage", providerFormRoot);
+      bindAddressGroup("provider-address", providerFormRoot, () => syncCoverageChipsWithAddress("provider-coverage", "provider-address", providerFormRoot));
+    },
+    preConfirm: () => {
+      const scope = providerFormRoot || document;
+      const provider = {
+        category: selectedCategoryChips("provider-category", scope),
+        area: addressValue("provider-address", scope),
+        availability: $("#provider-availability", scope).value,
+        skills: $("#provider-services", scope).value.trim(),
+        displayName: $("#provider-display-name", scope).value.trim(),
+        providerType: $("#provider-type", scope).value,
+        specificServices: $("#provider-services", scope).value.trim(),
+        yearsExperience: $("#provider-experience", scope).value,
+        coverageArea: selectedCoverageChips("provider-coverage", "provider-address", scope).join(", "),
+        emergencyAvailability: $("#provider-emergency", scope).value,
+        availableDays: selectedCategoryChips("provider-days", scope).join(", "),
+        availableTime: timeRangeValue("#provider-time-start", "#provider-time-end", scope),
+        travelLimits: $("#provider-travel", scope).value.trim(),
+        minimumFee: normalizeCurrencyInput($("#provider-minimum-fee", scope).value),
+        priceRange: priceRangeValue("#provider-price-range-min", "#provider-price-range-max", scope),
+        workSamples: $("#provider-work-samples", scope).value.trim(),
+        certificateProof: $("#provider-certificate", scope).value.trim(),
+        validIdConsent: $("#provider-valid-id", scope).checked,
+        consentRequests: $("#provider-consent-requests", scope).checked,
+        consentRatings: $("#provider-consent-ratings", scope).checked,
+        rulesAgreement: $("#provider-rules", scope).checked,
+      };
+      if (!provider.category.length || !provider.area || !provider.specificServices || !provider.coverageArea || !provider.consentRequests || !provider.consentRatings || !provider.rulesAgreement) {
+        window.Swal.showValidationMessage("Category, area, services, coverage, request consent, rating consent, and rules agreement are required.");
+        return false;
+      }
+      return provider;
+    },
+  });
+  if (!result.isConfirmed) return;
+  try {
+    const payload = await apiFetch(`/api/admin/users/${encodeURIComponent(target.id)}/provider-profile`, {
+      method: "POST",
+      body: JSON.stringify(result.value),
+    });
+    applyServerState(payload.state);
+    notify("Provider profile created", `${displayUserName(target)} can now use provider mode.`, "success");
+  } catch (error) {
+    notify("Provider profile failed", error.message || "Try again.", "error");
   }
 }
 
@@ -9434,115 +9793,140 @@ async function openMessageModal() {
   }
 }
 
+function adminAccountRoleOptions(includeAdmin = isSuperAdminUser(state.session)) {
+  return ["client", "provider", ...(includeAdmin ? ["admin"] : []), SUPPORT_LABEL, "ops"];
+}
+
+function adminRoleSelectValue(role = "client") {
+  return role === SUPPORT_ROLE ? SUPPORT_LABEL : role;
+}
+
+function providerForAccount(userId) {
+  return state.providers.find((provider) => provider.userId === userId) || {};
+}
+
+function adminAccountModalHtml(values = {}, options = {}) {
+  const isEdit = Boolean(options.edit);
+  const role = values.role || "client";
+  const provider = role === "provider" ? providerForAccount(values.id) : {};
+  const category = values.category || provider.category || "";
+  const area = ["admin", "ops", SUPPORT_ROLE].includes(role) ? "" : values.area || "";
+  return `
+    <div class="swal-form two">
+      <label><span>Role</span>${select("admin-account-role", adminAccountRoleOptions(options.includeAdmin), adminRoleSelectValue(role))}</label>
+      <label><span>Full name</span><input id="admin-account-name" class="form-control" autocomplete="name" maxlength="80" value="${escapeAttribute(values.name || "")}"></label>
+      <label><span>Email</span><input id="admin-account-email" class="form-control" type="email" autocomplete="email" maxlength="190" value="${escapeAttribute(values.email || "")}"></label>
+      <label><span>Username</span><input id="admin-account-username" class="form-control" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40" value="${escapeAttribute(values.username || "")}"></label>
+      <label><span>Contact number</span><input id="admin-account-contact" class="form-control" type="tel" inputmode="tel" autocomplete="tel" maxlength="32" value="${escapeAttribute(values.contactNumber || "")}"></label>
+      <label><span>Messenger / Facebook</span><input id="admin-account-messenger" class="form-control" inputmode="url" autocomplete="url" maxlength="240" value="${escapeAttribute(values.messengerLink || "")}"></label>
+      <label><span>Preferred contact</span>${select("admin-account-channel", CONTACT_CHANNELS, values.preferredContactChannel || "Messenger")}</label>
+      <label><span>Best contact time</span>${select("admin-account-best-time", AVAILABLE_TIME_OPTIONS, values.bestContactTime || "", "Choose time")}</label>
+      <label>
+        <span>${isEdit ? "New password" : "Password"}</span>
+        <div class="password-field">
+          <input id="admin-account-password" class="form-control" type="password" autocomplete="new-password" placeholder="${isEdit ? "Leave blank to keep current password" : ""}">
+          <button class="password-toggle" type="button" data-password-toggle aria-label="Show password" title="Show password">
+            <i class="fa-solid fa-eye"></i>
+          </button>
+        </div>
+      </label>
+      <label class="wide" data-admin-account-address><span>Address</span>${addressFields("admin-account-address", area)}</label>
+      <div class="wide" data-admin-provider-fields hidden>
+        <label><span>Display name</span><input id="admin-provider-display" class="form-control" value="${escapeAttribute(provider.displayName || values.name || "")}"></label>
+        <label><span>Provider type</span>${select("admin-provider-type", PROVIDER_TYPES, provider.providerType || "Individual")}</label>
+        <label><span>Service categories</span>${categoryChips("admin-account-category", category)}</label>
+        <label><span>Specific services</span><textarea id="admin-provider-services" class="form-control" rows="2">${escapeHtml(provider.specificServices || "")}</textarea></label>
+        <label><span>Experience</span>${select("admin-provider-experience", EXPERIENCE_OPTIONS, provider.yearsExperience || "1-2")}</label>
+        <label><span>Coverage area</span>${coverageAreaChips("admin-provider-coverage", provider.coverageArea || "", parseAddress(values.area || "").city)}</label>
+        <label><span>Emergency availability</span>${select("admin-provider-emergency", EMERGENCY_OPTIONS, provider.emergencyAvailability || "Sometimes")}</label>
+        <label><span>Available days</span>${availableDaysChips("admin-provider-days", provider.availableDays || "")}</label>
+        <label><span>Available time</span>${timeRangeFields("admin-provider-time", provider.availableTime || "")}</label>
+        <label><span>Travel limits</span><textarea id="admin-provider-travel" class="form-control" rows="2">${escapeHtml(provider.travelLimits || "")}</textarea></label>
+        <label><span>Minimum fee</span><input id="admin-provider-min-fee" class="form-control" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeAttribute(provider.minimumFee || "")}"></label>
+        <label><span>Price range</span>${priceRangeFields("admin-provider-price-range", provider.priceRange || "")}</label>
+        <label><span>Work samples</span><input id="admin-provider-work-samples" class="form-control" inputmode="url" value="${escapeAttribute(provider.workSamples || "")}"></label>
+        <label><span>Certificate / permit</span><input id="admin-provider-certificate" class="form-control" inputmode="url" value="${escapeAttribute(provider.certificateProof || "")}"></label>
+        <label class="consent-line"><input id="admin-provider-valid-id" type="checkbox" ${provider.validIdConsent ? "checked" : ""}> Optional ID may be used for verification.</label>
+        <label class="consent-line"><input id="admin-provider-requests" type="checkbox" ${isEdit ? (provider.consentRequests ? "checked" : "") : "checked"}> Provider agrees to receive pilot requests.</label>
+        <label class="consent-line"><input id="admin-provider-ratings" type="checkbox" ${isEdit ? (provider.consentRatings ? "checked" : "") : "checked"}> Provider agrees to receive ratings.</label>
+        <label class="consent-line"><input id="admin-provider-rules" type="checkbox" ${isEdit ? (provider.rulesAgreement ? "checked" : "") : "checked"}> Provider agrees to rules.</label>
+      </div>
+      <label class="wide consent-line"><input id="admin-account-privacy" type="checkbox" ${values.dataPrivacyConsent === false ? "" : "checked"}> Data privacy consent recorded.</label>
+    </div>
+  `;
+}
+
+function bindAdminAccountModalFields() {
+  bindAddressGroup("admin-account-address", document, () => syncCoverageChipsWithAddress("admin-provider-coverage", "admin-account-address"));
+  bindCategoryChips("admin-account-category");
+  bindCategoryChips("admin-provider-days");
+  bindCategoryChips("admin-provider-coverage");
+  $$("[data-password-toggle]", window.Swal.getPopup()).forEach((button) => button.addEventListener("click", togglePasswordVisibility));
+  $("#admin-account-role")?.addEventListener("change", syncAdminAccountFields);
+  syncAdminAccountFields();
+}
+
+function collectAdminAccountPayload({ edit = false } = {}) {
+  const role = accountRoleValue($("#admin-account-role").value);
+  const payload = {
+    role,
+    name: $("#admin-account-name").value.trim(),
+    email: $("#admin-account-email").value.trim(),
+    username: $("#admin-account-username").value.trim(),
+    password: $("#admin-account-password").value,
+    contactNumber: $("#admin-account-contact").value.trim(),
+    messengerLink: $("#admin-account-messenger").value.trim(),
+    preferredContactChannel: $("#admin-account-channel").value,
+    bestContactTime: $("#admin-account-best-time").value.trim(),
+    dataPrivacyConsent: $("#admin-account-privacy").checked,
+    area: role === "admin" ? "KAILA Administration" : ["ops", SUPPORT_ROLE].includes(role) ? (role === SUPPORT_ROLE ? "Customer Service" : "Operations") : addressValue("admin-account-address"),
+    category: role === "provider" ? selectedCategoryChips("admin-account-category") : [],
+    displayName: $("#admin-provider-display")?.value.trim() || "",
+    providerType: $("#admin-provider-type")?.value || "",
+    specificServices: $("#admin-provider-services")?.value.trim() || "",
+    yearsExperience: $("#admin-provider-experience")?.value || "",
+    coverageArea: selectedCoverageChips("admin-provider-coverage", "admin-account-address").join(", "),
+    emergencyAvailability: $("#admin-provider-emergency")?.value || "",
+    availableDays: selectedCategoryChips("admin-provider-days").join(", "),
+    availableTime: timeRangeValue("#admin-provider-time-start", "#admin-provider-time-end"),
+    travelLimits: $("#admin-provider-travel")?.value.trim() || "",
+    minimumFee: normalizeCurrencyInput($("#admin-provider-min-fee")?.value || ""),
+    priceRange: priceRangeValue("#admin-provider-price-range-min", "#admin-provider-price-range-max"),
+    workSamples: $("#admin-provider-work-samples")?.value.trim() || "",
+    certificateProof: $("#admin-provider-certificate")?.value.trim() || "",
+    validIdConsent: $("#admin-provider-valid-id")?.checked || false,
+    consentRequests: $("#admin-provider-requests")?.checked || false,
+    consentRatings: $("#admin-provider-ratings")?.checked || false,
+    rulesAgreement: $("#admin-provider-rules")?.checked || false,
+  };
+  if (!payload.name || !payload.username || (!edit && !payload.password) || !payload.contactNumber || !payload.preferredContactChannel || !payload.dataPrivacyConsent) {
+    window.Swal.showValidationMessage(`Name, username, ${edit ? "" : "password, "}contact number, preferred contact, and consent are required.`);
+    return false;
+  }
+  if (payload.password && payload.password.length < 6) {
+    window.Swal.showValidationMessage("Password must be at least 6 characters.");
+    return false;
+  }
+  if (!["admin", "ops", SUPPORT_ROLE].includes(role) && !payload.area) {
+    window.Swal.showValidationMessage("Address is required.");
+    return false;
+  }
+  if (role === "provider" && (!payload.category.length || !payload.specificServices || !payload.coverageArea || !payload.consentRequests || !payload.consentRatings || !payload.rulesAgreement)) {
+    window.Swal.showValidationMessage("Provider category, services, coverage, request consent, rating consent, and rules agreement are required.");
+    return false;
+  }
+  return payload;
+}
+
 async function openAdminCreateAccountModal() {
   const result = await modal({
     width: "min(96vw, 1040px)",
     customClass: { popup: "profile-popup" },
     title: "Create account",
-    html: `
-      <div class="swal-form two">
-        <label><span>Role</span>${select("admin-account-role", ["client", "provider", SUPPORT_LABEL, "ops"], "client")}</label>
-        <label><span>Full name</span><input id="admin-account-name" class="form-control" autocomplete="name" maxlength="80"></label>
-        <label><span>Email</span><input id="admin-account-email" class="form-control" type="email" autocomplete="email" maxlength="190"></label>
-        <label><span>Username</span><input id="admin-account-username" class="form-control" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40"></label>
-        <label><span>Contact number</span><input id="admin-account-contact" class="form-control" type="tel" inputmode="tel" autocomplete="tel" maxlength="32"></label>
-        <label><span>Messenger / Facebook</span><input id="admin-account-messenger" class="form-control" inputmode="url" autocomplete="url" maxlength="240"></label>
-        <label><span>Preferred contact</span>${select("admin-account-channel", CONTACT_CHANNELS, "Messenger")}</label>
-        <label><span>Best contact time</span>${select("admin-account-best-time", AVAILABLE_TIME_OPTIONS, "", "Choose time")}</label>
-        <label>
-          <span>Password</span>
-          <div class="password-field">
-            <input id="admin-account-password" class="form-control" type="password" autocomplete="new-password">
-            <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
-              <i class="fa-solid fa-eye"></i>
-            </button>
-          </div>
-        </label>
-        <label class="wide" data-admin-account-address><span>Address</span>${addressFields("admin-account-address", state.session.area || "")}</label>
-        <div class="wide" data-admin-provider-fields hidden>
-          <label><span>Display name</span><input id="admin-provider-display" class="form-control"></label>
-          <label><span>Provider type</span>${select("admin-provider-type", PROVIDER_TYPES, "Individual")}</label>
-          <label><span>Service categories</span>${categoryChips("admin-account-category", "")}</label>
-          <label><span>Specific services</span><textarea id="admin-provider-services" class="form-control" rows="2"></textarea></label>
-          <label><span>Experience</span>${select("admin-provider-experience", EXPERIENCE_OPTIONS, "1-2")}</label>
-          <label><span>Coverage area</span>${coverageAreaChips("admin-provider-coverage", "", parseAddress(state.session.area || "").city)}</label>
-          <label><span>Emergency availability</span>${select("admin-provider-emergency", EMERGENCY_OPTIONS, "Sometimes")}</label>
-          <label><span>Available days</span>${availableDaysChips("admin-provider-days", "")}</label>
-          <label><span>Available time</span>${timeRangeFields("admin-provider-time", "")}</label>
-          <label><span>Travel limits</span><textarea id="admin-provider-travel" class="form-control" rows="2"></textarea></label>
-          <label><span>Minimum fee</span><input id="admin-provider-min-fee" class="form-control" type="number" min="0" step="0.01" inputmode="decimal"></label>
-          <label><span>Price range</span>${priceRangeFields("admin-provider-price-range", "")}</label>
-          <label><span>Work samples</span><input id="admin-provider-work-samples" class="form-control" inputmode="url"></label>
-          <label><span>Certificate / permit</span><input id="admin-provider-certificate" class="form-control" inputmode="url"></label>
-          <label class="consent-line"><input id="admin-provider-valid-id" type="checkbox"> Optional ID may be used for verification.</label>
-          <label class="consent-line"><input id="admin-provider-requests" type="checkbox" checked> Provider agrees to receive pilot requests.</label>
-          <label class="consent-line"><input id="admin-provider-ratings" type="checkbox" checked> Provider agrees to receive ratings.</label>
-          <label class="consent-line"><input id="admin-provider-rules" type="checkbox" checked> Provider agrees to rules.</label>
-        </div>
-        <label class="wide consent-line"><input id="admin-account-privacy" type="checkbox" checked> Data privacy consent recorded.</label>
-      </div>
-    `,
+    html: adminAccountModalHtml({ role: "client", area: state.session.area || "", dataPrivacyConsent: true }, { includeAdmin: isSuperAdminUser(state.session) }),
     confirmButtonText: "Create Account",
-    didOpen: () => {
-      bindAddressGroup("admin-account-address", document, () => syncCoverageChipsWithAddress("admin-provider-coverage", "admin-account-address"));
-      bindCategoryChips("admin-account-category");
-      bindCategoryChips("admin-provider-days");
-      bindCategoryChips("admin-provider-coverage");
-      $$("[data-password-toggle]", window.Swal.getPopup()).forEach((button) => button.addEventListener("click", togglePasswordVisibility));
-      $("#admin-account-role")?.addEventListener("change", syncAdminAccountFields);
-      syncAdminAccountFields();
-    },
-    preConfirm: () => {
-      const role = accountRoleValue($("#admin-account-role").value);
-      const payload = {
-        role,
-        name: $("#admin-account-name").value.trim(),
-        email: $("#admin-account-email").value.trim(),
-        username: $("#admin-account-username").value.trim(),
-        password: $("#admin-account-password").value,
-        contactNumber: $("#admin-account-contact").value.trim(),
-        messengerLink: $("#admin-account-messenger").value.trim(),
-        preferredContactChannel: $("#admin-account-channel").value,
-        bestContactTime: $("#admin-account-best-time").value.trim(),
-        dataPrivacyConsent: $("#admin-account-privacy").checked,
-        area: ["ops", SUPPORT_ROLE].includes(role) ? (role === SUPPORT_ROLE ? "Customer Service" : "Operations") : addressValue("admin-account-address"),
-        category: role === "provider" ? selectedCategoryChips("admin-account-category") : [],
-        displayName: $("#admin-provider-display")?.value.trim() || "",
-        providerType: $("#admin-provider-type")?.value || "",
-        specificServices: $("#admin-provider-services")?.value.trim() || "",
-        yearsExperience: $("#admin-provider-experience")?.value || "",
-        coverageArea: selectedCoverageChips("admin-provider-coverage", "admin-account-address").join(", "),
-        emergencyAvailability: $("#admin-provider-emergency")?.value || "",
-        availableDays: selectedCategoryChips("admin-provider-days").join(", "),
-        availableTime: timeRangeValue("#admin-provider-time-start", "#admin-provider-time-end"),
-        travelLimits: $("#admin-provider-travel")?.value.trim() || "",
-        minimumFee: normalizeCurrencyInput($("#admin-provider-min-fee")?.value || ""),
-        priceRange: priceRangeValue("#admin-provider-price-range-min", "#admin-provider-price-range-max"),
-        workSamples: $("#admin-provider-work-samples")?.value.trim() || "",
-        certificateProof: $("#admin-provider-certificate")?.value.trim() || "",
-        validIdConsent: $("#admin-provider-valid-id")?.checked || false,
-        consentRequests: $("#admin-provider-requests")?.checked || false,
-        consentRatings: $("#admin-provider-ratings")?.checked || false,
-        rulesAgreement: $("#admin-provider-rules")?.checked || false,
-      };
-      if (!payload.name || !payload.username || !payload.password || !payload.contactNumber || !payload.preferredContactChannel || !payload.dataPrivacyConsent) {
-        window.Swal.showValidationMessage("Name, username, password, contact number, preferred contact, and consent are required.");
-        return false;
-      }
-      if (payload.password.length < 6) {
-        window.Swal.showValidationMessage("Password must be at least 6 characters.");
-        return false;
-      }
-      if (!["ops", SUPPORT_ROLE].includes(role) && !payload.area) {
-        window.Swal.showValidationMessage("Address is required.");
-        return false;
-      }
-      if (role === "provider" && (!payload.category.length || !payload.specificServices || !payload.coverageArea || !payload.consentRequests || !payload.consentRatings || !payload.rulesAgreement)) {
-        window.Swal.showValidationMessage("Provider category, services, coverage, request consent, rating consent, and rules agreement are required.");
-        return false;
-      }
-      return payload;
-    },
+    didOpen: bindAdminAccountModalFields,
+    preConfirm: () => collectAdminAccountPayload(),
   });
   if (!result.isConfirmed) return;
   try {
@@ -9554,11 +9938,36 @@ async function openAdminCreateAccountModal() {
   }
 }
 
+async function openAdminEditAccountModal(userId) {
+  const target = userProfile(userId);
+  if (!target?.id) return;
+  const result = await modal({
+    width: "min(96vw, 1040px)",
+    customClass: { popup: "profile-popup" },
+    title: "Edit account",
+    html: adminAccountModalHtml(target, { edit: true, includeAdmin: isSuperAdminUser(state.session) || target.role === "admin" }),
+    confirmButtonText: "Save Account",
+    didOpen: bindAdminAccountModalFields,
+    preConfirm: () => collectAdminAccountPayload({ edit: true }),
+  });
+  if (!result.isConfirmed) return;
+  try {
+    const payload = await apiFetch(`/api/admin/users/${encodeURIComponent(target.id)}`, {
+      method: "PUT",
+      body: JSON.stringify(result.value),
+    });
+    applyServerState(payload.state);
+    notify("Account saved", `${displayUserName(payload.user)} was updated.`, "success");
+  } catch (error) {
+    notify("Account save failed", error.message || "Try again.", "error");
+  }
+}
+
 function syncAdminAccountFields() {
   const role = accountRoleValue($("#admin-account-role")?.value || "client");
   const address = $("[data-admin-account-address]");
   const providerFields = $("[data-admin-provider-fields]");
-  if (address) address.hidden = ["ops", SUPPORT_ROLE].includes(role);
+  if (address) address.hidden = ["admin", "ops", SUPPORT_ROLE].includes(role);
   if (providerFields) providerFields.hidden = role !== "provider";
 }
 
